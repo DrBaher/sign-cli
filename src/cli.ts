@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { openDatabase } from "./lib/db.js";
-import { requireDropboxApiKey, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
+import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
 import { loadEnv } from "./lib/env.js";
 import {
   approveSigningRequest,
   createSigningRequest,
   getRequestSnapshot,
+  getEmbeddedSignUrl,
   getSigningRequestStatus,
   ingestWebhookPayload,
   listAuditEvents,
+  sendEmbeddedSigningRequest,
   sendSigningRequest,
 } from "./lib/signing-service.js";
 import { parseSignerSpec } from "./lib/util.js";
@@ -59,6 +61,8 @@ function printUsage(): void {
   console.log(`sign request create --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--test-mode true]
+sign request send-embedded --request-id <id> --client-id <clientId> [--test-mode true]
+sign request sign-url --request-id <id> --signature-id <signatureId>
 sign request status --request-id <id>
 sign audit show --request-id <id>
 sign webhook verify --payload-file ./fixtures/sample-webhook.json
@@ -109,6 +113,30 @@ async function main(): Promise<void> {
       apiKey,
       testMode: resolveDropboxTestMode(flagValue(parsed, "test-mode")),
     });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+
+  if (root === "request" && sub === "send-embedded") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const apiKey = requireDropboxApiKey();
+    const clientId = requireDropboxClientId(flagValue(parsed, "client-id"));
+    const result = await sendEmbeddedSigningRequest(db, {
+      requestId,
+      apiKey,
+      clientId,
+      testMode: resolveDropboxTestMode(flagValue(parsed, "test-mode")),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "sign-url") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const signatureId = flagValue(parsed, "signature-id", true)!;
+    const apiKey = requireDropboxApiKey();
+    const result = await getEmbeddedSignUrl(db, { requestId, signatureId, apiKey });
     console.log(JSON.stringify(result, null, 2));
     return;
   }

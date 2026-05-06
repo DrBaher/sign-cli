@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { appendAuditEvent } from "./audit.js";
 import type { SqliteDb } from "./db.js";
-import { fetchSignatureRequestStatus, sendSignatureRequest } from "./dropbox-sign.js";
+import { createEmbeddedSignatureRequest, fetchEmbeddedSignUrl, fetchSignatureRequestStatus, sendSignatureRequest } from "./dropbox-sign.js";
 import {
   createId,
   createToken,
@@ -275,6 +275,74 @@ export async function sendSigningRequest(
     signatureRequestId: result.signatureRequestId,
     responseBody: result.responseBody,
   };
+}
+
+
+export async function sendEmbeddedSigningRequest(
+  db: SqliteDb,
+  input: { requestId: string; apiKey: string; clientId: string; testMode: boolean; now?: Date },
+): Promise<{
+  signatureRequestId: string;
+  signatureIds: string[];
+  responseBody: unknown;
+}> {
+  const request = getRequestRow(db, input.requestId);
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
+  const result = await createEmbeddedSignatureRequest({
+    apiKey: input.apiKey,
+    clientId: input.clientId,
+    documentPath: request.document_path,
+    title: request.title,
+    signers,
+    metadata: {
+      request_id: request.id,
+      document_hash: request.document_hash,
+    },
+    testMode: input.testMode,
+  });
+
+  const now = input.now ?? new Date();
+  db.prepare(
+    `UPDATE requests
+     SET status = ?, dropbox_signature_request_id = ?, dropbox_status = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(
+    "sent",
+    result.signatureRequestId,
+    "sent",
+    nowIso(now),
+    input.requestId,
+  );
+
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "request.sent_embedded",
+    payload: {
+      signatureRequestId: result.signatureRequestId,
+      signatureIds: result.signatureIds,
+      testMode: input.testMode,
+      clientId: input.clientId,
+    },
+    now,
+  });
+
+  return result;
+}
+
+export async function getEmbeddedSignUrl(
+  db: SqliteDb,
+  input: { requestId: string; signatureId: string; apiKey: string; now?: Date },
+): Promise<{ signUrl: string; expiresAt: number | null; signatureId: string }> {
+  getRequestRow(db, input.requestId);
+  const result = await fetchEmbeddedSignUrl(input.apiKey, input.signatureId);
+  const now = input.now ?? new Date();
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "request.embedded_sign_url_issued",
+    payload: { signatureId: input.signatureId, expiresAt: result.expiresAt },
+    now,
+  });
+  return { signUrl: result.signUrl, expiresAt: result.expiresAt, signatureId: input.signatureId };
 }
 
 export async function getSigningRequestStatus(

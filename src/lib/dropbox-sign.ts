@@ -14,16 +14,18 @@ export type DropboxSendInput = {
 
 export function requireDropboxApiKey(): string {
   const apiKey = process.env.DROPBOX_SIGN_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error(
-      "DROPBOX_SIGN_API_KEY is not set. `sign request send` and `sign request status` require a Dropbox Sign API key.",
-    );
-  }
+  if (!apiKey) throw new Error("DROPBOX_SIGN_API_KEY is not set.");
   return apiKey;
 }
 
 export function resolveDropboxTestMode(flag?: string): boolean {
   return parseBooleanFlag(flag ?? process.env.DROPBOX_SIGN_TEST_MODE, true);
+}
+
+export function requireDropboxClientId(flag?: string): string {
+  const clientId = (flag ?? process.env.DROPBOX_SIGN_CLIENT_ID)?.trim();
+  if (!clientId) throw new Error("DROPBOX_SIGN_CLIENT_ID is required for embedded signing.");
+  return clientId;
 }
 
 function authHeader(apiKey: string): string {
@@ -32,72 +34,83 @@ function authHeader(apiKey: string): string {
 
 async function readJsonSafe(response: Response): Promise<any> {
   const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
+  try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
-export async function sendSignatureRequest(input: DropboxSendInput): Promise<{
-  signatureRequestId: string;
-  statusCode: number | null;
-  responseBody: unknown;
-}> {
-  const fileBuffer = await readFile(path.resolve(input.documentPath));
-  const form = new FormData();
+function addCommonFormFields(form: FormData, input: DropboxSendInput): void {
   form.set("title", input.title);
   form.set("subject", input.title);
   form.set("message", `Please sign: ${input.title}`);
   form.set("test_mode", input.testMode ? "1" : "0");
-
-  input.signers
-    .sort((left, right) => left.order - right.order)
-    .forEach((signer, index) => {
-      form.set(`signers[${index}][name]`, signer.name);
-      form.set(`signers[${index}][email_address]`, signer.email);
-      form.set(`signers[${index}][order]`, String(signer.order));
-    });
-
-  Object.entries(input.metadata).forEach(([k, v]) => {
-    form.set(`metadata[${k}]`, v);
+  input.signers.sort((a,b)=>a.order-b.order).forEach((s,i)=>{
+    form.set(`signers[${i}][name]`, s.name);
+    form.set(`signers[${i}][email_address]`, s.email);
+    form.set(`signers[${i}][order]`, String(s.order));
   });
+  Object.entries(input.metadata).forEach(([k,v])=> form.set(`metadata[${k}]`, v));
+}
 
-  form.set("files[0]", new Blob([fileBuffer], { type: "application/pdf" }), path.basename(input.documentPath));
-
-  const response = await fetch("https://api.hellosign.com/v3/signature_request/send", {
+async function postSignatureRequest(endpoint: string, apiKey: string, form: FormData): Promise<any> {
+  const response = await fetch(`https://api.hellosign.com/v3/${endpoint}`, {
     method: "POST",
-    headers: { Authorization: authHeader(input.apiKey) },
+    headers: { Authorization: authHeader(apiKey) },
     body: form,
   });
-
   const body = await readJsonSafe(response);
   if (!response.ok) {
     const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
-    throw new Error(`Dropbox Sign send failed: ${detail}`);
+    throw new Error(`Dropbox Sign request failed: ${detail}`);
   }
+  return body;
+}
 
+export async function sendSignatureRequest(input: DropboxSendInput): Promise<{ signatureRequestId: string; statusCode: number | null; responseBody: unknown; }> {
+  const fileBuffer = await readFile(path.resolve(input.documentPath));
+  const form = new FormData();
+  addCommonFormFields(form, input);
+  form.set("files[0]", new Blob([fileBuffer], { type: "application/pdf" }), path.basename(input.documentPath));
+  const body = await postSignatureRequest("signature_request/send", input.apiKey, form);
   const signatureRequest = body?.signature_request ?? body?.signatureRequest ?? null;
   const signatureRequestId = signatureRequest?.signature_request_id ?? signatureRequest?.signatureRequestId;
+  if (!signatureRequestId) throw new Error("Dropbox Sign send completed without signature_request_id.");
+  return { signatureRequestId, statusCode: 200, responseBody: body };
+}
 
-  if (!signatureRequestId) {
-    throw new Error("Dropbox Sign send completed without returning a signature request ID.");
+export async function createEmbeddedSignatureRequest(input: DropboxSendInput & { clientId: string }): Promise<{ signatureRequestId: string; signatureIds: string[]; responseBody: unknown; }> {
+  const fileBuffer = await readFile(path.resolve(input.documentPath));
+  const form = new FormData();
+  addCommonFormFields(form, input);
+  form.set("client_id", input.clientId);
+  form.set("files[0]", new Blob([fileBuffer], { type: "application/pdf" }), path.basename(input.documentPath));
+  const body = await postSignatureRequest("signature_request/create_embedded", input.apiKey, form);
+  const signatureRequest = body?.signature_request ?? null;
+  const signatureRequestId = signatureRequest?.signature_request_id;
+  const signatureIds = Array.isArray(signatureRequest?.signatures)
+    ? signatureRequest.signatures.map((s:any)=>s.signature_id).filter(Boolean)
+    : [];
+  if (!signatureRequestId) throw new Error("Embedded create did not return signature_request_id.");
+  return { signatureRequestId, signatureIds, responseBody: body };
+}
+
+export async function fetchEmbeddedSignUrl(apiKey: string, signatureId: string): Promise<{ signUrl: string; expiresAt: number | null; responseBody: unknown }> {
+  const response = await fetch(`https://api.hellosign.com/v3/embedded/sign_url/${signatureId}`, {
+    method: "GET",
+    headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
+  });
+  const body = await readJsonSafe(response);
+  if (!response.ok) {
+    const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
+    throw new Error(`Dropbox embedded sign_url failed: ${detail}`);
   }
-
-  return {
-    signatureRequestId,
-    statusCode: response.status,
-    responseBody: body,
-  };
+  const signUrl = body?.embedded?.sign_url;
+  if (!signUrl) throw new Error("embedded/sign_url returned no sign_url");
+  return { signUrl, expiresAt: body?.embedded?.expires_at ?? null, responseBody: body };
 }
 
 export async function fetchSignatureRequestStatus(apiKey: string, signatureRequestId: string): Promise<unknown> {
   const response = await fetch(`https://api.hellosign.com/v3/signature_request/${signatureRequestId}`, {
     method: "GET",
-    headers: {
-      Authorization: authHeader(apiKey),
-      Accept: "application/json",
-    },
+    headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
   });
   const body = await readJsonSafe(response);
   if (!response.ok) {
