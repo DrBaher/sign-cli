@@ -7,10 +7,12 @@ import {
   approveSigningRequest,
   createSigningRequest,
   getRequestSnapshot,
+  fetchFinalSignedPdf,
   getEmbeddedSignUrl,
   getSigningRequestStatus,
   ingestWebhookPayload,
   listAuditEvents,
+  runDoctor,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
 } from "./lib/signing-service.js";
@@ -63,7 +65,10 @@ sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--test-mode true]
 sign request send-embedded --request-id <id> --client-id <clientId> [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId>
+sign request launch-embedded --request-id <id> --signature-id <signatureId> --client-id <clientId>
+sign request fetch-final --request-id <id> [--out ./artifacts/signed.pdf]
 sign request status --request-id <id>
+sign doctor
 sign audit show --request-id <id>
 sign webhook verify --payload-file ./fixtures/sample-webhook.json
 sign webhook ingest --payload-file ./fixtures/sample-webhook.json [--request-id <id>]`);
@@ -81,6 +86,14 @@ async function main(): Promise<void> {
   }
 
   const [root, sub, action] = parsed.positionals;
+
+
+  if (root === "doctor") {
+    const apiKey = process.env.DROPBOX_SIGN_API_KEY;
+    const result = await runDoctor(apiKey);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
 
   if (root === "request" && sub === "create") {
     const title = flagValue(parsed, "title", true)!;
@@ -137,6 +150,30 @@ async function main(): Promise<void> {
     const signatureId = flagValue(parsed, "signature-id", true)!;
     const apiKey = requireDropboxApiKey();
     const result = await getEmbeddedSignUrl(db, { requestId, signatureId, apiKey });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+
+  if (root === "request" && sub === "launch-embedded") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const signatureId = flagValue(parsed, "signature-id", true)!;
+    const clientId = requireDropboxClientId(flagValue(parsed, "client-id"));
+    const apiKey = requireDropboxApiKey();
+    const result = await getEmbeddedSignUrl(db, { requestId, signatureId, apiKey });
+    const file = flagValue(parsed, "out") ?? `./embedded-launch-${signatureId}.html`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Embedded Sign</title></head><body><h3>Launching signer...</h3><script src="https://cdn.hellosign.com/public/js/embedded/v2.11.1/embedded.development.js"></script><script>const client=new window.HelloSign();client.open(${JSON.stringify(result.signUrl)},{clientId:${JSON.stringify(clientId)},skipDomainVerification:true});</script></body></html>`;
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(file, html, "utf8");
+    console.log(JSON.stringify({ ...result, launcherFile: file }, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "fetch-final") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const apiKey = requireDropboxApiKey();
+    const outPath = flagValue(parsed, "out");
+    const result = await fetchFinalSignedPdf(db, { requestId, apiKey, outPath });
     console.log(JSON.stringify(result, null, 2));
     return;
   }

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { appendAuditEvent } from "./audit.js";
 import type { SqliteDb } from "./db.js";
-import { createEmbeddedSignatureRequest, fetchEmbeddedSignUrl, fetchSignatureRequestStatus, sendSignatureRequest } from "./dropbox-sign.js";
+import { checkDropboxAccount, createEmbeddedSignatureRequest, downloadSignedPdf, fetchEmbeddedSignUrl, fetchSignatureRequestStatus, sendSignatureRequest } from "./dropbox-sign.js";
 import {
   createId,
   createToken,
@@ -277,6 +277,58 @@ export async function sendSigningRequest(
   };
 }
 
+
+
+export async function runDoctor(apiKey?: string): Promise<Record<string, unknown>> {
+  const checks: Record<string, unknown> = {
+    env: {
+      hasApiKey: Boolean(process.env.DROPBOX_SIGN_API_KEY),
+      hasClientId: Boolean(process.env.DROPBOX_SIGN_CLIENT_ID),
+      dbPath: process.env.SIGN_DB_PATH ?? "./data/sign.db",
+    },
+  };
+  if (apiKey) {
+    checks.dropbox = await checkDropboxAccount(apiKey);
+  }
+  return checks;
+}
+
+export async function fetchFinalSignedPdf(
+  db: SqliteDb,
+  input: { requestId: string; apiKey: string; outPath?: string; now?: Date },
+): Promise<{ path: string; bytes: number; sha256: string }> {
+  const request = getRequestRow(db, input.requestId);
+  if (!request.dropbox_signature_request_id) {
+    throw new Error("Request has not been sent yet.");
+  }
+  const remote = await fetchSignatureRequestStatus(input.apiKey, request.dropbox_signature_request_id) as any;
+  const sigReq = remote?.signature_request ?? remote?.signatureRequest;
+  if (!sigReq?.is_complete) {
+    throw new Error("Request is not complete yet.");
+  }
+
+  const pdf = await downloadSignedPdf(input.apiKey, request.dropbox_signature_request_id);
+  const outPath = input.outPath ?? path.resolve("artifacts", `${request.id}-signed.pdf`);
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(path.dirname(outPath), { recursive: true });
+  writeFileSync(outPath, pdf);
+  const hash = sha256(pdf);
+  const now = input.now ?? new Date();
+
+  db.prepare(
+    `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(createId("art"), request.id, "signed_pdf", outPath, hash, stableStringify({ bytes: pdf.length }), nowIso(now));
+
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.final_pdf_downloaded",
+    payload: { outPath, bytes: pdf.length, sha256: hash },
+    now,
+  });
+
+  return { path: outPath, bytes: pdf.length, sha256: hash };
+}
 
 export async function sendEmbeddedSigningRequest(
   db: SqliteDb,

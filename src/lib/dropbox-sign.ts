@@ -119,3 +119,34 @@ export async function fetchSignatureRequestStatus(apiKey: string, signatureReque
   }
   return body;
 }
+
+
+export async function downloadSignedPdf(apiKey: string, signatureRequestId: string): Promise<Buffer> {
+  const response = await fetch(`https://api.hellosign.com/v3/signature_request/files/${signatureRequestId}?file_type=pdf`, {
+    method: "GET",
+    headers: { Authorization: authHeader(apiKey) },
+  });
+  if (!response.ok) {
+    const body = await readJsonSafe(response);
+    const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
+    throw new Error(`Dropbox signed file download failed: ${detail}`);
+  }
+  const arr = await response.arrayBuffer();
+  return Buffer.from(arr);
+}
+
+export async function checkDropboxAccount(apiKey: string): Promise<{ email: string | null; apiSignatureRequestsLeft: number | null }> {
+  const response = await fetch("https://api.hellosign.com/v3/account", {
+    method: "GET",
+    headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
+  });
+  const body = await readJsonSafe(response);
+  if (!response.ok) {
+    const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
+    throw new Error(`Dropbox account check failed: ${detail}`);
+  }
+  return {
+    email: body?.account?.email_address ?? null,
+    apiSignatureRequestsLeft: typeof body?.account?.quotas?.api_signature_requests_left === 'number' ? body.account.quotas.api_signature_requests_left : null,
+  };
+}
