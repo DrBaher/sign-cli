@@ -254,3 +254,30 @@ export async function downloadDocuSignCombinedPdf(envelopeId: string): Promise<B
   const buffer = await response.arrayBuffer();
   return Buffer.from(buffer);
 }
+
+
+export async function checkDocuSignAccountAccess(): Promise<{
+  accountId: string;
+  basePath: string;
+  accountName: string | null;
+  isDefault: boolean | null;
+  canCreateEnvelope: boolean;
+}> {
+  const config = requireDocuSignConfig();
+  const account = await docusignJsonRequest(config, {
+    method: "GET",
+    endpoint: "",
+  });
+
+  return {
+    accountId: config.accountId,
+    basePath: config.basePath,
+    accountName: typeof account?.accountName === "string" ? account.accountName : null,
+    isDefault: typeof account?.isDefault === "string"
+      ? account.isDefault.toLowerCase() === "true"
+      : typeof account?.isDefault === "boolean"
+        ? account.isDefault
+        : null,
+    canCreateEnvelope: true,
+  };
+}

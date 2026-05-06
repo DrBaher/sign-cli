@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { appendAuditEvent } from "./audit.js";
 import {
+  checkDocuSignAccountAccess,
   downloadDocuSignCombinedPdf,
   fetchDocuSignEnvelopeStatus,
   normalizeDocuSignStatus,
@@ -600,6 +601,35 @@ export async function sendSigningRequest(
     signatureRequestId: result.providerRequestId,
     signatureIds: result.signatureIds,
     responseBody: result.responseBody,
+  };
+}
+
+export async function runProviderAccountCheck(input: { provider: SignProvider; apiKey?: string }): Promise<Record<string, unknown>> {
+  if (input.provider === "dropbox") {
+    if (!input.apiKey) {
+      throw new Error("DROPBOX_SIGN_API_KEY is required for Dropbox account check.");
+    }
+    const account = await checkDropboxAccount(input.apiKey);
+    return {
+      provider: "dropbox",
+      account,
+      interpretation: {
+        apiLikelyEnabled: account.apiSignatureRequestsLeft !== null,
+        note: account.apiSignatureRequestsLeft === null
+          ? "Could not confirm API quota; account may be restricted or response shape changed."
+          : "API quota field is present.",
+      },
+    };
+  }
+
+  const account = await checkDocuSignAccountAccess();
+  return {
+    provider: "docusign",
+    account,
+    interpretation: {
+      apiLikelyEnabled: true,
+      note: "JWT auth + account endpoint succeeded.",
+    },
   };
 }
 

@@ -23,6 +23,7 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign and DocuSign
 - `request launch-embedded`
 - `request fetch-final`
 - `doctor`
+- `doctor account-check`
 - `audit show`
 - `webhook verify`
 - `webhook ingest`
@@ -289,3 +290,14 @@ npm run start -- audit show --request-id <request_id>
 4. `request launch-embedded` (opens signer UI-ready HTML)
 5. `webhook listen`
 6. `request watch`
+
+
+## Account compatibility checks
+Use these before onboarding:
+
+```bash
+npm run start -- doctor account-check --provider dropbox
+npm run start -- doctor account-check --provider docusign
+```
+
+This verifies API access for each provider (Dropbox account endpoint, DocuSign JWT+account endpoint) and returns a machine-readable summary.

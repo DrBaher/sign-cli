@@ -15,6 +15,7 @@ import {
   listAuditEvents,
   REQUEST_WATCH_EXIT_CODES,
   runDoctor,
+  runProviderAccountCheck,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
   watchSigningRequestStatus,
@@ -87,6 +88,7 @@ sign request fetch-final --request-id <id> [--provider dropbox|docusign] [--out 
 sign request status --request-id <id> [--provider dropbox|docusign]
 sign request watch --request-id <id> [--provider dropbox|docusign] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign doctor
+sign doctor account-check [--provider dropbox|docusign]
 sign audit show --request-id <id>
 sign webhook verify --payload-file ./fixtures/sample-webhook.json
 sign webhook ingest --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
@@ -107,6 +109,15 @@ async function main(): Promise<void> {
 
   const [root, sub, action] = parsed.positionals;
 
+
+  if (root === "doctor" && sub === "account-check") {
+    const result = await runProviderAccountCheck({
+      provider: selectedProvider,
+      apiKey: selectedProvider === "dropbox" ? process.env.DROPBOX_SIGN_API_KEY : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
 
   if (root === "doctor") {
     const apiKey = process.env.DROPBOX_SIGN_API_KEY;
