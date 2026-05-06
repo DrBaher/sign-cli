@@ -1,0 +1,66 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
+export type SqliteDb = DatabaseSync;
+
+export function openDatabase(dbPath: string): SqliteDb {
+  const resolved = path.resolve(dbPath);
+  mkdirSync(path.dirname(resolved), { recursive: true });
+  const db = new DatabaseSync(resolved);
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+
+    CREATE TABLE IF NOT EXISTS requests (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      document_path TEXT NOT NULL,
+      document_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      dropbox_signature_request_id TEXT,
+      dropbox_status TEXT,
+      signers_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS approvals (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      signer_name TEXT NOT NULL,
+      signer_email TEXT NOT NULL,
+      signer_order INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      token_hint TEXT NOT NULL,
+      doc_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      approved_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (request_id) REFERENCES requests(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      hash_prev TEXT,
+      hash_self TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (request_id) REFERENCES requests(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      path TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (request_id) REFERENCES requests(id)
+    );
+  `);
+  return db;
+}

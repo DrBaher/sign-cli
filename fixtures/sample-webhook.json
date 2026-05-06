@@ -1,0 +1,13 @@
+{
+  "event": {
+    "event_time": "1669926463",
+    "event_type": "signature_request_sent",
+    "event_hash": "replace_me_with_real_hash"
+  },
+  "signature_request": {
+    "signature_request_id": "demo_signature_request_id",
+    "metadata": {
+      "request_id": "replace_me_with_real_request_id"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "cli-digital-signature-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "sign": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test dist/tests/*.test.js"
+  },
+  "dependencies": {
+    "@dropbox/sign": "^1.10.0"
+  }
+}
