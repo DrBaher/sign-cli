@@ -20,6 +20,7 @@ export type CreateRequestInput = {
   documentPath: string;
   signers: SignerInput[];
   tokenTtlMinutes: number;
+  autoApprove?: boolean;
   now?: Date;
 };
 
@@ -153,6 +154,12 @@ export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
     return { signer, token, expiresAt };
   });
 
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
+
   appendAuditEvent(db, {
     requestId,
     eventType: "request.created",
@@ -162,6 +169,7 @@ export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
       documentHash,
       signers: sortedSigners,
       tokenTtlMinutes: input.tokenTtlMinutes,
+      autoApprove: Boolean(input.autoApprove),
     },
     now,
   });
@@ -207,6 +215,12 @@ export function approveSigningRequest(
 
   const nextStatus = remainingCount.count === 0 ? "approved" : "partially_approved";
   updateRequestStatus(db, input.requestId, nextStatus, now);
+
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
 
   appendAuditEvent(db, {
     requestId: input.requestId,
@@ -260,6 +274,12 @@ export async function sendSigningRequest(
     nowIso(now),
     input.requestId,
   );
+
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
 
   appendAuditEvent(db, {
     requestId: input.requestId,
@@ -320,6 +340,12 @@ export async function fetchFinalSignedPdf(
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(createId("art"), request.id, "signed_pdf", outPath, hash, stableStringify({ bytes: pdf.length }), nowIso(now));
 
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
+
   appendAuditEvent(db, {
     requestId: request.id,
     eventType: "request.final_pdf_downloaded",
@@ -366,6 +392,12 @@ export async function sendEmbeddedSigningRequest(
     input.requestId,
   );
 
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
+
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.sent_embedded",
@@ -388,6 +420,12 @@ export async function getEmbeddedSignUrl(
   getRequestRow(db, input.requestId);
   const result = await fetchEmbeddedSignUrl(input.apiKey, input.signatureId);
   const now = input.now ?? new Date();
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
+
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.embedded_sign_url_issued",
@@ -425,6 +463,12 @@ export async function getSigningRequestStatus(
     nowIso(now),
     request.id,
   );
+
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
 
   appendAuditEvent(db, {
     requestId: request.id,
@@ -485,6 +529,12 @@ export function ingestWebhookPayload(
   getRequestRow(db, requestId);
 
   const now = input.now ?? new Date();
+
+  if (input.autoApprove) {
+    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    updateRequestStatus(db, requestId, "approved", now);
+  }
+
   appendAuditEvent(db, {
     requestId,
     eventType: `dropbox.webhook.${eventType ?? "unknown"}`,

@@ -105,6 +105,7 @@ async function main(): Promise<void> {
       documentPath,
       signers,
       tokenTtlMinutes,
+      autoApprove: (flagValue(parsed, "auto-approve") ?? "false") === "true",
     });
     console.log(JSON.stringify(result, null, 2));
     return;
