@@ -15,6 +15,15 @@ import type { SignerInput } from "./util.js";
 import { verifyDropboxCallback } from "./webhook.js";
 import type { DropboxCallbackPayload } from "./webhook.js";
 
+export const REQUEST_WATCH_EXIT_CODES = {
+  completed: 0,
+  declined: 2,
+  error: 3,
+  timeout: 4,
+} as const;
+
+type WatchTerminalStatus = keyof typeof REQUEST_WATCH_EXIT_CODES;
+
 export type CreateRequestInput = {
   title: string;
   documentPath: string;
@@ -66,6 +75,33 @@ function listApprovalRows(db: SqliteDb, requestId: string): ApprovalRow[] {
 
 function updateRequestStatus(db: SqliteDb, requestId: string, status: string, now: Date): void {
   db.prepare("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(now), requestId);
+}
+
+export function normalizeDropboxStatus(remoteStatus: unknown): string {
+  const remote = remoteStatus as Record<string, any> | null;
+  const signatureRequest = remote?.signatureRequest ?? remote?.signature_request ?? null;
+  if (!signatureRequest) {
+    return "unknown";
+  }
+  if (signatureRequest?.isComplete || signatureRequest?.is_complete) {
+    return "completed";
+  }
+  return String(signatureRequest?.statusCode ?? signatureRequest?.status_code ?? "sent").toLowerCase();
+}
+
+export function resolveWatchTerminalStatus(status: string): WatchTerminalStatus | null {
+  const normalized = status.toLowerCase();
+
+  if (["completed", "signed"].includes(normalized)) {
+    return "completed";
+  }
+  if (["declined", "rejected", "expired", "canceled"].includes(normalized)) {
+    return "declined";
+  }
+  if (["error", "invalid"].includes(normalized)) {
+    return "error";
+  }
+  return null;
 }
 
 export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
@@ -216,12 +252,6 @@ export function approveSigningRequest(
   const nextStatus = remainingCount.count === 0 ? "approved" : "partially_approved";
   updateRequestStatus(db, input.requestId, nextStatus, now);
 
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
-
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.approved",
@@ -274,12 +304,6 @@ export async function sendSigningRequest(
     nowIso(now),
     input.requestId,
   );
-
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
 
   appendAuditEvent(db, {
     requestId: input.requestId,
@@ -340,12 +364,6 @@ export async function fetchFinalSignedPdf(
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(createId("art"), request.id, "signed_pdf", outPath, hash, stableStringify({ bytes: pdf.length }), nowIso(now));
 
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
-
   appendAuditEvent(db, {
     requestId: request.id,
     eventType: "request.final_pdf_downloaded",
@@ -392,12 +410,6 @@ export async function sendEmbeddedSigningRequest(
     input.requestId,
   );
 
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
-
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.sent_embedded",
@@ -420,12 +432,6 @@ export async function getEmbeddedSignUrl(
   getRequestRow(db, input.requestId);
   const result = await fetchEmbeddedSignUrl(input.apiKey, input.signatureId);
   const now = input.now ?? new Date();
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
-
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.embedded_sign_url_issued",
@@ -450,12 +456,7 @@ export async function getSigningRequestStatus(
     input.apiKey,
     request.dropbox_signature_request_id,
   );
-
-  const remote = remoteStatus as any;
-  const signatureRequest = remote?.signatureRequest ?? remote?.signature_request ?? null;
-  const statusValue = signatureRequest?.isComplete || signatureRequest?.is_complete
-    ? "completed"
-    : signatureRequest?.statusCode ?? signatureRequest?.status_code ?? "sent";
+  const statusValue = normalizeDropboxStatus(remoteStatus);
 
   const now = input.now ?? new Date();
   db.prepare("UPDATE requests SET dropbox_status = ?, updated_at = ? WHERE id = ?").run(
@@ -463,12 +464,6 @@ export async function getSigningRequestStatus(
     nowIso(now),
     request.id,
   );
-
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
 
   appendAuditEvent(db, {
     requestId: request.id,
@@ -481,6 +476,78 @@ export async function getSigningRequestStatus(
   });
 
   return { request: getRequestRow(db, request.id), remoteStatus };
+}
+
+export async function watchSigningRequestStatus(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    apiKey: string;
+    intervalMs: number;
+    timeoutMs?: number;
+    fetchFinalPdf?: boolean;
+    outPath?: string;
+    now?: Date;
+    sleep?: (ms: number) => Promise<void>;
+    getStatus?: typeof getSigningRequestStatus;
+    fetchFinal?: typeof fetchFinalSignedPdf;
+    onPoll?: (update: { status: string; terminal: WatchTerminalStatus | null; attempt: number }) => void;
+  },
+): Promise<{
+  requestId: string;
+  status: string;
+  terminal: WatchTerminalStatus;
+  exitCode: number;
+  attempts: number;
+  finalPdf: { path: string; bytes: number; sha256: string } | null;
+}> {
+  if (!Number.isFinite(input.intervalMs) || input.intervalMs <= 0) {
+    throw new Error("--interval-ms must be a positive number.");
+  }
+  if (input.timeoutMs !== undefined && (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0)) {
+    throw new Error("--timeout-ms must be a positive number when provided.");
+  }
+
+  const sleep = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const getStatus = input.getStatus ?? getSigningRequestStatus;
+  const fetchFinal = input.fetchFinal ?? fetchFinalSignedPdf;
+  const startedAt = input.now?.getTime() ?? Date.now();
+
+  let attempts = 0;
+  while (true) {
+    attempts += 1;
+    const result = await getStatus(db, { requestId: input.requestId, apiKey: input.apiKey });
+    const status = String(result.request.dropbox_status ?? normalizeDropboxStatus(result.remoteStatus));
+    const terminal = resolveWatchTerminalStatus(status);
+    input.onPoll?.({ status, terminal, attempt: attempts });
+
+    if (terminal) {
+      const finalPdf = terminal === "completed" && input.fetchFinalPdf
+        ? await fetchFinal(db, { requestId: input.requestId, apiKey: input.apiKey, outPath: input.outPath })
+        : null;
+      return {
+        requestId: input.requestId,
+        status,
+        terminal,
+        exitCode: REQUEST_WATCH_EXIT_CODES[terminal],
+        attempts,
+        finalPdf,
+      };
+    }
+
+    if (input.timeoutMs !== undefined && Date.now() - startedAt >= input.timeoutMs) {
+      return {
+        requestId: input.requestId,
+        status,
+        terminal: "timeout",
+        exitCode: REQUEST_WATCH_EXIT_CODES.timeout,
+        attempts,
+        finalPdf: null,
+      };
+    }
+
+    await sleep(input.intervalMs);
+  }
 }
 
 export function listAuditEvents(db: SqliteDb, requestId: string): Array<{
@@ -529,12 +596,6 @@ export function ingestWebhookPayload(
   getRequestRow(db, requestId);
 
   const now = input.now ?? new Date();
-
-  if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
-    updateRequestStatus(db, requestId, "approved", now);
-  }
-
   appendAuditEvent(db, {
     requestId,
     eventType: `dropbox.webhook.${eventType ?? "unknown"}`,

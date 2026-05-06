@@ -12,12 +12,15 @@ import {
   getSigningRequestStatus,
   ingestWebhookPayload,
   listAuditEvents,
+  REQUEST_WATCH_EXIT_CODES,
   runDoctor,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
+  watchSigningRequestStatus,
 } from "./lib/signing-service.js";
 import { parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
+import { startWebhookServer } from "./lib/webhook-server.js";
 
 type ParsedArgs = {
   positionals: string[];
@@ -69,10 +72,12 @@ sign request sign-url --request-id <id> --signature-id <signatureId>
 sign request launch-embedded --request-id <id> --signature-id <signatureId> --client-id <clientId>
 sign request fetch-final --request-id <id> [--out ./artifacts/signed.pdf]
 sign request status --request-id <id>
+sign request watch --request-id <id> [--interval-ms 5000] [--timeout-ms 600000] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign doctor
 sign audit show --request-id <id>
 sign webhook verify --payload-file ./fixtures/sample-webhook.json
-sign webhook ingest --payload-file ./fixtures/sample-webhook.json [--request-id <id>]`);
+sign webhook ingest --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
+sign webhook listen [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
 }
 
 async function main(): Promise<void> {
@@ -217,6 +222,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (root === "request" && sub === "watch") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const apiKey = requireDropboxApiKey();
+    const intervalMs = Number(flagValue(parsed, "interval-ms") ?? "5000");
+    const timeoutFlag = flagValue(parsed, "timeout-ms");
+    const timeoutMs = timeoutFlag === undefined ? undefined : Number(timeoutFlag);
+    const fetchFinalPdf = (flagValue(parsed, "fetch-final") ?? "false") === "true";
+    const outPath = flagValue(parsed, "out");
+    const result = await watchSigningRequestStatus(db, {
+      requestId,
+      apiKey,
+      intervalMs,
+      timeoutMs,
+      fetchFinalPdf,
+      outPath,
+      onPoll: (update) => {
+        console.error(`[watch] poll=${update.attempt} status=${update.status}${update.terminal ? ` terminal=${update.terminal}` : ""}`);
+      },
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.exitCode;
+    return;
+  }
+
   if (root === "audit" && sub === "show") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const events = listAuditEvents(db, requestId);
@@ -243,6 +272,32 @@ async function main(): Promise<void> {
       requestId: flagValue(parsed, "request-id"),
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "webhook" && sub === "listen") {
+    const apiKey = requireDropboxApiKey();
+    const port = Number(flagValue(parsed, "port") ?? "3000");
+    const webhookPath = flagValue(parsed, "path") ?? "/dropbox/callback";
+    const requestId = flagValue(parsed, "request-id");
+    const server = startWebhookServer({
+      dbPath,
+      apiKey,
+      port,
+      path: webhookPath,
+      requestId,
+    });
+    process.on("SIGINT", () => server.close(() => process.exit(0)));
+    process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    console.log(JSON.stringify({
+      listening: true,
+      port,
+      path: webhookPath,
+      requestId: requestId ?? null,
+      callbackUrl: `http://127.0.0.1:${port}${webhookPath}`,
+      signatureVerification: "event_hash via API key HMAC",
+      expectedSuccessExitCode: REQUEST_WATCH_EXIT_CODES.completed,
+    }, null, 2));
     return;
   }
 

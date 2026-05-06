@@ -9,6 +9,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "node dist/cli.js",
+    "webhook:listen": "node dist/cli.js webhook listen",
     "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": {

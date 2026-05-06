@@ -17,12 +17,14 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign.
 - `request send-embedded`
 - `request sign-url`
 - `request status`
+- `request watch`
 - `request launch-embedded`
 - `request fetch-final`
 - `doctor`
 - `audit show`
 - `webhook verify`
 - `webhook ingest`
+- `webhook listen`
 
 ---
 
@@ -53,6 +55,13 @@ DROPBOX_SIGN_CLIENT_ID=your_client_id_for_embedded
 npm run build
 ```
 
+## 5) Optional: start a local webhook receiver
+```bash
+npm run webhook:listen -- --port 3000 --path /dropbox/callback
+```
+
+This listens locally, verifies Dropbox Sign `event_hash` values with your API key, and appends webhook audit events through the existing ingest path.
+
 ---
 
 ## Standard user journey (email signing)
@@ -81,8 +90,15 @@ npm run start -- request send --request-id <request_id> --test-mode true
 ### D) Track
 ```bash
 npm run start -- request status --request-id <request_id>
+npm run start -- request watch --request-id <request_id> --interval-ms 5000 --fetch-final true
 npm run start -- audit show --request-id <request_id>
 ```
+
+`request watch` exit codes:
+- `0`: completed
+- `2`: declined, rejected, expired, or canceled
+- `3`: error or invalid remote status
+- `4`: timeout before a terminal status
 
 ---
 
@@ -113,8 +129,8 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 - `localhost` is not accepted as embedded app domain.
 - Use a public domain/tunnel (e.g. `https://good-ravens-drum.loca.lt`).
 - Put that domain in Dropbox Sign API App settings.
-- Callback URL can be like:
-  - `https://good-ravens-drum.loca.lt/dropbox/callback`
+- Callback URL can be like `https://good-ravens-drum.loca.lt/dropbox/callback`.
+- Dropbox Sign sends callbacks as `multipart/form-data` with a `json` field. The local receiver handles `multipart/form-data`, `application/x-www-form-urlencoded`, and raw JSON.
 
 ---
 
@@ -137,6 +153,44 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 ## Detailed embedded setup
 See `EMBEDDED_SETUP.md` for Dropbox-side setup (API App, domain, callback URL, and troubleshooting).
 
+## End-to-end callback setup
+
+### 1) Start the local receiver
+```bash
+npm run webhook:listen -- --port 3000 --path /dropbox/callback
+```
+
+### 2) Expose it with a tunnel
+```bash
+npx localtunnel --port 3000
+```
+
+Use the resulting public URL plus `/dropbox/callback` as your Dropbox Sign account callback URL or API app callback URL.
+
+### 3) Create, approve, and send a request
+```bash
+npm run start -- request create \
+  --title "Consent Test" \
+  --document ./your.pdf \
+  --signer name:Alice,email:alice@example.com,order:1
+
+npm run start -- approve --request-id <request_id> --token <token>
+npm run start -- request send --request-id <request_id> --test-mode true
+```
+
+### 4) Watch for completion and fetch the signed PDF
+```bash
+npm run start -- request watch \
+  --request-id <request_id> \
+  --interval-ms 5000 \
+  --fetch-final true \
+  --out ./artifacts/<request_id>-signed.pdf
+```
+
+### 5) Inspect the local audit trail
+```bash
+npm run start -- audit show --request-id <request_id>
+```
 
 ## Seamless mode (recommended)
 
@@ -144,5 +198,5 @@ See `EMBEDDED_SETUP.md` for Dropbox-side setup (API App, domain, callback URL, a
 2. `request create` + `approve` tokens
 3. `request send-embedded`
 4. `request launch-embedded` (opens signer UI-ready HTML)
-5. `request status`
-6. `request fetch-final` once complete
+5. `webhook listen`
+6. `request watch`
