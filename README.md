@@ -11,6 +11,7 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign.
 
 ## Commands
 - `request create`
+- `request run-email` (one command: create + auto-approve + send email)
 - `approve`
 - `request send`
 - `request send-embedded`

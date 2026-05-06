@@ -61,6 +61,7 @@ function flagValues(args: ParsedArgs, name: string): string[] {
 
 function printUsage(): void {
   console.log(`sign request create --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1
+sign request run-email --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--test-mode true]
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--test-mode true]
 sign request send-embedded --request-id <id> --client-id <clientId> [--test-mode true]
@@ -92,6 +93,35 @@ async function main(): Promise<void> {
     const apiKey = process.env.DROPBOX_SIGN_API_KEY;
     const result = await runDoctor(apiKey);
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+
+  if (root === "request" && sub === "run-email") {
+    const title = flagValue(parsed, "title", true)!;
+    const documentPath = flagValue(parsed, "document", true)!;
+    const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "30");
+    const apiKey = requireDropboxApiKey();
+    const created = createSigningRequest(db, {
+      title,
+      documentPath,
+      signers,
+      tokenTtlMinutes,
+      autoApprove: true,
+    });
+    const sent = await sendSigningRequest(db, {
+      requestId: created.requestId,
+      apiKey,
+      testMode: resolveDropboxTestMode(flagValue(parsed, "test-mode")),
+    });
+    console.log(JSON.stringify({
+      mode: "email-only",
+      requestId: created.requestId,
+      documentHash: created.documentHash,
+      approvals: "auto-approved",
+      signatureRequestId: sent.signatureRequestId,
+    }, null, 2));
     return;
   }
 
