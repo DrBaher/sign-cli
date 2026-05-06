@@ -64,7 +64,13 @@ async function postSignatureRequest(endpoint: string, apiKey: string, form: Form
   return body;
 }
 
-export async function sendSignatureRequest(input: DropboxSendInput): Promise<{ signatureRequestId: string; statusCode: number | null; responseBody: unknown; }> {
+function extractSignatureIds(signatureRequest: any): string[] {
+  return Array.isArray(signatureRequest?.signatures)
+    ? signatureRequest.signatures.map((signature: any) => signature?.signature_id).filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+    : [];
+}
+
+export async function sendSignatureRequest(input: DropboxSendInput): Promise<{ signatureRequestId: string; signatureIds: string[]; statusCode: number | null; responseBody: unknown; }> {
   const fileBuffer = await readFile(path.resolve(input.documentPath));
   const form = new FormData();
   addCommonFormFields(form, input);
@@ -73,7 +79,7 @@ export async function sendSignatureRequest(input: DropboxSendInput): Promise<{ s
   const signatureRequest = body?.signature_request ?? body?.signatureRequest ?? null;
   const signatureRequestId = signatureRequest?.signature_request_id ?? signatureRequest?.signatureRequestId;
   if (!signatureRequestId) throw new Error("Dropbox Sign send completed without signature_request_id.");
-  return { signatureRequestId, statusCode: 200, responseBody: body };
+  return { signatureRequestId, signatureIds: extractSignatureIds(signatureRequest), statusCode: 200, responseBody: body };
 }
 
 export async function createEmbeddedSignatureRequest(input: DropboxSendInput & { clientId: string }): Promise<{ signatureRequestId: string; signatureIds: string[]; responseBody: unknown; }> {
@@ -85,9 +91,7 @@ export async function createEmbeddedSignatureRequest(input: DropboxSendInput & {
   const body = await postSignatureRequest("signature_request/create_embedded", input.apiKey, form);
   const signatureRequest = body?.signature_request ?? null;
   const signatureRequestId = signatureRequest?.signature_request_id;
-  const signatureIds = Array.isArray(signatureRequest?.signatures)
-    ? signatureRequest.signatures.map((s:any)=>s.signature_id).filter(Boolean)
-    : [];
+  const signatureIds = extractSignatureIds(signatureRequest);
   if (!signatureRequestId) throw new Error("Embedded create did not return signature_request_id.");
   return { signatureRequestId, signatureIds, responseBody: body };
 }

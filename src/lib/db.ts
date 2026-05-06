@@ -4,6 +4,11 @@ import { DatabaseSync } from "node:sqlite";
 
 export type SqliteDb = DatabaseSync;
 
+function hasColumn(db: SqliteDb, tableName: string, columnName: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
+}
+
 export function openDatabase(dbPath: string): SqliteDb {
   const resolved = path.resolve(dbPath);
   mkdirSync(path.dirname(resolved), { recursive: true });
@@ -17,8 +22,12 @@ export function openDatabase(dbPath: string): SqliteDb {
       document_path TEXT NOT NULL,
       document_hash TEXT NOT NULL,
       status TEXT NOT NULL,
+      provider TEXT,
+      provider_request_id TEXT,
+      provider_status TEXT,
       dropbox_signature_request_id TEXT,
       dropbox_status TEXT,
+      signature_ids_json TEXT,
       signers_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -62,5 +71,19 @@ export function openDatabase(dbPath: string): SqliteDb {
       FOREIGN KEY (request_id) REFERENCES requests(id)
     );
   `);
+
+  if (!hasColumn(db, "requests", "signature_ids_json")) {
+    db.exec("ALTER TABLE requests ADD COLUMN signature_ids_json TEXT");
+  }
+  if (!hasColumn(db, "requests", "provider")) {
+    db.exec("ALTER TABLE requests ADD COLUMN provider TEXT");
+  }
+  if (!hasColumn(db, "requests", "provider_request_id")) {
+    db.exec("ALTER TABLE requests ADD COLUMN provider_request_id TEXT");
+  }
+  if (!hasColumn(db, "requests", "provider_status")) {
+    db.exec("ALTER TABLE requests ADD COLUMN provider_status TEXT");
+  }
+
   return db;
 }

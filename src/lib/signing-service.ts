@@ -1,8 +1,22 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { appendAuditEvent } from "./audit.js";
+import {
+  downloadDocuSignCombinedPdf,
+  fetchDocuSignEnvelopeStatus,
+  normalizeDocuSignStatus,
+  sendDocuSignEnvelope,
+} from "./docusign.js";
 import type { SqliteDb } from "./db.js";
-import { checkDropboxAccount, createEmbeddedSignatureRequest, downloadSignedPdf, fetchEmbeddedSignUrl, fetchSignatureRequestStatus, sendSignatureRequest } from "./dropbox-sign.js";
+import {
+  checkDropboxAccount,
+  createEmbeddedSignatureRequest,
+  downloadSignedPdf,
+  fetchEmbeddedSignUrl,
+  fetchSignatureRequestStatus,
+  sendSignatureRequest,
+} from "./dropbox-sign.js";
+import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
   createId,
   createToken,
@@ -30,6 +44,7 @@ export type CreateRequestInput = {
   signers: SignerInput[];
   tokenTtlMinutes: number;
   autoApprove?: boolean;
+  provider?: SignProvider;
   now?: Date;
 };
 
@@ -39,8 +54,12 @@ type RequestRow = {
   document_path: string;
   document_hash: string;
   status: string;
+  provider: string | null;
+  provider_request_id: string | null;
+  provider_status: string | null;
   dropbox_signature_request_id: string | null;
   dropbox_status: string | null;
+  signature_ids_json: string | null;
   signers_json: string;
   created_at: string;
   updated_at: string;
@@ -61,6 +80,47 @@ type ApprovalRow = {
   created_at: string;
 };
 
+type ProviderSendResult = {
+  providerRequestId: string;
+  signatureIds: string[];
+  providerStatus: string;
+  responseBody: unknown;
+};
+
+type ProviderStatusResult = {
+  providerStatus: string;
+  signatureIds: string[];
+  remoteStatus: unknown;
+};
+
+type ProviderApi = {
+  send(input: {
+    request: RequestRow;
+    signers: SignerInput[];
+    apiKey?: string;
+    testMode: boolean;
+  }): Promise<ProviderSendResult>;
+  sendEmbedded?: (input: {
+    request: RequestRow;
+    signers: SignerInput[];
+    apiKey?: string;
+    clientId?: string;
+    testMode: boolean;
+  }) => Promise<ProviderSendResult>;
+  getEmbeddedSignUrl?: (input: {
+    signatureId: string;
+    apiKey?: string;
+  }) => Promise<{ signUrl: string; expiresAt: number | null }>;
+  getStatus(input: {
+    providerRequestId: string;
+    apiKey?: string;
+  }): Promise<ProviderStatusResult>;
+  downloadFinalPdf(input: {
+    providerRequestId: string;
+    apiKey?: string;
+  }): Promise<Buffer>;
+};
+
 function getRequestRow(db: SqliteDb, requestId: string): RequestRow {
   const row = db.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as RequestRow | undefined;
   if (!row) {
@@ -77,6 +137,101 @@ function updateRequestStatus(db: SqliteDb, requestId: string, status: string, no
   db.prepare("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(now), requestId);
 }
 
+function parseSignatureIdsJson(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function extractRemoteSignatureIds(remoteStatus: unknown): string[] {
+  const remote = remoteStatus as Record<string, any> | null;
+  const signatureRequest = remote?.signatureRequest ?? remote?.signature_request ?? null;
+  return Array.isArray(signatureRequest?.signatures)
+    ? signatureRequest.signatures
+      .map((signature: any) => signature?.signature_id)
+      .filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+    : [];
+}
+
+function getPersistedProvider(request: RequestRow): SignProvider {
+  return resolveSignProvider(undefined, request.provider ?? (request.dropbox_signature_request_id || request.dropbox_status ? "dropbox" : null));
+}
+
+function getProviderRequestId(request: RequestRow): string | null {
+  return request.provider_request_id ?? request.dropbox_signature_request_id;
+}
+
+function getProviderStatusValue(request: RequestRow): string | null {
+  return request.provider_status ?? request.dropbox_status;
+}
+
+function persistRequestProviderMetadata(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    provider: SignProvider;
+    providerRequestId?: string | null;
+    providerStatus?: string | null;
+    signatureIds?: string[];
+    now: Date;
+  },
+): void {
+  const signatureIdsJson = input.signatureIds ? stableStringify(input.signatureIds) : null;
+  const dropboxRequestId = input.provider === "dropbox" ? input.providerRequestId ?? null : null;
+  const dropboxStatus = input.provider === "dropbox" ? input.providerStatus ?? null : null;
+  db.prepare(
+    `UPDATE requests
+     SET provider = ?,
+         provider_request_id = COALESCE(?, provider_request_id),
+         provider_status = COALESCE(?, provider_status),
+         dropbox_signature_request_id = CASE
+           WHEN ? IS NOT NULL THEN ?
+           ELSE dropbox_signature_request_id
+         END,
+         dropbox_status = CASE
+           WHEN ? IS NOT NULL THEN ?
+           ELSE dropbox_status
+         END,
+         signature_ids_json = CASE
+           WHEN ? IS NOT NULL THEN ?
+           ELSE signature_ids_json
+         END,
+         updated_at = ?
+     WHERE id = ?`,
+  ).run(
+    input.provider,
+    input.providerRequestId ?? null,
+    input.providerStatus ?? null,
+    dropboxRequestId,
+    dropboxRequestId,
+    dropboxStatus,
+    dropboxStatus,
+    signatureIdsJson,
+    signatureIdsJson,
+    nowIso(input.now),
+    input.requestId,
+  );
+}
+
+function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider } {
+  return {
+    ...request,
+    provider: request.provider ?? getPersistedProvider(request),
+    provider_request_id: getProviderRequestId(request),
+    provider_status: getProviderStatusValue(request),
+    signatureIds: parseSignatureIdsJson(request.signature_ids_json),
+    normalizedProvider: getPersistedProvider(request),
+  };
+}
+
 export function normalizeDropboxStatus(remoteStatus: unknown): string {
   const remote = remoteStatus as Record<string, any> | null;
   const signatureRequest = remote?.signatureRequest ?? remote?.signature_request ?? null;
@@ -89,22 +244,121 @@ export function normalizeDropboxStatus(remoteStatus: unknown): string {
   return String(signatureRequest?.statusCode ?? signatureRequest?.status_code ?? "sent").toLowerCase();
 }
 
+export function normalizeProviderStatus(provider: SignProvider, remoteStatus: unknown): string {
+  return provider === "docusign" ? normalizeDocuSignStatus(remoteStatus) : normalizeDropboxStatus(remoteStatus);
+}
+
 export function resolveWatchTerminalStatus(status: string): WatchTerminalStatus | null {
   const normalized = status.toLowerCase();
 
   if (["completed", "signed"].includes(normalized)) {
     return "completed";
   }
-  if (["declined", "rejected", "expired", "canceled"].includes(normalized)) {
+  if (["declined", "rejected", "expired", "canceled", "cancelled", "voided"].includes(normalized)) {
     return "declined";
   }
-  if (["error", "invalid"].includes(normalized)) {
+  if (["error", "invalid", "failed", "authentication_failed"].includes(normalized)) {
     return "error";
   }
   return null;
 }
 
-export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
+function getProviderApi(provider: SignProvider): ProviderApi {
+  if (provider === "docusign") {
+    return {
+      async send(input) {
+        const result = await sendDocuSignEnvelope({
+          documentPath: input.request.document_path,
+          title: input.request.title,
+          signers: input.signers,
+          metadata: {
+            request_id: input.request.id,
+            document_hash: input.request.document_hash,
+          },
+        });
+        return {
+          providerRequestId: result.envelopeId,
+          signatureIds: result.recipientIds,
+          providerStatus: "sent",
+          responseBody: result.responseBody,
+        };
+      },
+      async getStatus(input) {
+        const remoteStatus = await fetchDocuSignEnvelopeStatus(input.providerRequestId);
+        return {
+          providerStatus: normalizeDocuSignStatus(remoteStatus),
+          signatureIds: [],
+          remoteStatus,
+        };
+      },
+      async downloadFinalPdf(input) {
+        return downloadDocuSignCombinedPdf(input.providerRequestId);
+      },
+    };
+  }
+
+  return {
+    async send(input) {
+      const result = await sendSignatureRequest({
+        apiKey: input.apiKey ?? "",
+        documentPath: input.request.document_path,
+        title: input.request.title,
+        signers: input.signers,
+        metadata: {
+          request_id: input.request.id,
+          document_hash: input.request.document_hash,
+        },
+        testMode: input.testMode,
+      });
+      return {
+        providerRequestId: result.signatureRequestId,
+        signatureIds: result.signatureIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    },
+    async sendEmbedded(input) {
+      const result = await createEmbeddedSignatureRequest({
+        apiKey: input.apiKey ?? "",
+        clientId: input.clientId ?? "",
+        documentPath: input.request.document_path,
+        title: input.request.title,
+        signers: input.signers,
+        metadata: {
+          request_id: input.request.id,
+          document_hash: input.request.document_hash,
+        },
+        testMode: input.testMode,
+      });
+      return {
+        providerRequestId: result.signatureRequestId,
+        signatureIds: result.signatureIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    },
+    async getEmbeddedSignUrl(input) {
+      const result = await fetchEmbeddedSignUrl(input.apiKey ?? "", input.signatureId);
+      return { signUrl: result.signUrl, expiresAt: result.expiresAt };
+    },
+    async getStatus(input) {
+      const remoteStatus = await fetchSignatureRequestStatus(input.apiKey ?? "", input.providerRequestId);
+      return {
+        providerStatus: normalizeDropboxStatus(remoteStatus),
+        signatureIds: extractRemoteSignatureIds(remoteStatus),
+        remoteStatus,
+      };
+    },
+    async downloadFinalPdf(input) {
+      return downloadSignedPdf(input.apiKey ?? "", input.providerRequestId);
+    },
+  };
+}
+
+export function createSigningRequest(
+  db: SqliteDb,
+  input: CreateRequestInput,
+): {
   requestId: string;
   documentHash: string;
   tokens: Array<{ signer: SignerInput; token: string; expiresAt: string }>;
@@ -138,14 +392,18 @@ export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
 
   db.prepare(
     `INSERT INTO requests (
-      id, title, document_path, document_hash, status, dropbox_signature_request_id, dropbox_status, signers_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     requestId,
     input.title,
     documentPath,
     documentHash,
     "created",
+    input.provider ?? null,
+    null,
+    null,
+    null,
     null,
     null,
     signersJson,
@@ -190,7 +448,6 @@ export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
     return { signer, token, expiresAt };
   });
 
-
   if (input.autoApprove) {
     db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
     updateRequestStatus(db, requestId, "approved", now);
@@ -203,6 +460,7 @@ export function createSigningRequest(db: SqliteDb, input: CreateRequestInput): {
       title: input.title,
       documentPath,
       documentHash,
+      provider: input.provider ?? null,
       signers: sortedSigners,
       tokenTtlMinutes: input.tokenTtlMinutes,
       autoApprove: Boolean(input.autoApprove),
@@ -273,61 +531,89 @@ export function approveSigningRequest(
 
 export async function sendSigningRequest(
   db: SqliteDb,
-  input: { requestId: string; apiKey: string; testMode: boolean; now?: Date },
+  input: {
+    requestId: string;
+    provider?: SignProvider;
+    apiKey?: string;
+    testMode: boolean;
+    now?: Date;
+    sendRequest?: typeof sendSignatureRequest;
+  },
 ): Promise<{
+  provider: SignProvider;
   signatureRequestId: string;
+  signatureIds: string[];
   responseBody: unknown;
 }> {
   const request = getRequestRow(db, input.requestId);
+  const provider = input.provider ?? getPersistedProvider(request);
   const signers = JSON.parse(request.signers_json) as SignerInput[];
-  const result = await sendSignatureRequest({
-    apiKey: input.apiKey,
-    documentPath: request.document_path,
-    title: request.title,
-    signers,
-    metadata: {
-      request_id: request.id,
-      document_hash: request.document_hash,
-    },
-    testMode: input.testMode,
-  });
+  const providerApi = getProviderApi(provider);
+  const send = input.sendRequest && provider === "dropbox"
+    ? async () => {
+      const result = await input.sendRequest!({
+        apiKey: input.apiKey ?? "",
+        documentPath: request.document_path,
+        title: request.title,
+        signers,
+        metadata: {
+          request_id: request.id,
+          document_hash: request.document_hash,
+        },
+        testMode: input.testMode,
+      });
+      return {
+        providerRequestId: result.signatureRequestId,
+        signatureIds: result.signatureIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    }
+    : () => providerApi.send({ request, signers, apiKey: input.apiKey, testMode: input.testMode });
 
+  const result = await send();
   const now = input.now ?? new Date();
-  db.prepare(
-    `UPDATE requests
-     SET status = ?, dropbox_signature_request_id = ?, dropbox_status = ?, updated_at = ?
-     WHERE id = ?`,
-  ).run(
-    "sent",
-    result.signatureRequestId,
-    "sent",
-    nowIso(now),
-    input.requestId,
-  );
+  persistRequestProviderMetadata(db, {
+    requestId: input.requestId,
+    provider,
+    providerRequestId: result.providerRequestId,
+    providerStatus: result.providerStatus,
+    signatureIds: result.signatureIds,
+    now,
+  });
+  updateRequestStatus(db, input.requestId, "sent", now);
 
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.sent",
     payload: {
-      signatureRequestId: result.signatureRequestId,
+      provider,
+      providerRequestId: result.providerRequestId,
+      signatureIds: result.signatureIds,
       testMode: input.testMode,
     },
     now,
   });
 
   return {
-    signatureRequestId: result.signatureRequestId,
+    provider,
+    signatureRequestId: result.providerRequestId,
+    signatureIds: result.signatureIds,
     responseBody: result.responseBody,
   };
 }
 
-
-
 export async function runDoctor(apiKey?: string): Promise<Record<string, unknown>> {
   const checks: Record<string, unknown> = {
     env: {
+      provider: resolveSignProvider(),
       hasApiKey: Boolean(process.env.DROPBOX_SIGN_API_KEY),
       hasClientId: Boolean(process.env.DROPBOX_SIGN_CLIENT_ID),
+      hasDocuSignIntegrationKey: Boolean(process.env.DOCUSIGN_INTEGRATION_KEY),
+      hasDocuSignUserId: Boolean(process.env.DOCUSIGN_USER_ID),
+      hasDocuSignAccountId: Boolean(process.env.DOCUSIGN_ACCOUNT_ID),
+      hasDocuSignBasePath: Boolean(process.env.DOCUSIGN_BASE_PATH),
+      hasDocuSignPrivateKeyPath: Boolean(process.env.DOCUSIGN_PRIVATE_KEY_PATH),
       dbPath: process.env.SIGN_DB_PATH ?? "./data/sign.db",
     },
   };
@@ -339,19 +625,22 @@ export async function runDoctor(apiKey?: string): Promise<Record<string, unknown
 
 export async function fetchFinalSignedPdf(
   db: SqliteDb,
-  input: { requestId: string; apiKey: string; outPath?: string; now?: Date },
+  input: { requestId: string; provider?: SignProvider; apiKey?: string; outPath?: string; now?: Date },
 ): Promise<{ path: string; bytes: number; sha256: string }> {
   const request = getRequestRow(db, input.requestId);
-  if (!request.dropbox_signature_request_id) {
-    throw new Error("Request has not been sent yet.");
+  const provider = input.provider ?? getPersistedProvider(request);
+  const providerRequestId = getProviderRequestId(request);
+  if (!providerRequestId) {
+    throw new Error(`Request has not been sent to ${provider === "docusign" ? "DocuSign" : "Dropbox Sign"} yet.`);
   }
-  const remote = await fetchSignatureRequestStatus(input.apiKey, request.dropbox_signature_request_id) as any;
-  const sigReq = remote?.signature_request ?? remote?.signatureRequest;
-  if (!sigReq?.is_complete) {
+
+  const providerApi = getProviderApi(provider);
+  const status = await providerApi.getStatus({ providerRequestId, apiKey: input.apiKey });
+  if (resolveWatchTerminalStatus(status.providerStatus) !== "completed") {
     throw new Error("Request is not complete yet.");
   }
 
-  const pdf = await downloadSignedPdf(input.apiKey, request.dropbox_signature_request_id);
+  const pdf = await providerApi.downloadFinalPdf({ providerRequestId, apiKey: input.apiKey });
   const outPath = input.outPath ?? path.resolve("artifacts", `${request.id}-signed.pdf`);
   const { mkdirSync, writeFileSync } = await import("node:fs");
   mkdirSync(path.dirname(outPath), { recursive: true });
@@ -359,15 +648,24 @@ export async function fetchFinalSignedPdf(
   const hash = sha256(pdf);
   const now = input.now ?? new Date();
 
+  persistRequestProviderMetadata(db, {
+    requestId: request.id,
+    provider,
+    providerRequestId,
+    providerStatus: status.providerStatus,
+    signatureIds: status.signatureIds.length > 0 ? status.signatureIds : undefined,
+    now,
+  });
+
   db.prepare(
     `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(createId("art"), request.id, "signed_pdf", outPath, hash, stableStringify({ bytes: pdf.length }), nowIso(now));
+  ).run(createId("art"), request.id, "signed_pdf", outPath, hash, stableStringify({ bytes: pdf.length, provider }), nowIso(now));
 
   appendAuditEvent(db, {
     requestId: request.id,
     eventType: "request.final_pdf_downloaded",
-    payload: { outPath, bytes: pdf.length, sha256: hash },
+    payload: { provider, outPath, bytes: pdf.length, sha256: hash },
     now,
   });
 
@@ -376,66 +674,109 @@ export async function fetchFinalSignedPdf(
 
 export async function sendEmbeddedSigningRequest(
   db: SqliteDb,
-  input: { requestId: string; apiKey: string; clientId: string; testMode: boolean; now?: Date },
+  input: {
+    requestId: string;
+    provider?: SignProvider;
+    apiKey?: string;
+    clientId?: string;
+    testMode: boolean;
+    now?: Date;
+    createEmbeddedRequest?: typeof createEmbeddedSignatureRequest;
+  },
 ): Promise<{
+  provider: SignProvider;
   signatureRequestId: string;
   signatureIds: string[];
   responseBody: unknown;
 }> {
   const request = getRequestRow(db, input.requestId);
-  const signers = JSON.parse(request.signers_json) as SignerInput[];
-  const result = await createEmbeddedSignatureRequest({
-    apiKey: input.apiKey,
-    clientId: input.clientId,
-    documentPath: request.document_path,
-    title: request.title,
-    signers,
-    metadata: {
-      request_id: request.id,
-      document_hash: request.document_hash,
-    },
-    testMode: input.testMode,
-  });
+  const provider = input.provider ?? getPersistedProvider(request);
+  if (provider === "docusign") {
+    throw new Error("Embedded signing is not yet supported for DocuSign.");
+  }
 
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
+  const sendEmbedded = input.createEmbeddedRequest
+    ? async () => {
+      const result = await input.createEmbeddedRequest!({
+        apiKey: input.apiKey ?? "",
+        clientId: input.clientId ?? "",
+        documentPath: request.document_path,
+        title: request.title,
+        signers,
+        metadata: {
+          request_id: request.id,
+          document_hash: request.document_hash,
+        },
+        testMode: input.testMode,
+      });
+      return {
+        providerRequestId: result.signatureRequestId,
+        signatureIds: result.signatureIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    }
+    : () => getProviderApi(provider).sendEmbedded!({
+      request,
+      signers,
+      apiKey: input.apiKey,
+      clientId: input.clientId,
+      testMode: input.testMode,
+    });
+
+  const result = await sendEmbedded();
   const now = input.now ?? new Date();
-  db.prepare(
-    `UPDATE requests
-     SET status = ?, dropbox_signature_request_id = ?, dropbox_status = ?, updated_at = ?
-     WHERE id = ?`,
-  ).run(
-    "sent",
-    result.signatureRequestId,
-    "sent",
-    nowIso(now),
-    input.requestId,
-  );
+  persistRequestProviderMetadata(db, {
+    requestId: input.requestId,
+    provider,
+    providerRequestId: result.providerRequestId,
+    providerStatus: result.providerStatus,
+    signatureIds: result.signatureIds,
+    now,
+  });
+  updateRequestStatus(db, input.requestId, "sent", now);
 
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.sent_embedded",
     payload: {
-      signatureRequestId: result.signatureRequestId,
+      provider,
+      providerRequestId: result.providerRequestId,
       signatureIds: result.signatureIds,
       testMode: input.testMode,
-      clientId: input.clientId,
+      clientId: input.clientId ?? null,
     },
     now,
   });
 
-  return result;
+  return {
+    provider,
+    signatureRequestId: result.providerRequestId,
+    signatureIds: result.signatureIds,
+    responseBody: result.responseBody,
+  };
 }
 
 export async function getEmbeddedSignUrl(
   db: SqliteDb,
-  input: { requestId: string; signatureId: string; apiKey: string; now?: Date },
+  input: { requestId: string; provider?: SignProvider; signatureId: string; apiKey?: string; now?: Date },
 ): Promise<{ signUrl: string; expiresAt: number | null; signatureId: string }> {
-  getRequestRow(db, input.requestId);
-  const result = await fetchEmbeddedSignUrl(input.apiKey, input.signatureId);
+  const request = getRequestRow(db, input.requestId);
+  const provider = input.provider ?? getPersistedProvider(request);
+  if (provider === "docusign") {
+    throw new Error("Embedded signing is not yet supported for DocuSign.");
+  }
+
+  const result = await getProviderApi(provider).getEmbeddedSignUrl!({
+    signatureId: input.signatureId,
+    apiKey: input.apiKey,
+  });
   const now = input.now ?? new Date();
   appendAuditEvent(db, {
     requestId: input.requestId,
     eventType: "request.embedded_sign_url_issued",
-    payload: { signatureId: input.signatureId, expiresAt: result.expiresAt },
+    payload: { provider, signatureId: input.signatureId, expiresAt: result.expiresAt },
     now,
   });
   return { signUrl: result.signUrl, expiresAt: result.expiresAt, signatureId: input.signatureId };
@@ -443,46 +784,52 @@ export async function getEmbeddedSignUrl(
 
 export async function getSigningRequestStatus(
   db: SqliteDb,
-  input: { requestId: string; apiKey: string; now?: Date },
+  input: { requestId: string; provider?: SignProvider; apiKey?: string; now?: Date },
 ): Promise<{
-  request: RequestRow;
+  request: RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider };
   remoteStatus: unknown;
 }> {
   const request = getRequestRow(db, input.requestId);
-  if (!request.dropbox_signature_request_id) {
-    throw new Error("Request has not been sent to Dropbox Sign yet.");
+  const provider = input.provider ?? getPersistedProvider(request);
+  const providerRequestId = getProviderRequestId(request);
+  if (!providerRequestId) {
+    throw new Error(`Request has not been sent to ${provider === "docusign" ? "DocuSign" : "Dropbox Sign"} yet.`);
   }
-  const remoteStatus = await fetchSignatureRequestStatus(
-    input.apiKey,
-    request.dropbox_signature_request_id,
-  );
-  const statusValue = normalizeDropboxStatus(remoteStatus);
 
+  const result = await getProviderApi(provider).getStatus({
+    providerRequestId,
+    apiKey: input.apiKey,
+  });
   const now = input.now ?? new Date();
-  db.prepare("UPDATE requests SET dropbox_status = ?, updated_at = ? WHERE id = ?").run(
-    String(statusValue),
-    nowIso(now),
-    request.id,
-  );
+  persistRequestProviderMetadata(db, {
+    requestId: request.id,
+    provider,
+    providerRequestId,
+    providerStatus: result.providerStatus,
+    signatureIds: result.signatureIds.length > 0 ? result.signatureIds : undefined,
+    now,
+  });
 
   appendAuditEvent(db, {
     requestId: request.id,
     eventType: "request.status_checked",
     payload: {
-      dropboxSignatureRequestId: request.dropbox_signature_request_id,
-      dropboxStatus: statusValue,
+      provider,
+      providerRequestId,
+      providerStatus: result.providerStatus,
     },
     now,
   });
 
-  return { request: getRequestRow(db, request.id), remoteStatus };
+  return { request: serializeRequestRow(getRequestRow(db, request.id)), remoteStatus: result.remoteStatus };
 }
 
 export async function watchSigningRequestStatus(
   db: SqliteDb,
   input: {
     requestId: string;
-    apiKey: string;
+    provider?: SignProvider;
+    apiKey?: string;
     intervalMs: number;
     timeoutMs?: number;
     fetchFinalPdf?: boolean;
@@ -491,14 +838,26 @@ export async function watchSigningRequestStatus(
     sleep?: (ms: number) => Promise<void>;
     getStatus?: typeof getSigningRequestStatus;
     fetchFinal?: typeof fetchFinalSignedPdf;
-    onPoll?: (update: { status: string; terminal: WatchTerminalStatus | null; attempt: number }) => void;
+    onPoll?: (update: {
+      provider: SignProvider;
+      status: string;
+      terminal: WatchTerminalStatus | null;
+      attempt: number;
+      startedAt: string;
+      elapsedMs: number;
+      lastRemoteStatus: unknown;
+    }) => void;
   },
 ): Promise<{
   requestId: string;
+  provider: SignProvider;
   status: string;
   terminal: WatchTerminalStatus;
   exitCode: number;
   attempts: number;
+  startedAt: string;
+  elapsedMs: number;
+  lastRemoteStatus: unknown;
   finalPdf: { path: string; bytes: number; sha256: string } | null;
 }> {
   if (!Number.isFinite(input.intervalMs) || input.intervalMs <= 0) {
@@ -508,40 +867,54 @@ export async function watchSigningRequestStatus(
     throw new Error("--timeout-ms must be a positive number when provided.");
   }
 
+  const initialRequest = getRequestRow(db, input.requestId);
+  const provider = input.provider ?? getPersistedProvider(initialRequest);
   const sleep = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const getStatus = input.getStatus ?? getSigningRequestStatus;
   const fetchFinal = input.fetchFinal ?? fetchFinalSignedPdf;
-  const startedAt = input.now?.getTime() ?? Date.now();
+  const startedAtMs = input.now?.getTime() ?? Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
 
   let attempts = 0;
+  let lastRemoteStatus: unknown = null;
   while (true) {
     attempts += 1;
-    const result = await getStatus(db, { requestId: input.requestId, apiKey: input.apiKey });
-    const status = String(result.request.dropbox_status ?? normalizeDropboxStatus(result.remoteStatus));
+    const result = await getStatus(db, { requestId: input.requestId, provider, apiKey: input.apiKey });
+    lastRemoteStatus = result.remoteStatus;
+    const status = String(result.request.provider_status ?? getProviderStatusValue(result.request) ?? normalizeProviderStatus(provider, result.remoteStatus));
     const terminal = resolveWatchTerminalStatus(status);
-    input.onPoll?.({ status, terminal, attempt: attempts });
+    const elapsedMs = Date.now() - startedAtMs;
+    input.onPoll?.({ provider, status, terminal, attempt: attempts, startedAt, elapsedMs, lastRemoteStatus });
 
     if (terminal) {
       const finalPdf = terminal === "completed" && input.fetchFinalPdf
-        ? await fetchFinal(db, { requestId: input.requestId, apiKey: input.apiKey, outPath: input.outPath })
+        ? await fetchFinal(db, { requestId: input.requestId, provider, apiKey: input.apiKey, outPath: input.outPath })
         : null;
       return {
         requestId: input.requestId,
+        provider,
         status,
         terminal,
         exitCode: REQUEST_WATCH_EXIT_CODES[terminal],
         attempts,
+        startedAt,
+        elapsedMs,
+        lastRemoteStatus,
         finalPdf,
       };
     }
 
-    if (input.timeoutMs !== undefined && Date.now() - startedAt >= input.timeoutMs) {
+    if (input.timeoutMs !== undefined && elapsedMs >= input.timeoutMs) {
       return {
         requestId: input.requestId,
+        provider,
         status,
         terminal: "timeout",
         exitCode: REQUEST_WATCH_EXIT_CODES.timeout,
         attempts,
+        startedAt,
+        elapsedMs,
+        lastRemoteStatus,
         finalPdf: null,
       };
     }
@@ -607,20 +980,29 @@ export function ingestWebhookPayload(
   });
 
   if (verified && input.payload.signature_request?.signature_request_id) {
-    db.prepare(
-      "UPDATE requests SET dropbox_signature_request_id = COALESCE(dropbox_signature_request_id, ?), updated_at = ? WHERE id = ?",
-    ).run(input.payload.signature_request.signature_request_id, nowIso(now), requestId);
+    const signatureIds = Array.isArray(input.payload.signature_request?.signatures)
+      ? input.payload.signature_request.signatures
+        .map((signature: any) => signature?.signature_id)
+        .filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+      : undefined;
+    persistRequestProviderMetadata(db, {
+      requestId,
+      provider: "dropbox",
+      providerRequestId: input.payload.signature_request.signature_request_id,
+      signatureIds,
+      now,
+    });
   }
 
   return { verified, requestId, eventType };
 }
 
 export function getRequestSnapshot(db: SqliteDb, requestId: string): {
-  request: RequestRow;
+  request: RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider };
   approvals: ApprovalRow[];
 } {
   return {
-    request: getRequestRow(db, requestId),
+    request: serializeRequestRow(getRequestRow(db, requestId)),
     approvals: listApprovalRows(db, requestId),
   };
 }

@@ -1,13 +1,15 @@
 # sign CLI MVP
 
-CLI for consent-gated, auditable e-sign workflows with Dropbox Sign.
+CLI for consent-gated, auditable e-sign workflows with Dropbox Sign and DocuSign.
 
 ## What this gives you
 - Human approval tokens (single-use, TTL)
 - Local append-only audit chain (`hash_prev`, `hash_self`)
 - Multi-signer support
-- Dropbox Sign send + status
-- Embedded signing support
+- Provider abstraction for send + status + watch + final download
+- Dropbox Sign send + status + embedded signing
+- DocuSign send + status + final PDF download
+- Persisted provider, provider request ID, and signer IDs on requests
 
 ## Commands
 - `request create`
@@ -45,10 +47,20 @@ cp .env.example .env
 ## 3) Configure `.env`
 ```env
 SIGN_DB_PATH=./data/sign.db
+SIGN_PROVIDER=dropbox
+
 DROPBOX_SIGN_API_KEY=your_api_key_here
 DROPBOX_SIGN_TEST_MODE=true
 DROPBOX_SIGN_CLIENT_ID=your_client_id_for_embedded
+
+DOCUSIGN_INTEGRATION_KEY=your_integration_key
+DOCUSIGN_USER_ID=your_impersonated_user_guid
+DOCUSIGN_ACCOUNT_ID=your_account_id
+DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
+DOCUSIGN_PRIVATE_KEY_PATH=./keys/docusign-private.key
 ```
+
+`SIGN_PROVIDER` defaults to `dropbox`. Every request command that talks to a remote provider also accepts `--provider dropbox|docusign`, and the CLI uses that flag over the env var when both are present.
 
 ## 4) Build
 ```bash
@@ -82,10 +94,12 @@ npm run start -- approve --request-id <request_id> --token <token1>
 npm run start -- approve --request-id <request_id> --token <token2>
 ```
 
-### C) Send via Dropbox
+### C) Send
 ```bash
-npm run start -- request send --request-id <request_id> --test-mode true
+npm run start -- request send --request-id <request_id> --provider dropbox --test-mode true
 ```
+
+Both `request send` and `request send-embedded` persist the selected provider plus the remote request/envelope ID into SQLite. Dropbox signer `signatureIds` are also persisted when Dropbox returns them. `request show` and `request status` expose those values as `request.provider`, `request.provider_request_id`, and `request.signatureIds`.
 
 ### D) Track
 ```bash
@@ -94,28 +108,43 @@ npm run start -- request watch --request-id <request_id> --interval-ms 5000 --fe
 npm run start -- audit show --request-id <request_id>
 ```
 
+You can add `--provider docusign` to `request send`, `request status`, `request watch`, and `request fetch-final` when working with DocuSign. Once a request has been sent, the persisted provider is reused for later polling and downloads.
+
 `request watch` exit codes:
 - `0`: completed
 - `2`: declined, rejected, expired, or canceled
 - `3`: error or invalid remote status
 - `4`: timeout before a terminal status
 
+`request watch` also accepts `--interval-seconds` and `--timeout-seconds` as aliases for the millisecond flags. The final JSON now includes:
+- `startedAt`
+- `elapsedMs`
+- `lastRemoteStatus`
+
+While polling, stderr prints concise progress lines only on the first poll, status changes, and terminal states.
+
 ---
 
 ## Embedded signing journey (API-driven signing UI)
+
+Embedded signing is currently supported only for Dropbox Sign. Calling embedded commands with `--provider docusign` returns a clear not-supported error.
 
 ### 1) Send embedded request
 ```bash
 npm run start -- request send-embedded \
   --request-id <request_id> \
+  --provider dropbox \
   --client-id <dropbox_client_id> \
   --test-mode true
 ```
+
+The response includes the signer `signatureIds`, and they remain available later through `request show` and `request status`.
 
 ### 2) Generate sign URL per signer signature ID
 ```bash
 npm run start -- request sign-url \
   --request-id <request_id> \
+  --provider dropbox \
   --signature-id <signature_id>
 ```
 
@@ -137,10 +166,70 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 ## Troubleshooting
 - `Missing parameter: client_id`
   - You opened embedded `sign_url` directly instead of via embedded JS + `clientId`.
+- `Embedded signing is not yet supported for DocuSign.`
+  - Use `request send`, `request status`, `request watch`, and `request fetch-final` with `--provider docusign`.
 - `localhost is not a valid domain`
   - Use a public tunnel/domain and register it in API App.
 - `command not found: ngrok`
   - Use localtunnel/cloudflared, or install/configure ngrok account+authtoken.
+
+---
+
+## DocuSign setup
+
+### Agent onboarding (operator/setup checklist)
+1. Create a DocuSign app (Integration Key) in the correct account/environment.
+2. Enable JWT Grant and configure user impersonation.
+3. Generate/download the RSA private key and store it locally (never commit it).
+4. Grant consent for the impersonated user for the integration key.
+5. Set env vars (below), then run `npm run start -- doctor` and confirm DocuSign fields are present.
+6. Run a smoke flow in demo/sandbox: `request create` → `approve` → `request send --provider docusign` → `request watch --provider docusign`.
+
+### User onboarding (daily usage)
+1. Keep default provider as Dropbox, or switch default by setting `SIGN_PROVIDER=docusign`.
+2. For per-request control, add `--provider docusign` only on DocuSign flows.
+3. Create + approve request, then send.
+4. Use `request watch` for completion and optional auto-download.
+
+### Required env vars
+```env
+SIGN_PROVIDER=docusign
+DOCUSIGN_INTEGRATION_KEY=your_integration_key
+DOCUSIGN_USER_ID=your_impersonated_user_guid
+DOCUSIGN_ACCOUNT_ID=your_account_id
+DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
+DOCUSIGN_PRIVATE_KEY_PATH=./keys/docusign-private.key
+```
+
+### JWT prerequisites
+- Create a DocuSign integration key.
+- Configure JWT auth for that integration key.
+- Grant consent for the impersonated user.
+- Store the RSA private key locally and point `DOCUSIGN_PRIVATE_KEY_PATH` at it.
+
+### Send, watch, and download
+```bash
+npm run start -- request create \
+  --title "DocuSign Consent Test" \
+  --document ./your.pdf \
+  --signer name:Alice,email:alice@example.com,order:1 \
+  --provider docusign
+
+npm run start -- approve --request-id <request_id> --token <token>
+
+npm run start -- request send \
+  --request-id <request_id> \
+  --provider docusign
+
+npm run start -- request watch \
+  --request-id <request_id> \
+  --provider docusign \
+  --interval-seconds 5 \
+  --fetch-final true \
+  --out ./artifacts/<request_id>-signed.pdf
+```
+
+DocuSign terminal states are normalized into the same watch exit codes as Dropbox Sign: `completed` exits `0`, `declined/rejected/expired/voided` exits `2`, provider errors exit `3`, and timeouts exit `4`.
 
 ---
 
@@ -182,7 +271,7 @@ npm run start -- request send --request-id <request_id> --test-mode true
 ```bash
 npm run start -- request watch \
   --request-id <request_id> \
-  --interval-ms 5000 \
+  --interval-seconds 5 \
   --fetch-final true \
   --out ./artifacts/<request_id>-signed.pdf
 ```
