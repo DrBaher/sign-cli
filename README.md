@@ -128,3 +128,7 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 - Never commit `.env` or API keys.
 - Rotate keys if shared in chat/logs.
 - Keep test mode on during development.
+
+
+## Detailed embedded setup
+See `EMBEDDED_SETUP.md` for Dropbox-side setup (API App, domain, callback URL, and troubleshooting).
