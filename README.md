@@ -16,6 +16,9 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign.
 - `request send-embedded`
 - `request sign-url`
 - `request status`
+- `request launch-embedded`
+- `request fetch-final`
+- `doctor`
 - `audit show`
 - `webhook verify`
 - `webhook ingest`
@@ -132,3 +135,13 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 
 ## Detailed embedded setup
 See `EMBEDDED_SETUP.md` for Dropbox-side setup (API App, domain, callback URL, and troubleshooting).
+
+
+## Seamless mode (recommended)
+
+1. `npm run start -- doctor`
+2. `request create` + `approve` tokens
+3. `request send-embedded`
+4. `request launch-embedded` (opens signer UI-ready HTML)
+5. `request status`
+6. `request fetch-final` once complete
