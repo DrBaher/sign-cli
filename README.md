@@ -1,133 +1,130 @@
 # sign CLI MVP
 
-Local-testable Node.js TypeScript CLI for simple signing request orchestration with SQLite persistence, approval tokens, append-only audit logs, and Dropbox Sign integration hooks.
+CLI for consent-gated, auditable e-sign workflows with Dropbox Sign.
 
-## Features
+## What this gives you
+- Human approval tokens (single-use, TTL)
+- Local append-only audit chain (`hash_prev`, `hash_self`)
+- Multi-signer support
+- Dropbox Sign send + status
+- Embedded signing support
 
-- Commands: `sign request create`, `sign approve`, `sign request send`, `sign request status`, `sign audit show`
-- SQLite tables: `requests`, `approvals`, `audit_events`, `artifacts`
-- Single-use approval tokens with TTL and request/document hash binding
-- Append-only audit events with `hash_prev` and `hash_self`
-- Multi-signer support via repeated `--signer`
-- Dropbox Sign integration through `@dropbox/sign` with `test_mode`
-- Webhook verification and sample payload ingestion
-- Basic tests for token replay, expiry, and signer parsing
+## Commands
+- `request create`
+- `approve`
+- `request send`
+- `request send-embedded`
+- `request sign-url`
+- `request status`
+- `audit show`
+- `webhook verify`
+- `webhook ingest`
 
-## Setup
+---
 
-1. Install dependencies:
+## Onboarding for a new Dropbox user (10 min)
 
+## 1) Prereqs
+- Node 22+
+- Dropbox Sign account with API access
+
+## 2) Install
 ```bash
+git clone https://github.com/DrBaher/cli-digital-signature-mvp.git
+cd cli-digital-signature-mvp
 npm install
-```
-
-2. Copy env values:
-
-```bash
 cp .env.example .env
 ```
 
-3. Set environment variables as needed:
+## 3) Configure `.env`
+```env
+SIGN_DB_PATH=./data/sign.db
+DROPBOX_SIGN_API_KEY=your_api_key_here
+DROPBOX_SIGN_TEST_MODE=true
+DROPBOX_SIGN_CLIENT_ID=your_client_id_for_embedded
+```
 
-- `SIGN_DB_PATH`: SQLite database path. Default: `./data/sign.db`
-- `DROPBOX_SIGN_API_KEY`: required for `sign request send`, `sign request status`, `sign webhook verify`, `sign webhook ingest`
-- `DROPBOX_SIGN_TEST_MODE`: `1` or `true` to send in Dropbox Sign test mode
-
-## Scripts
-
-- `npm run build`
-- `npm run start -- <command>`
-- `npm test`
-
-## Quick local test flow
-
-Build:
-
+## 4) Build
 ```bash
 npm run build
 ```
 
-Create a request with two signers:
+---
 
+## Standard user journey (email signing)
+
+### A) Create request
 ```bash
 npm run start -- request create \
-  --title "MSA Demo" \
-  --document ./fixtures/sample-contract.txt \
-  --signer name:Alice,email:alice@example.com,order:1 \
-  --signer name:Bob,email:bob@example.com,order:2 \
+  --title "Consent Test" \
+  --document ./your.pdf \
+  --signer name:You,email:you@gmail.com,order:1 \
+  --signer name:Work,email:you@company.com,order:2 \
   --token-ttl-minutes 30
 ```
 
-Approve using one returned token:
-
+### B) Approve (agent permission gate)
 ```bash
-npm run start -- approve \
-  --request-id <request_id> \
-  --token <token>
+npm run start -- approve --request-id <request_id> --token <token1>
+npm run start -- approve --request-id <request_id> --token <token2>
 ```
 
-Show audit chain:
-
-```bash
-npm run start -- audit show --request-id <request_id>
-```
-
-Send to Dropbox Sign in test mode:
-
+### C) Send via Dropbox
 ```bash
 npm run start -- request send --request-id <request_id> --test-mode true
 ```
 
-Check Dropbox Sign status:
-
+### D) Track
 ```bash
 npm run start -- request status --request-id <request_id>
+npm run start -- audit show --request-id <request_id>
 ```
 
-## Webhook utilities
+---
 
-Verify a callback payload file:
+## Embedded signing journey (API-driven signing UI)
 
+### 1) Send embedded request
 ```bash
-npm run start -- webhook verify --payload-file ./fixtures/sample-webhook.json
+npm run start -- request send-embedded \
+  --request-id <request_id> \
+  --client-id <dropbox_client_id> \
+  --test-mode true
 ```
 
-Ingest a sample callback payload file into the local audit trail:
-
+### 2) Generate sign URL per signer signature ID
 ```bash
-npm run start -- webhook ingest \
-  --payload-file ./fixtures/sample-webhook.json \
-  --request-id <request_id>
+npm run start -- request sign-url \
+  --request-id <request_id> \
+  --signature-id <signature_id>
 ```
 
-Dropbox Sign sends callbacks as `multipart/form-data` with a `json` field. The CLI accepts either the raw event JSON or a wrapper object such as:
+### 3) Open with HelloSign Embedded JS
+You must open `sign_url` through the embedded SDK with `clientId`.
+Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 
-```json
-{
-  "json": "{\"event\":{\"event_type\":\"signature_request_sent\",\"event_time\":\"1669926463\",\"event_hash\":\"...\"}}"
-}
-```
+---
 
-Verification follows the Dropbox Sign event hash rule: HMAC-SHA256 of `event_time + event_type` using your API key.
+## Callback URL / domain rules
+- `localhost` is not accepted as embedded app domain.
+- Use a public domain/tunnel (e.g. `https://good-ravens-drum.loca.lt`).
+- Put that domain in Dropbox Sign API App settings.
+- Callback URL can be like:
+  - `https://good-ravens-drum.loca.lt/dropbox/callback`
 
-## Example commands
+---
 
-```bash
-npm run start -- request create --title "Offer Letter" --document ./fixtures/sample-contract.txt --signer name:Legal,email:legal@example.com,order:1
-npm run start -- approve --request-id req_123 --token deadbeef
-npm run start -- request send --request-id req_123 --test-mode true
-npm run start -- request status --request-id req_123
-npm run start -- audit show --request-id req_123
-```
+## Troubleshooting
+- `Missing parameter: client_id`
+  - You opened embedded `sign_url` directly instead of via embedded JS + `clientId`.
+- `localhost is not a valid domain`
+  - Use a public tunnel/domain and register it in API App.
+- `command not found: ngrok`
+  - Use localtunnel/cloudflared, or install/configure ngrok account+authtoken.
 
-## Notes
+---
 
-- `sign request send` and `sign request status` fail with a clear error if `DROPBOX_SIGN_API_KEY` is missing.
-- The SDK is loaded dynamically, so local create/approve/audit/test flows work even before Dropbox Sign credentials are configured.
-- The project uses Node's built-in `node:sqlite` and a small local build step based on `node:module.stripTypeScriptTypes`.
-
-## Dropbox Sign references
-
-- SDK: https://www.npmjs.com/package/%40dropbox/sign
-- Node SDK repo: https://github.com/hellosign/dropbox-sign-node
-- Webhook docs: https://developers.hellosign.com/docs/guides/events-and-callbacks/walkthrough
+## Security notes
+- Never commit `.env` or API keys.
+- Rotate keys if shared in chat/logs.
+- Keep test mode on during development.
