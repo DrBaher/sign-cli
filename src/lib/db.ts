@@ -77,6 +77,19 @@ export function openDatabase(dbPath: string): SqliteDb {
       created_at TEXT NOT NULL,
       FOREIGN KEY (request_id) REFERENCES requests(id)
     );
+
+    CREATE TABLE IF NOT EXISTS signer_signing_states (
+      request_id TEXT NOT NULL,
+      signer_email TEXT NOT NULL,
+      signer_name TEXT,
+      signed_at TEXT,
+      declined_at TEXT,
+      decline_reason TEXT,
+      source TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (request_id, signer_email),
+      FOREIGN KEY (request_id) REFERENCES requests(id)
+    );
   `);
 
   if (!hasColumn(db, "requests", "signature_ids_json")) {
