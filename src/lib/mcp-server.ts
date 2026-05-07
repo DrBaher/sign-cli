@@ -2,6 +2,7 @@ import readline from "node:readline";
 import type { SqliteDb } from "./db.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import { getMcpPrompt, listMcpPrompts } from "./mcp-prompts.js";
+import { subscribeResource } from "./resource-watch.js";
 import { formatCliError, SignCliError } from "./sign-error.js";
 import {
   declineSigningRequestAsSigner,
@@ -357,7 +358,7 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {
           tools: {},
-          resources: { listChanged: false },
+          resources: { listChanged: false, subscribe: true },
           prompts: { listChanged: false },
         },
         serverInfo: { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
@@ -495,27 +496,70 @@ export async function serveMcpStdio(opts: {
   db: SqliteDb;
 }): Promise<void> {
   const rl = readline.createInterface({ input: opts.input, crlfDelay: Infinity });
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let message: JsonRpcMessage;
-    try {
-      message = JSON.parse(trimmed) as JsonRpcMessage;
-    } catch {
-      writeMessage(opts.output, {
-        jsonrpc: JSON_RPC_VERSION,
-        id: null,
-        error: { code: -32700, message: "Parse error" },
-      });
-      continue;
-    }
-    const id = message.id ?? null;
-    const isNotification = id === null || id === undefined;
-    if (typeof message.method !== "string") {
-      // Response from peer or malformed; ignore.
-      continue;
-    }
-    const progressToken = extractProgressToken(message.params);
+  // Per-connection subscription registry. Each entry is the unsubscribe fn
+  // returned by subscribeResource(). On stream end we drop them all.
+  const subscriptions = new Map<string, () => void>();
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let message: JsonRpcMessage;
+      try {
+        message = JSON.parse(trimmed) as JsonRpcMessage;
+      } catch {
+        writeMessage(opts.output, {
+          jsonrpc: JSON_RPC_VERSION,
+          id: null,
+          error: { code: -32700, message: "Parse error" },
+        });
+        continue;
+      }
+      const id = message.id ?? null;
+      const isNotification = id === null || id === undefined;
+      if (typeof message.method !== "string") {
+        // Response from peer or malformed; ignore.
+        continue;
+      }
+      // resources/subscribe & resources/unsubscribe are handled here (not in
+      // dispatchMcp) because they need the output stream and per-connection
+      // bookkeeping.
+      if (message.method === "resources/subscribe" || message.method === "resources/unsubscribe") {
+        const params = (message.params ?? {}) as { uri?: unknown };
+        const uri = typeof params.uri === "string" ? params.uri : "";
+        if (!uri) {
+          if (!isNotification) {
+            writeMessage(opts.output, {
+              jsonrpc: JSON_RPC_VERSION,
+              id,
+              error: { code: -32602, message: `${message.method} requires a string \`uri\` parameter.` },
+            });
+          }
+          continue;
+        }
+        if (message.method === "resources/subscribe") {
+          if (!subscriptions.has(uri)) {
+            const unsubscribe = subscribeResource(uri, (changedUri) => {
+              writeMessage(opts.output, {
+                jsonrpc: JSON_RPC_VERSION,
+                method: "notifications/resources/updated",
+                params: { uri: changedUri },
+              });
+            });
+            subscriptions.set(uri, unsubscribe);
+          }
+        } else {
+          const unsubscribe = subscriptions.get(uri);
+          if (unsubscribe) {
+            unsubscribe();
+            subscriptions.delete(uri);
+          }
+        }
+        if (!isNotification) {
+          writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: {} });
+        }
+        continue;
+      }
+      const progressToken = extractProgressToken(message.params);
     const emitProgress: McpEmitProgress | undefined = progressToken !== null
       ? (progress) => {
           writeMessage(opts.output, {
@@ -534,14 +578,20 @@ export async function serveMcpStdio(opts: {
       });
       if (dispatch.kind === "ignored" || isNotification) continue;
       writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
-    } catch (error) {
-      if (isNotification) continue;
-      const messageText = error instanceof Error ? error.message : String(error);
-      writeMessage(opts.output, {
-        jsonrpc: JSON_RPC_VERSION,
-        id,
-        error: { code: -32601, message: messageText },
-      });
+      } catch (error) {
+        if (isNotification) continue;
+        const messageText = error instanceof Error ? error.message : String(error);
+        writeMessage(opts.output, {
+          jsonrpc: JSON_RPC_VERSION,
+          id,
+          error: { code: -32601, message: messageText },
+        });
+      }
     }
+  } finally {
+    for (const unsubscribe of subscriptions.values()) {
+      unsubscribe();
+    }
+    subscriptions.clear();
   }
 }

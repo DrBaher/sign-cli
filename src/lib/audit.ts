@@ -1,5 +1,6 @@
 import type { SqliteDb } from "./db.js";
 import { maybeNotifySignerEvent } from "./notify.js";
+import { notifyResourceChanged } from "./resource-watch.js";
 import { nowIso, sha256, stableStringify } from "./util.js";
 
 export type AuditChainBreak =
@@ -116,6 +117,9 @@ export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
     hashSelf,
     createdAt,
   });
+
+  notifyResourceChanged(`request://${input.requestId}`);
+  notifyResourceChanged(`request://${input.requestId}/audit`);
 
   return { hashPrev, hashSelf, createdAt };
 }
