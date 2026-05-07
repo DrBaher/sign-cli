@@ -179,7 +179,7 @@ sign db verify
 sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend; postgres is stubbed today — see MIGRATION.md)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
-sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https)
+sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https; --web-demo serves the bundled dashboard at /web-demo/index.html)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
@@ -1279,7 +1279,11 @@ async function main(): Promise<void> {
     const keyPath = flagValue(parsed, "tls-key");
     const caPath = flagValue(parsed, "tls-ca");
     const tls = certPath && keyPath ? { certPath, keyPath, ...(caPath ? { caPath } : {}) } : undefined;
-    const server = startHttpApiServer({ db, port, bind, authToken, tls });
+    const webDemoFlag = flagValue(parsed, "web-demo");
+    const webDemoDir = webDemoFlag === "true"
+      ? (await import("node:path")).resolve("fixtures/web-demo")
+      : (webDemoFlag && webDemoFlag !== "false" ? (await import("node:path")).resolve(webDemoFlag) : undefined);
+    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir });
     const shutdown = () => server.close(() => process.exit(0));
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
@@ -1288,6 +1292,7 @@ async function main(): Promise<void> {
       url: `${tls ? "https" : "http"}://${bind}:${port}`,
       tls: Boolean(tls),
       authRequired: Boolean(authToken),
+      webDemo: webDemoDir ? `${tls ? "https" : "http"}://${bind}:${port}/web-demo/index.html` : null,
       routes: [
         "GET /v1/health",
         "GET /v1/metrics",

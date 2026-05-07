@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sign-cli web demo</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>sign-cli web demo</h1>
+      <p class="sub">A read-only window into the running <code>sign serve</code>. Inbox + per-request snapshot + audit-chain scan, all over <code>/v1/*</code>.</p>
+    </header>
+
+    <section id="inbox">
+      <h2>Signer inbox</h2>
+      <div class="row">
+        <label>Signer email <input type="text" id="inbox-email" placeholder="leave blank for all" /></label>
+        <button id="inbox-refresh">Refresh</button>
+      </div>
+      <div id="inbox-error" class="error"></div>
+      <table id="inbox-table">
+        <thead><tr><th>Request ID</th><th>Title</th><th>Status</th><th>Signers</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="snapshot">
+      <h2>Request snapshot</h2>
+      <div class="row">
+        <label>Request ID <input type="text" id="snap-id" placeholder="paste a request id" /></label>
+        <button id="snap-load">Load</button>
+      </div>
+      <pre id="snap-output">No request loaded yet.</pre>
+    </section>
+
+    <section id="audit">
+      <h2>Audit chain scan</h2>
+      <div class="row">
+        <button id="scan-run">Scan all chains</button>
+      </div>
+      <pre id="scan-output">Click "Scan all chains" to verify every request's audit hash linkage.</pre>
+    </section>
+
+    <footer>
+      <p>Endpoints: <code>POST /v1/signer/list</code>, <code>POST /v1/request/show</code>, <code>POST /v1/audit/scan</code>. Static files served by <code>sign serve --web-demo true</code>.</p>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

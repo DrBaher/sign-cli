@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
-import { readFileSync } from "node:fs";
+import path from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import type { SqliteDb } from "./db.js";
 import { formatCliError } from "./sign-error.js";
 import {
@@ -124,7 +125,63 @@ export type HttpServerOptions = {
   bind?: string;
   authToken?: string;
   tls?: { certPath: string; keyPath: string; caPath?: string };
+  // Absolute path to a directory of static files served same-origin under
+  // GET /web-demo/* (and GET / redirects to /web-demo/). Lets the bundled
+  // dashboard talk to /v1/* without CORS gymnastics.
+  webDemoDir?: string;
 };
+
+const STATIC_CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
+
+function tryServeWebDemo(
+  webDemoDir: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): boolean {
+  const method = req.method ?? "GET";
+  if (method !== "GET" && method !== "HEAD") return false;
+  const urlPath = (req.url ?? "/").split("?")[0];
+  if (urlPath === "/" || urlPath === "/web-demo" || urlPath === "/web-demo/") {
+    res.statusCode = 302;
+    res.setHeader("location", "/web-demo/index.html");
+    res.end();
+    return true;
+  }
+  if (!urlPath.startsWith("/web-demo/")) return false;
+  const rel = urlPath.slice("/web-demo/".length);
+  // Block path traversal — resolve and confirm the result is still inside the demo dir.
+  const resolved = path.resolve(webDemoDir, rel);
+  if (!resolved.startsWith(path.resolve(webDemoDir) + path.sep) && resolved !== path.resolve(webDemoDir)) {
+    res.statusCode = 403;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end("Forbidden");
+    return true;
+  }
+  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+    res.statusCode = 404;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end("Not Found");
+    return true;
+  }
+  const ext = path.extname(resolved).toLowerCase();
+  res.statusCode = 200;
+  res.setHeader("content-type", STATIC_CONTENT_TYPES[ext] ?? "application/octet-stream");
+  res.setHeader("cache-control", "no-store");
+  if (method === "HEAD") {
+    res.end();
+  } else {
+    res.end(readFileSync(resolved));
+  }
+  return true;
+}
 
 export function listMockHttpRoutes(): string[] {
   return Object.keys(ROUTES);
@@ -135,6 +192,12 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
   const handler: http.RequestListener = async (req, res) => {
     const route = `${req.method ?? "GET"} ${(req.url ?? "/").split("?")[0]}`;
     const handler = ROUTES[route];
+
+    // Static demo files are unauthenticated — they're inert HTML/CSS/JS that
+    // *call* /v1/* with the user's bearer token. Auth still gates the API.
+    if (opts.webDemoDir && tryServeWebDemo(opts.webDemoDir, req, res)) {
+      return;
+    }
 
     if (requireAuth) {
       const provided = (req.headers.authorization ?? "").replace(/^Bearer\s+/u, "");

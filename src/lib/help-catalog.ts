@@ -398,6 +398,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--tls-cert", description: "TLS server certificate PEM path (with --tls-key, listens on https)." },
       { name: "--tls-key", description: "TLS private key PEM path." },
       { name: "--tls-ca", description: "Optional CA bundle PEM (forwarded to https.createServer)." },
+      { name: "--web-demo", description: "true to serve the bundled dashboard from fixtures/web-demo, or a path to your own static dir. Mounts at /web-demo/index.html, same-origin (no CORS)." },
     ],
   },
   {
