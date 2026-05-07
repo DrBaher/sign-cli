@@ -9,6 +9,7 @@ import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wi
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
+import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
 import {
   buildCatalogJson,
   findCommand,
@@ -776,6 +777,14 @@ async function main(): Promise<void> {
     const out = flagValue(parsed, "out", true)!;
     const result = await exportRequestReceipt(db, { requestId, outDir: out });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "verify-receipt") {
+    const bundleDir = flagValue(parsed, "bundle", true)!;
+    const result = verifyRequestReceiptBundle(bundleDir);
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.ok ? 0 : 3;
     return;
   }
 
