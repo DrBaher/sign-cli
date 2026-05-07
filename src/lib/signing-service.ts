@@ -3513,6 +3513,30 @@ export function fetchUnsignedDocumentForSigner(
   const now = input.now ?? new Date();
   const { signer } = resolveSignerFromToken(db, request, input.token, now);
   assertSignerEmailMatchesToken(signer, input.signerEmail);
+
+  // Per-request fetch rate limit: SIGN_LOCAL_MAX_FETCHES_PER_HOUR caps how
+  // often any signer can fetch a given request's unsigned PDF in the past
+  // hour. Counts existing request.signer_fetched_document events in the
+  // audit chain so the limit is durable across CLI invocations.
+  const limitRaw = process.env.SIGN_LOCAL_MAX_FETCHES_PER_HOUR;
+  if (limitRaw) {
+    const limit = Number(limitRaw);
+    if (Number.isFinite(limit) && limit >= 0) {
+      const cutoff = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+      const row = db.prepare(
+        "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ? AND event_type = ? AND created_at >= ?",
+      ).get(request.id, "request.signer_fetched_document", cutoff) as { n: number };
+      if (row.n >= limit) {
+        throw new SignCliError({
+          code: "RATE_LIMITED",
+          message: `Request ${request.id} exceeded SIGN_LOCAL_MAX_FETCHES_PER_HOUR=${limit} (current=${row.n}).`,
+          hint: "Lower the agent's poll rate, or raise/unset SIGN_LOCAL_MAX_FETCHES_PER_HOUR.",
+          details: { requestId: request.id, limit, currentInWindow: row.n },
+        });
+      }
+    }
+  }
+
   const providerRequestId = getProviderRequestId(request)!;
   const document = readLocalDocument(providerRequestId);
 
