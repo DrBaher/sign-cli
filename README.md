@@ -4,9 +4,15 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, a
 
 ## Quick start
 
-New to the project? Run the wizard:
+No accounts? No keys? Run the demo:
 ```bash
 npm install && npm run build
+node dist/cli.js demo
+```
+`sign demo` runs the entire pipeline end-to-end against a built-in **local** provider — create + approve + send + watch + fetch-final + PKCS#7 inspect + audit verify + bundle export — with no signups and no API keys. The signed PDF it produces is a real PAdES-style PDF signed by a self-issued cert, so `request verify-signed-pdf` validates the full chain.
+
+When you're ready to wire up a real provider:
+```bash
 node dist/cli.js init
 node dist/cli.js doctor providers
 ```
@@ -16,6 +22,7 @@ node dist/cli.js doctor providers
 - Human approval tokens (single-use, TTL)
 - Local append-only audit chain (`hash_prev`, `hash_self`) with `audit verify`
 - Multi-signer support
+- Built-in `--provider local` that simulates the entire flow with no API keys, plus a self-signed PAdES PDF signer so `request verify-signed-pdf` validates a real chain
 - Provider abstraction for send + status + watch + final download + cancel + remind
 - Multi-document requests (`--document` repeatable on `request create` / `run-email` / `bulk`)
 - CSV-driven bulk send (`request bulk --csv`)
