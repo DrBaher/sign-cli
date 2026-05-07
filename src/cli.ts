@@ -9,8 +9,16 @@ import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wi
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
+import {
+  buildCatalogJson,
+  findCommand,
+  formatCommandHelp,
+  formatExamples,
+  formatTopLevelHelp,
+  HELP_CATALOG,
+} from "./lib/help-catalog.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
-import { serveMcpStdio } from "./lib/mcp-server.js";
+import { listMcpTools, serveMcpStdio } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
@@ -203,12 +211,51 @@ async function main(): Promise<void> {
   const db = openDatabase(dbPath);
   const selectedProvider = resolveSignProvider(flagValue(parsed, "provider"));
 
+  // Version flag — handled before any positional dispatch.
+  if ((flagValue(parsed, "version") ?? "false") === "true") {
+    const { SIGN_CLI_VERSION } = await import("./lib/help-catalog.js");
+    console.log(SIGN_CLI_VERSION);
+    return;
+  }
+
+  // Catalog flag — machine-readable command index.
+  if (flagValue(parsed, "catalog") !== undefined) {
+    console.log(JSON.stringify(buildCatalogJson(), null, 2));
+    return;
+  }
+
+  // Help flag — show top-level help, or focused help when a command is named.
+  if ((flagValue(parsed, "help") ?? "false") === "true" || parsed.positionals[0] === "help") {
+    const queryPositionals = parsed.positionals[0] === "help" ? parsed.positionals.slice(1) : parsed.positionals;
+    if (queryPositionals.length === 0) {
+      console.log(formatTopLevelHelp());
+      return;
+    }
+    // Try to find the longest-matching command (e.g. "signer policy run-all" first, then "signer policy run").
+    for (let len = queryPositionals.length; len >= 1; len -= 1) {
+      const query = queryPositionals.slice(0, len).join(" ");
+      const found = findCommand(query);
+      if (found) {
+        console.log(formatCommandHelp(found));
+        return;
+      }
+    }
+    console.error(`No help entry for "${queryPositionals.join(" ")}". Run \`sign --help\` to list commands.`);
+    process.exitCode = 1;
+    return;
+  }
+
   if (parsed.positionals.length === 0) {
-    printUsage();
+    console.log(formatTopLevelHelp());
     return;
   }
 
   const [root, sub, action] = parsed.positionals;
+
+  if (root === "examples") {
+    console.log(formatExamples());
+    return;
+  }
 
 
   if (root === "doctor" && sub === "providers") {
@@ -900,6 +947,11 @@ async function main(): Promise<void> {
 
   if (root === "mcp" && sub === "serve") {
     await serveMcpStdio({ input: process.stdin, output: process.stdout, db });
+    return;
+  }
+
+  if (root === "mcp" && sub === "tools") {
+    console.log(JSON.stringify({ tools: listMcpTools() }, null, 2));
     return;
   }
 
