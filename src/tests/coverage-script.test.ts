@@ -19,6 +19,18 @@ test("package.json defines a `coverage` script that writes coverage.lcov", () =>
   assert.match(cov, /--test-reporter-destination=coverage\.lcov/);
 });
 
+test("coverage script enforces minimum line / function / branch thresholds", () => {
+  const pkg = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  const cov = pkg.scripts.coverage;
+  assert.match(cov, /--test-coverage-lines=\d+/);
+  assert.match(cov, /--test-coverage-functions=\d+/);
+  assert.match(cov, /--test-coverage-branches=\d+/);
+  // Tests are excluded from the rollup so the floor reflects lib code only.
+  assert.match(cov, /--test-coverage-exclude=/);
+});
+
 test("CI workflow runs `npm run coverage` and uploads the lcov artifact", () => {
   const ci = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /npm run coverage/);
