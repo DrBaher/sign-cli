@@ -147,7 +147,7 @@ sign request send-embedded --request-id <id> [--client-id <clientId>] [--provide
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
 sign request launch-embedded --request-id <id> --signature-id <signatureId> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--return-url https://...]
 sign request fetch-final --request-id <id> [--provider dropbox|docusign|signwell] [--out ./artifacts/signed.pdf]
-sign request status --request-id <id> [--provider dropbox|docusign|signwell]
+sign request status --request-id <id> [--provider dropbox|docusign|signwell] [--watch true [--interval-ms 5000] [--timeout-ms 600000] [--fetch-final true] [--out ./artifacts/signed.pdf]]
 sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf] [--log human|json]
 sign request remind --request-id <id> [--provider dropbox|docusign|signwell] [--email signer@example.com]
 sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
@@ -693,7 +693,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (root === "request" && sub === "status") {
+  if (root === "request" && sub === "status" && (flagValue(parsed, "watch") ?? "false") !== "true") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const result = await getSigningRequestStatus(db, {
       requestId,
@@ -704,7 +704,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (root === "request" && sub === "watch") {
+  // `request status --watch true` is a shorthand for `request watch` — same
+  // flags, same exit codes. The single-shot status path is handled above.
+  if (root === "request" && (sub === "watch" || sub === "status")) {
     const requestId = flagValue(parsed, "request-id", true)!;
     const intervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000 })!;
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });

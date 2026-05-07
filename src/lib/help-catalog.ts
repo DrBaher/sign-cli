@@ -109,7 +109,15 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request status",
-    summary: "Poll the provider once for current status.",
+    summary: "Poll the provider once for current status. Pass --watch true to poll until terminal (same flags as `request watch`).",
+    flags: [
+      { name: "--request-id", required: true, description: "Request id." },
+      { name: "--watch", description: "true to keep polling; same flags + exit codes as `request watch`." },
+      { name: "--interval-ms", description: "(--watch true) Poll interval; or --interval-seconds." },
+      { name: "--timeout-ms", description: "(--watch true) Stop after N ms; or --timeout-seconds." },
+      { name: "--fetch-final", description: "(--watch true) true to download the signed PDF on completion." },
+      { name: "--out", description: "(--watch true) Path to write the signed PDF." },
+    ],
   },
   {
     command: "request watch",
