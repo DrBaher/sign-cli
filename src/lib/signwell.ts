@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { signwellFieldsPerFile, type SignatureField } from "./field-placement.js";
 import { retryFetch } from "./http.js";
 import { parseBooleanFlag } from "./util.js";
 import type { SignerInput } from "./util.js";
@@ -13,6 +14,7 @@ export type SignWellSendInput = {
   documentPaths?: string[];
   title: string;
   signers: SignerInput[];
+  fields?: SignatureField[];
   metadata: Record<string, string>;
   testMode: boolean;
   embeddedSigning?: boolean;
@@ -120,7 +122,7 @@ export async function sendSignWellDocument(input: SignWellSendInput): Promise<{
   const allPaths = (input.documentPaths && input.documentPaths.length > 0)
     ? input.documentPaths
     : [input.documentPath];
-  const files = await Promise.all(allPaths.map(async (rawPath) => {
+  const baseFiles = await Promise.all(allPaths.map(async (rawPath) => {
     const resolved = path.resolve(rawPath);
     const buffer = await readFile(resolved);
     return {
@@ -129,6 +131,14 @@ export async function sendSignWellDocument(input: SignWellSendInput): Promise<{
     };
   }));
   const signers = sortSigners(input.signers);
+  const recipientIdByOrder = new Map<number, string>();
+  signers.forEach((signer, index) => recipientIdByOrder.set(signer.order, String(index + 1)));
+  const fieldsPerFile = (input.fields && input.fields.length > 0)
+    ? signwellFieldsPerFile(input.fields, recipientIdByOrder, baseFiles.length)
+    : null;
+  const files = baseFiles.map((file, index) => fieldsPerFile && fieldsPerFile[index].length > 0
+    ? { ...file, fields: fieldsPerFile[index] }
+    : file);
   const body = await signWellJsonRequest<any>(input.apiKey, {
     method: "POST",
     endpoint: "/documents",

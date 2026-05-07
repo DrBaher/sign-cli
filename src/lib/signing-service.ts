@@ -43,6 +43,10 @@ import {
 } from "./signwell-webhook.js";
 import { inspectPdfSignatures, type PdfSignatureReport } from "./pdf-signature.js";
 import { digestForChainHead, inspectTimestampResponse, issueRfc3161Timestamp, type TimestampInspection } from "./timestamp.js";
+import {
+  parseFieldSpec,
+  type SignatureField,
+} from "./field-placement.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
   createId,
@@ -70,6 +74,7 @@ export type CreateRequestInput = {
   documentPath?: string;
   documentPaths?: string[];
   signers: SignerInput[];
+  fields?: SignatureField[];
   tokenTtlMinutes: number;
   autoApprove?: boolean;
   provider?: SignProvider;
@@ -90,6 +95,7 @@ type RequestRow = {
   signature_ids_json: string | null;
   signers_json: string;
   documents_json: string | null;
+  fields_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -116,6 +122,20 @@ export function getRequestDocuments(request: RequestRow): RequestDocument[] {
   const parsed = parseDocumentsJson(request.documents_json);
   if (parsed.length > 0) return parsed;
   return [{ path: request.document_path, hash: request.document_hash, name: path.basename(request.document_path) }];
+}
+
+function parseFieldsJson(raw: string | null): SignatureField[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as SignatureField[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function getRequestFields(request: RequestRow): SignatureField[] {
+  return parseFieldsJson(request.fields_json);
 }
 
 type ApprovalRow = {
@@ -151,6 +171,7 @@ type ProviderApi = {
     request: RequestRow;
     signers: SignerInput[];
     documents: RequestDocument[];
+    fields: SignatureField[];
     apiKey?: string;
     testMode: boolean;
   }): Promise<ProviderSendResult>;
@@ -158,6 +179,7 @@ type ProviderApi = {
     request: RequestRow;
     signers: SignerInput[];
     documents: RequestDocument[];
+    fields: SignatureField[];
     apiKey?: string;
     clientId?: string;
     testMode: boolean;
@@ -289,7 +311,7 @@ function persistRequestProviderMetadata(
   );
 }
 
-function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; documents: RequestDocument[]; normalizedProvider: SignProvider } {
+function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; documents: RequestDocument[]; fields: SignatureField[]; normalizedProvider: SignProvider } {
   return {
     ...request,
     provider: request.provider ?? getPersistedProvider(request),
@@ -297,6 +319,7 @@ function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: 
     provider_status: getProviderStatusValue(request),
     signatureIds: parseSignatureIdsJson(request.signature_ids_json),
     documents: getRequestDocuments(request),
+    fields: getRequestFields(request),
     normalizedProvider: getPersistedProvider(request),
   };
 }
@@ -347,6 +370,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
+          fields: input.fields,
           metadata: {
             request_id: input.request.id,
             document_hash: input.request.document_hash,
@@ -365,6 +389,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
+          fields: input.fields,
           metadata: {
             request_id: input.request.id,
             document_hash: input.request.document_hash,
@@ -436,6 +461,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
+          fields: input.fields,
           metadata: {
             request_id: input.request.id,
             document_hash: input.request.document_hash,
@@ -457,6 +483,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
+          fields: input.fields,
           metadata: {
             request_id: input.request.id,
             document_hash: input.request.document_hash,
@@ -517,6 +544,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         documentPaths: input.documents.map((doc) => doc.path),
         title: input.request.title,
         signers: input.signers,
+        fields: input.fields,
         metadata: {
           request_id: input.request.id,
           document_hash: input.request.document_hash,
@@ -538,6 +566,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         documentPaths: input.documents.map((doc) => doc.path),
         title: input.request.title,
         signers: input.signers,
+        fields: input.fields,
         metadata: {
           request_id: input.request.id,
           document_hash: input.request.document_hash,
@@ -638,11 +667,22 @@ export function createSigningRequest(
   const primary = documents[0];
   const signersJson = stableStringify(sortedSigners);
   const documentsJson = stableStringify(documents);
+  const fields = input.fields ?? [];
+  const knownOrders = new Set(sortedSigners.map((signer) => signer.order));
+  for (const field of fields) {
+    if (!knownOrders.has(field.signerOrder)) {
+      throw new Error(`Field references signer:${field.signerOrder}, but no --signer with that order was provided.`);
+    }
+    if (field.documentIndex >= documents.length) {
+      throw new Error(`Field doc:${field.documentIndex} is out of range (only ${documents.length} document(s) attached).`);
+    }
+  }
+  const fieldsJson = fields.length > 0 ? JSON.stringify(fields) : null;
 
   db.prepare(
     `INSERT INTO requests (
-      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, documents_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, documents_json, fields_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     requestId,
     input.title,
@@ -657,6 +697,7 @@ export function createSigningRequest(
     null,
     signersJson,
     documentsJson,
+    fieldsJson,
     createdAt,
     createdAt,
   );
@@ -713,6 +754,7 @@ export function createSigningRequest(
       documentPath: primary.path,
       documentHash: primary.hash,
       documents,
+      fields,
       provider: input.provider ?? null,
       signers: sortedSigners,
       tokenTtlMinutes: input.tokenTtlMinutes,
@@ -803,6 +845,7 @@ export async function sendSigningRequest(
   const provider = input.provider ?? getPersistedProvider(request);
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const documents = getRequestDocuments(request);
+  const fields = getRequestFields(request);
   const providerApi = getProviderApi(provider);
   const send = input.providerSend
     ? input.providerSend
@@ -814,6 +857,7 @@ export async function sendSigningRequest(
         documentPaths: documents.map((doc) => doc.path),
         title: request.title,
         signers,
+        fields,
         metadata: {
           request_id: request.id,
           document_hash: request.document_hash,
@@ -827,7 +871,7 @@ export async function sendSigningRequest(
         responseBody: result.responseBody,
       };
     }
-    : () => providerApi.send({ request, signers, documents, apiKey: input.apiKey, testMode: input.testMode });
+    : () => providerApi.send({ request, signers, documents, fields, apiKey: input.apiKey, testMode: input.testMode });
 
   const result = await send();
   const now = input.now ?? new Date();
@@ -1107,6 +1151,7 @@ export async function sendEmbeddedSigningRequest(
 
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const documents = getRequestDocuments(request);
+  const fields = getRequestFields(request);
   const sendEmbedded = input.createEmbeddedRequest && provider === "dropbox"
     ? async () => {
       const result = await input.createEmbeddedRequest!({
@@ -1116,6 +1161,7 @@ export async function sendEmbeddedSigningRequest(
         documentPaths: documents.map((doc) => doc.path),
         title: request.title,
         signers,
+        fields,
         metadata: {
           request_id: request.id,
           document_hash: request.document_hash,
@@ -1133,6 +1179,7 @@ export async function sendEmbeddedSigningRequest(
       request,
       signers,
       documents,
+      fields,
       apiKey: input.apiKey,
       clientId: input.clientId,
       testMode: input.testMode,

@@ -18,6 +18,9 @@
 | `request cancel is destructive at the provider. Re-run with --yes true to confirm.` | Safety guard. | Re-run with `--yes true`. |
 | `DocuSign cancel requires --reason "..."` | DocuSign requires a void reason. | Pass `--reason "Reason"`. |
 | `Dropbox Sign reminders require --email <signer email>.` | Dropbox's remind endpoint needs the signer email. | Pass `--email signer@example.com` to `request remind`. |
+| `Field signer:N does not match any --signer order` / `Field doc:N is out of range` | A `--field` references a signer or document that wasn't passed. | Make the `signer:` order match a `--signer order:N`, and `doc:` indices stay within the number of `--document` flags (0-based). |
+| `Anchor strings are not supported via this CLI` (Dropbox / SignWell) | Those providers don't accept anchor strings via API in this CLI. | Pass coordinates (`page:`, `x:`, `y:`) instead, or use `--provider docusign` for anchors. |
+| `Field needs either anchor:"text" or page+x+y` | A `--field` had neither. | Add either `anchor:"Sign here"` (DocuSign) or `page:`, `x:`, `y:` (any provider). |
 | `request bulk` exits 3 | One or more CSV rows failed. | Inspect `results[].error` in the JSON output; each row independently records its outcome. |
 | CSV row missing name and/or email | The CSV has empty cells in the required columns. | The wizard expects `name` and `email` (or `signer_name`/`signer_email`); fix the row and retry. |
 | `audit verify` exits 3 | Audit chain hash mismatch — tamper or deleted event. | Inspect the `break` field in the JSON output to see which event broke the chain. |

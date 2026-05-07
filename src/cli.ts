@@ -36,6 +36,7 @@ import {
   verifyRequestAuditChain,
   watchSigningRequestStatus,
 } from "./lib/signing-service.js";
+import { parseFieldSpec } from "./lib/field-placement.js";
 import { parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
@@ -93,8 +94,8 @@ function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFla
 }
 
 function printUsage(): void {
-  console.log(`sign request create --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell]
-sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell] [--test-mode true]
+  console.log(`sign request create --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell]
+sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
@@ -238,11 +239,13 @@ async function main(): Promise<void> {
       throw new Error("Missing required flag: --document");
     }
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    const fields = flagValues(parsed, "field").map(parseFieldSpec);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "30");
     const created = createSigningRequest(db, {
       title,
       documentPaths,
       signers,
+      fields,
       tokenTtlMinutes,
       provider: selectedProvider,
       autoApprove: true,
@@ -271,11 +274,13 @@ async function main(): Promise<void> {
       throw new Error("Missing required flag: --document");
     }
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    const fields = flagValues(parsed, "field").map(parseFieldSpec);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
     const result = createSigningRequest(db, {
       title,
       documentPaths,
       signers,
+      fields,
       tokenTtlMinutes,
       provider: selectedProvider,
       autoApprove: (flagValue(parsed, "auto-approve") ?? "false") === "true",

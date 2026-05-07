@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { dropboxFormFieldsPerDocument, type SignatureField } from "./field-placement.js";
 import { retryFetch } from "./http.js";
 import { parseBooleanFlag } from "./util.js";
 import type { SignerInput } from "./util.js";
@@ -10,6 +11,7 @@ export type DropboxSendInput = {
   documentPaths?: string[];
   title: string;
   signers: SignerInput[];
+  fields?: SignatureField[];
   metadata: Record<string, string>;
   testMode: boolean;
 };
@@ -57,12 +59,24 @@ function addCommonFormFields(form: FormData, input: DropboxSendInput): void {
   form.set("subject", input.title);
   form.set("message", `Please sign: ${input.title}`);
   form.set("test_mode", input.testMode ? "1" : "0");
-  input.signers.sort((a,b)=>a.order-b.order).forEach((s,i)=>{
+  const sortedSigners = input.signers.slice().sort((a, b) => a.order - b.order);
+  sortedSigners.forEach((s, i) => {
     form.set(`signers[${i}][name]`, s.name);
     form.set(`signers[${i}][email_address]`, s.email);
     form.set(`signers[${i}][order]`, String(s.order));
   });
-  Object.entries(input.metadata).forEach(([k,v])=> form.set(`metadata[${k}]`, v));
+  Object.entries(input.metadata).forEach(([k, v]) => form.set(`metadata[${k}]`, v));
+  if (input.fields && input.fields.length > 0) {
+    const documentCount = (input.documentPaths && input.documentPaths.length > 0)
+      ? input.documentPaths.length
+      : 1;
+    const formFields = dropboxFormFieldsPerDocument(
+      input.fields,
+      sortedSigners.map((signer) => signer.order),
+      documentCount,
+    );
+    form.set("form_fields_per_document", JSON.stringify(formFields));
+  }
 }
 
 async function postSignatureRequest(endpoint: string, apiKey: string, form: FormData): Promise<any> {
