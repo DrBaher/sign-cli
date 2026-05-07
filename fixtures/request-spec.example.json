@@ -1,0 +1,14 @@
+{
+  "title": "Mutual NDA — example spec",
+  "documentPath": "./fixtures/example.pdf",
+  "signers": [
+    { "name": "Alice Example", "email": "alice@example.com", "order": 1 },
+    { "name": "Bob Example", "email": "bob@example.com", "order": 2 }
+  ],
+  "fields": [
+    { "signerOrder": 1, "documentIndex": 0, "page": 1, "x": 100, "y": 200, "type": "signature" }
+  ],
+  "tokenTtlMinutes": 60,
+  "provider": "local",
+  "autoApprove": true
+}

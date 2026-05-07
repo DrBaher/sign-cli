@@ -16,6 +16,9 @@ export type SignErrorCode =
   | "REQUEST_NOT_FOUND"
   | "MISSING_FLAG"
   | "UNKNOWN_COMMAND"
+  | "INVALID_SPEC"
+  | "POLICY_VIOLATION"
+  | "UNKNOWN_TOOL"
   | "INTERNAL";
 
 export type SignErrorEnvelope = {

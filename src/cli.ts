@@ -48,6 +48,7 @@ import {
   watchSigningRequestStatus,
 } from "./lib/signing-service.js";
 import { parseFieldSpec } from "./lib/field-placement.js";
+import { loadRequestSpec } from "./lib/request-spec.js";
 import { parsePrefillSpec, parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
@@ -110,6 +111,7 @@ function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFla
 
 function printUsage(): void {
   console.log(`sign request create --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell]
+sign request create --spec ./request.json   (CLI flags --provider and --auto-approve still apply on top of the spec)
 sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
 sign approve --request-id <id> --token <token>
@@ -349,6 +351,32 @@ async function main(): Promise<void> {
   }
 
   if (root === "request" && sub === "create") {
+    const specPath = flagValue(parsed, "spec");
+    if (specPath) {
+      const spec = loadRequestSpec(specPath);
+      const docPaths = spec.documentPath ? [spec.documentPath] : (spec.documentPaths ?? []);
+      docPaths.forEach((p) => validateDocumentPath(p));
+      spec.signers.forEach((signer) => validateEmail(signer.email, "Signer email"));
+      validateSignerCount(spec.signers.length);
+      validateFieldCount((spec.fields ?? []).length);
+      const provider = flagValue(parsed, "provider") ? selectedProvider : (spec.provider ?? selectedProvider);
+      const autoApproveFlag = flagValue(parsed, "auto-approve");
+      const autoApprove = autoApproveFlag !== undefined ? autoApproveFlag === "true" : Boolean(spec.autoApprove);
+      const result = createSigningRequest(db, {
+        title: spec.title,
+        ...(spec.documentPath ? { documentPath: spec.documentPath } : {}),
+        ...(spec.documentPaths ? { documentPaths: spec.documentPaths } : {}),
+        ...(spec.templateId ? { templateId: spec.templateId } : {}),
+        signers: spec.signers,
+        ...(spec.fields ? { fields: spec.fields } : {}),
+        ...(spec.prefills ? { prefills: spec.prefills } : {}),
+        tokenTtlMinutes: spec.tokenTtlMinutes ?? 60,
+        provider,
+        autoApprove,
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     const title = flagValue(parsed, "title", true)!;
     const documentPaths = flagValues(parsed, "document");
     if (documentPaths.length === 0) {
