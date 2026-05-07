@@ -156,6 +156,7 @@ sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-second
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
+sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -667,6 +668,65 @@ async function main(): Promise<void> {
       ctx: { title, documentSha256, signerEmail },
       decision,
     }, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "policy" && action === "diff") {
+    const beforePath = flagValue(parsed, "before", true)!;
+    const afterPath = flagValue(parsed, "after", true)!;
+    const snapshotPath = flagValue(parsed, "snapshot");
+    const useInbox = (flagValue(parsed, "inbox") ?? "false") === "true";
+    if (!snapshotPath && !useInbox) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "signer policy diff requires either --snapshot <path> or --inbox true.",
+      });
+    }
+    const { loadPolicySpec } = await import("./lib/policy-engine.js");
+    const { diffPolicies } = await import("./lib/policy-diff.js");
+    const before = loadPolicySpec(beforePath);
+    const after = loadPolicySpec(afterPath);
+    const contexts: Array<{ requestId: string | null; title: string; documentSha256: string; signerEmail: string }> = [];
+    if (snapshotPath) {
+      const fs = await import("node:fs");
+      const snap = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+      const fromSignersJson = (() => {
+        if (typeof snap?.request?.signers_json !== "string") return undefined;
+        try {
+          const arr = JSON.parse(snap.request.signers_json);
+          return Array.isArray(arr) ? arr[0]?.email : undefined;
+        } catch { return undefined; }
+      })();
+      const signerEmail = flagValue(parsed, "signer-email")
+        ?? snap?.signedBy?.[0]?.email
+        ?? fromSignersJson
+        ?? "";
+      contexts.push({
+        requestId: snap?.request?.id ?? null,
+        title: snap?.request?.title ?? "",
+        documentSha256: snap?.request?.document_hash ?? "",
+        signerEmail,
+      });
+    }
+    if (useInbox) {
+      const inbox = listSignerInbox(db, { signerEmail: flagValue(parsed, "signer-email") });
+      for (const entry of inbox) {
+        if (!entry.requestId) continue;
+        const row = db.prepare("SELECT document_hash FROM requests WHERE id = ?")
+          .get(entry.requestId) as { document_hash: string | null } | undefined;
+        const signerEmail = flagValue(parsed, "signer-email")
+          ?? entry.signers?.[0]?.email
+          ?? "";
+        contexts.push({
+          requestId: entry.requestId,
+          title: entry.title,
+          documentSha256: row?.document_hash ?? "",
+          signerEmail,
+        });
+      }
+    }
+    const summary = diffPolicies(before, after, contexts);
+    console.log(JSON.stringify({ before: beforePath, after: afterPath, ...summary }, null, 2));
     return;
   }
 
