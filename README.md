@@ -405,9 +405,14 @@ Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server.
 - `signer_decline` (`{ request_id, token, signer_email?, reason? }`) — decline.
 - `request_show` (`{ request_id }`) — enriched snapshot with `signedBy`, `nextSteps[]`, etc.
 - `request_status` (`{ request_id, provider? }`) — poll the provider; reads API keys from env (`DROPBOX_SIGN_API_KEY` / `SIGNWELL_API_KEY`) for hosted providers.
+- `request_watch` (`{ request_id, provider?, interval_ms?, timeout_ms? }`) — poll until terminal; emits MCP `notifications/progress` on each poll when the client supplies a `progressToken`.
 - `audit_verify` (`{ request_id }`) — verify the audit chain.
 
-Tool errors are returned as `{ isError: true, content: [{ type: "text", text: "<JSON envelope>" }] }` with the same `code` values documented in `TROUBLESHOOTING.md`. Example wiring (Claude Desktop's `claude_desktop_config.json`):
+Tool arguments are validated against each tool's `inputSchema` before the handler runs (missing required fields, wrong types, enum mismatches → `INVALID_ARGS`). Tool errors come back as `{ isError: true, content: [{ type: "text", text: "<JSON envelope>" }] }` with the same `code` values documented in `TROUBLESHOOTING.md`.
+
+**Resources** — `resources/list` enumerates `request://<id>` (snapshot), `request://<id>/document` (unsigned PDF, base64), and `request://<id>/audit` (audit chain) for every local-provider request. Use `resources/read` to fetch any of them. This lets MCP clients browse and prefetch without needing prior knowledge of the tool catalog.
+
+Example wiring (Claude Desktop's `claude_desktop_config.json`):
 
 ```json
 {

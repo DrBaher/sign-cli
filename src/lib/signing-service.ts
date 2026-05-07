@@ -3170,3 +3170,28 @@ export function runSignerPolicy(
     result: declineResult,
   };
 }
+
+export type LocalDocumentResource = {
+  requestId: string;
+  providerRequestId: string;
+  title: string;
+  pdf: Buffer;
+  bytes: number;
+  sha256: string;
+};
+
+export function readLocalDocumentForResource(db: SqliteDb, requestId: string): LocalDocumentResource {
+  const request = getRequestRow(db, requestId);
+  const provider = getPersistedProvider(request);
+  ensureLocalProvider(request, provider);
+  const providerRequestId = getProviderRequestId(request)!;
+  const document = readLocalDocument(providerRequestId);
+  return {
+    requestId: request.id,
+    providerRequestId,
+    title: document.title,
+    pdf: document.pdf,
+    bytes: document.bytes,
+    sha256: document.sha256,
+  };
+}

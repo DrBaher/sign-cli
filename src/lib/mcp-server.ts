@@ -1,22 +1,36 @@
 import readline from "node:readline";
 import type { SqliteDb } from "./db.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
-import { formatCliError } from "./sign-error.js";
+import { formatCliError, SignCliError } from "./sign-error.js";
 import {
   declineSigningRequestAsSigner,
   fetchUnsignedDocumentForSigner,
   getRequestSnapshot,
   getSigningRequestStatus,
+  listAuditEvents,
   listSignerInbox,
+  listSigningRequests,
+  readLocalDocumentForResource,
   signSigningRequest,
   verifyRequestAuditChain,
+  watchSigningRequestStatus,
 } from "./signing-service.js";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_SERVER_NAME = "sign-cli-mcp";
 export const MCP_SERVER_VERSION = "0.1.0";
 
-type ToolHandler = (db: SqliteDb, args: Record<string, unknown>) => unknown | Promise<unknown>;
+export type McpEmitProgress = (progress: { progress: number; total?: number; message?: string }) => void;
+
+export type ToolContext = {
+  emitProgress?: McpEmitProgress;
+};
+
+type ToolHandler = (
+  db: SqliteDb,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) => unknown | Promise<unknown>;
 
 type ToolDefinition = {
   name: string;
@@ -179,16 +193,156 @@ const TOOLS: ToolDefinition[] = [
     },
     handler: (db, args) => verifyRequestAuditChain(db, requiredStr(args, "request_id")),
   },
+  {
+    name: "request_watch",
+    description:
+      "Poll a request's status until terminal (completed/declined/canceled/timeout). " +
+      "When the MCP client supplies a progressToken, emits notifications/progress on each poll.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string" },
+        provider: { type: "string", enum: ["dropbox", "docusign", "signwell", "local"] },
+        interval_ms: { type: "number" },
+        timeout_ms: { type: "number" },
+      },
+      required: ["request_id"],
+    },
+    handler: async (db, args, ctx) => {
+      const provider = resolveProviderArg(args);
+      const intervalMs = typeof args.interval_ms === "number" ? args.interval_ms : 1000;
+      const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : 30_000;
+      return watchSigningRequestStatus(db, {
+        requestId: requiredStr(args, "request_id"),
+        provider,
+        apiKey: providerApiKey(provider),
+        intervalMs,
+        timeoutMs,
+        onPoll: ctx.emitProgress
+          ? (update) =>
+              ctx.emitProgress!({
+                progress: update.attempt,
+                message: `${update.status}${update.terminal ? ` (terminal=${update.terminal})` : ""}`,
+              })
+          : undefined,
+      });
+    },
+  },
 ];
+
+function validateToolArgs(
+  schema: Record<string, unknown>,
+  args: Record<string, unknown>,
+): { ok: true } | { ok: false; error: string } {
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+  for (const key of required) {
+    const value = args[key];
+    if (value === undefined || value === null || value === "") {
+      return { ok: false, error: `Missing required argument: ${key}` };
+    }
+  }
+  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  for (const [key, value] of Object.entries(args)) {
+    const propSchema = properties[key];
+    if (!propSchema) continue;
+    const expectedType = propSchema.type;
+    if (expectedType === "string" && typeof value !== "string") {
+      return { ok: false, error: `Argument ${key} must be a string.` };
+    }
+    if (expectedType === "number" && typeof value !== "number") {
+      return { ok: false, error: `Argument ${key} must be a number.` };
+    }
+    if (expectedType === "boolean" && typeof value !== "boolean") {
+      return { ok: false, error: `Argument ${key} must be a boolean.` };
+    }
+    if (Array.isArray(propSchema.enum)) {
+      const allowed = propSchema.enum as unknown[];
+      if (!allowed.includes(value)) {
+        return { ok: false, error: `Argument ${key} must be one of: ${allowed.join(", ")}` };
+      }
+    }
+  }
+  return { ok: true };
+}
 
 export function listMcpTools(): Array<Pick<ToolDefinition, "name" | "description" | "inputSchema">> {
   return TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+}
+
+type ResourceUriParts = { kind: "snapshot" | "document" | "audit"; requestId: string };
+
+function parseResourceUri(uri: string): ResourceUriParts {
+  if (!uri.startsWith("request://")) {
+    throw new SignCliError({
+      code: "UNKNOWN_RESOURCE",
+      message: `Unknown resource URI scheme: ${uri}`,
+      hint: "Resources are exposed under request://<request-id>[/document|/audit].",
+    });
+  }
+  const path = uri.slice("request://".length);
+  const [requestId, leaf] = path.split("/", 2);
+  if (!requestId) {
+    throw new SignCliError({
+      code: "UNKNOWN_RESOURCE",
+      message: `Resource URI missing request id: ${uri}`,
+    });
+  }
+  if (!leaf) return { kind: "snapshot", requestId };
+  if (leaf === "document") return { kind: "document", requestId };
+  if (leaf === "audit") return { kind: "audit", requestId };
+  throw new SignCliError({
+    code: "UNKNOWN_RESOURCE",
+    message: `Unknown resource leaf "${leaf}" for request ${requestId}.`,
+    hint: "Use request://<id>, request://<id>/document, or request://<id>/audit.",
+  });
+}
+
+function listMcpResources(db: SqliteDb): Array<{ uri: string; name: string; description: string; mimeType: string }> {
+  const rows = listSigningRequests(db, { provider: "local", limit: 200 });
+  const resources: Array<{ uri: string; name: string; description: string; mimeType: string }> = [];
+  for (const row of rows) {
+    resources.push({
+      uri: `request://${row.id}`,
+      name: `Snapshot — ${row.title}`,
+      description: `Enriched request snapshot (status=${row.status}, signers=${row.signers}).`,
+      mimeType: "application/json",
+    });
+    resources.push({
+      uri: `request://${row.id}/document`,
+      name: `Unsigned PDF — ${row.title}`,
+      description: "Unsigned source PDF for the request (base64-encoded).",
+      mimeType: "application/pdf",
+    });
+    resources.push({
+      uri: `request://${row.id}/audit`,
+      name: `Audit chain — ${row.title}`,
+      description: "Append-only hash-chained audit events for this request.",
+      mimeType: "application/json",
+    });
+  }
+  return resources;
+}
+
+function readMcpResource(db: SqliteDb, uri: string): { uri: string; mimeType: string; text?: string; blob?: string } {
+  const parts = parseResourceUri(uri);
+  if (parts.kind === "snapshot") {
+    const snap = getRequestSnapshot(db, parts.requestId);
+    return { uri, mimeType: "application/json", text: JSON.stringify(snap, null, 2) };
+  }
+  if (parts.kind === "audit") {
+    const events = listAuditEvents(db, parts.requestId);
+    return { uri, mimeType: "application/json", text: JSON.stringify(events, null, 2) };
+  }
+  // document
+  const doc = readLocalDocumentForResource(db, parts.requestId);
+  return { uri, mimeType: "application/pdf", blob: doc.pdf.toString("base64") };
 }
 
 export type McpDispatchInput = {
   method: string;
   params?: unknown;
   db: SqliteDb;
+  emitProgress?: McpEmitProgress;
 };
 
 export type McpDispatchResult = { kind: "result"; value: unknown } | { kind: "ignored" };
@@ -200,13 +354,27 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
       kind: "result",
       value: {
         protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: { listChanged: false } },
         serverInfo: { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
       },
     };
   }
   if (method === "tools/list") {
     return { kind: "result", value: { tools: listMcpTools() } };
+  }
+  if (method === "resources/list") {
+    return { kind: "result", value: { resources: listMcpResources(db) } };
+  }
+  if (method === "resources/read") {
+    const readParams = (params ?? {}) as { uri?: unknown };
+    if (typeof readParams.uri !== "string" || readParams.uri.length === 0) {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: "resources/read requires a string `uri` parameter.",
+      });
+    }
+    const content = readMcpResource(db, readParams.uri);
+    return { kind: "result", value: { contents: [content] } };
   }
   if (method === "tools/call") {
     const callParams = (params ?? {}) as { name?: unknown; arguments?: unknown };
@@ -231,8 +399,27 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
         },
       };
     }
+    const validation = validateToolArgs(tool.inputSchema, toolArgs);
+    if (!validation.ok) {
+      return {
+        kind: "result",
+        value: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { ok: false, error: { code: "INVALID_ARGS", message: validation.error } },
+                null,
+                2,
+              ),
+            },
+          ],
+          isError: true,
+        },
+      };
+    }
     try {
-      const result = await tool.handler(db, toolArgs);
+      const result = await tool.handler(db, toolArgs, { emitProgress: input.emitProgress });
       return {
         kind: "result",
         value: {
@@ -274,6 +461,15 @@ function writeMessage(out: NodeJS.WritableStream, message: JsonRpcMessage): void
   out.write(`${JSON.stringify(message)}\n`);
 }
 
+function extractProgressToken(params: unknown): string | number | null {
+  if (!params || typeof params !== "object") return null;
+  const meta = (params as { _meta?: unknown })._meta;
+  if (!meta || typeof meta !== "object") return null;
+  const token = (meta as { progressToken?: unknown }).progressToken;
+  if (typeof token === "string" || typeof token === "number") return token;
+  return null;
+}
+
 export async function serveMcpStdio(opts: {
   input: NodeJS.ReadableStream;
   output: NodeJS.WritableStream;
@@ -300,8 +496,23 @@ export async function serveMcpStdio(opts: {
       // Response from peer or malformed; ignore.
       continue;
     }
+    const progressToken = extractProgressToken(message.params);
+    const emitProgress: McpEmitProgress | undefined = progressToken !== null
+      ? (progress) => {
+          writeMessage(opts.output, {
+            jsonrpc: JSON_RPC_VERSION,
+            method: "notifications/progress",
+            params: { progressToken, ...progress },
+          });
+        }
+      : undefined;
     try {
-      const dispatch = await dispatchMcp({ method: message.method, params: message.params, db: opts.db });
+      const dispatch = await dispatchMcp({
+        method: message.method,
+        params: message.params,
+        db: opts.db,
+        emitProgress,
+      });
       if (dispatch.kind === "ignored" || isNotification) continue;
       writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
     } catch (error) {
