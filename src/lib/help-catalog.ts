@@ -313,6 +313,13 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "PRAGMA integrity_check; exits 3 on failure.",
   },
   {
+    command: "db migrate",
+    summary: "Apply pending versioned migrations from src/lib/migrations.ts. Migrations also run automatically on every openDatabase; this command is for one-shot ops + dry-run inspection.",
+    flags: [
+      { name: "--dry-run", description: "Print the pending queue without applying anything." },
+    ],
+  },
+  {
     command: "mcp serve",
     summary: "Stdio Model Context Protocol server (tools + resources for LLM agents).",
   },
