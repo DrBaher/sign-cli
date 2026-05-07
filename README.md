@@ -27,11 +27,15 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `request watch`
 - `request launch-embedded` (Dropbox Sign / SignWell)
 - `request fetch-final`
+- `request cancel` (Dropbox cancel / DocuSign void / SignWell delete; requires `--yes true`)
+- `request list` (local SQLite; filterable by `--provider` and `--status`)
+- `request show`
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
 - `doctor`
 - `doctor account-check`
 - `doctor providers` (capability + config matrix)
 - `audit show`
+- `audit verify` (walks `hash_prev`/`hash_self` chain; exits 3 on tamper)
 - `webhook verify [--provider dropbox|signwell]`
 - `webhook ingest [--provider dropbox|signwell]`
 - `webhook listen [--provider dropbox|signwell]`

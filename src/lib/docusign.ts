@@ -256,6 +256,15 @@ export async function downloadDocuSignCombinedPdf(envelopeId: string): Promise<B
 }
 
 
+export async function voidDocuSignEnvelope(envelopeId: string, reason: string): Promise<unknown> {
+  const config = requireDocuSignConfig();
+  return docusignJsonRequest(config, {
+    method: "PUT",
+    endpoint: `/envelopes/${envelopeId}`,
+    body: { status: "voided", voidedReason: reason },
+  });
+}
+
 export async function checkDocuSignAccountAccess(): Promise<{
   accountId: string;
   basePath: string;

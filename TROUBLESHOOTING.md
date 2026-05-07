@@ -15,6 +15,9 @@
 | `request watch` exits 4 (timeout) | Polling exceeded `--timeout-ms`/`--timeout-seconds`. | Increase the timeout, or run `request status` manually. |
 | `request watch` exits 3 | Provider returned an error/invalid status. | Inspect `lastRemoteStatus` in the JSON output. |
 | `request watch` exits 2 | Document was declined/expired/canceled/voided. | Treat as final-not-completed. |
+| `request cancel is destructive at the provider. Re-run with --yes true to confirm.` | Safety guard. | Re-run with `--yes true`. |
+| `DocuSign cancel requires --reason "..."` | DocuSign requires a void reason. | Pass `--reason "Reason"`. |
+| `audit verify` exits 3 | Audit chain hash mismatch — tamper or deleted event. | Inspect the `break` field in the JSON output to see which event broke the chain. |
 
 ## Live smoke test
 SignWell only:

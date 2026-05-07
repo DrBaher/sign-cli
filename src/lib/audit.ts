@@ -1,6 +1,73 @@
 import type { SqliteDb } from "./db.js";
 import { nowIso, sha256, stableStringify } from "./util.js";
 
+export type AuditChainBreak =
+  | { kind: "hash_self_mismatch"; eventId: number; expected: string; actual: string }
+  | { kind: "hash_prev_mismatch"; eventId: number; expected: string | null; actual: string | null };
+
+export type AuditVerificationResult = {
+  valid: boolean;
+  events: number;
+  break: AuditChainBreak | null;
+};
+
+export function verifyAuditChain(db: SqliteDb, requestId: string): AuditVerificationResult {
+  const rows = db.prepare(
+    `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, created_at
+     FROM audit_events
+     WHERE request_id = ?
+     ORDER BY id ASC`,
+  ).all(requestId) as Array<{
+    id: number;
+    request_id: string;
+    event_type: string;
+    payload_json: string;
+    hash_prev: string | null;
+    hash_self: string;
+    created_at: string;
+  }>;
+
+  let previousHash: string | null = null;
+  for (const row of rows) {
+    if (row.hash_prev !== previousHash) {
+      return {
+        valid: false,
+        events: rows.length,
+        break: {
+          kind: "hash_prev_mismatch",
+          eventId: row.id,
+          expected: previousHash,
+          actual: row.hash_prev,
+        },
+      };
+    }
+    const expected = sha256(
+      stableStringify({
+        request_id: row.request_id,
+        event_type: row.event_type,
+        payload_json: row.payload_json,
+        created_at: row.created_at,
+        hash_prev: row.hash_prev,
+      }),
+    );
+    if (expected !== row.hash_self) {
+      return {
+        valid: false,
+        events: rows.length,
+        break: {
+          kind: "hash_self_mismatch",
+          eventId: row.id,
+          expected,
+          actual: row.hash_self,
+        },
+      };
+    }
+    previousHash = row.hash_self;
+  }
+
+  return { valid: true, events: rows.length, break: null };
+}
+
 type AuditEventInput = {
   requestId: string;
   eventType: string;

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: SignWell smoke (no-ops without credentials)
+        env:
+          SIGNWELL_API_KEY: ${{ secrets.SIGNWELL_API_KEY }}
+          SIGNWELL_BASE_URL: ${{ secrets.SIGNWELL_BASE_URL }}
+          SIGNWELL_TEST_MODE: "true"
+          SIGNWELL_SMOKE_SIGNER_EMAIL: ${{ secrets.SIGNWELL_SMOKE_SIGNER_EMAIL }}
+        run: ./scripts/smoke-signwell.sh

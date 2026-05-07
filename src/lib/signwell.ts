@@ -223,6 +223,14 @@ export async function downloadSignWellCompletedPdf(apiKey: string, documentId: s
   return Buffer.from(buffer);
 }
 
+export async function cancelSignWellDocument(apiKey: string, documentId: string, baseUrl?: string): Promise<unknown> {
+  return signWellJsonRequest(apiKey, {
+    method: "DELETE",
+    endpoint: `/documents/${documentId}`,
+    baseUrl,
+  });
+}
+
 export async function checkSignWellAccount(apiKey: string, baseUrl?: string): Promise<{
   email: string | null;
   name: string | null;
