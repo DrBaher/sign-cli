@@ -446,6 +446,7 @@ async function main(): Promise<void> {
         tokenTtlMinutes: spec.tokenTtlMinutes ?? 60,
         provider,
         autoApprove,
+        ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
       });
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -470,6 +471,7 @@ async function main(): Promise<void> {
       tokenTtlMinutes,
       provider: selectedProvider,
       autoApprove: (flagValue(parsed, "auto-approve") ?? "false") === "true",
+      ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -494,6 +496,7 @@ async function main(): Promise<void> {
       requireHash: flagValue(parsed, "require-hash"),
       requireTitle: flagValue(parsed, "require-title"),
       requireSignerEmail: flagValue(parsed, "require-signer-email"),
+      ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
     console.log(JSON.stringify(result, null, 2));
     return;

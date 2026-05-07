@@ -76,6 +76,7 @@ import {
   type LocalSignerInboxEntry,
 } from "./local-provider.js";
 import { evaluatePolicy, type PolicyDecision, type PolicySpec } from "./policy-engine.js";
+import { lookupIdempotencyKey, persistIdempotencyKey } from "./idempotency.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import { SignCliError } from "./sign-error.js";
 import {
@@ -110,6 +111,7 @@ export type CreateRequestInput = {
   tokenTtlMinutes: number;
   autoApprove?: boolean;
   provider?: SignProvider;
+  idempotencyKey?: string;
   now?: Date;
 };
 
@@ -868,16 +870,25 @@ function extractRemoteSignWellRecipientIds(remoteStatus: unknown): string[] {
     : [];
 }
 
-export function createSigningRequest(
-  db: SqliteDb,
-  input: CreateRequestInput,
-): {
+export type CreateRequestResult = {
   requestId: string;
   documentHash: string;
   documents: RequestDocument[];
   templateId: string | null;
   tokens: Array<{ signer: SignerInput; token: string; expiresAt: string }>;
-} {
+  idempotent?: boolean;
+};
+
+export function createSigningRequest(
+  db: SqliteDb,
+  input: CreateRequestInput,
+): CreateRequestResult {
+  if (input.idempotencyKey) {
+    const cached = lookupIdempotencyKey<CreateRequestResult>(db, "request.create", input.idempotencyKey);
+    if (cached.hit) {
+      return { ...cached.value, idempotent: true };
+    }
+  }
   if (input.signers.length === 0) {
     throw new Error("At least one --signer is required.");
   }
@@ -1036,7 +1047,23 @@ export function createSigningRequest(
     now,
   });
 
-  return { requestId, documentHash: primaryHash, documents, tokens, templateId: input.templateId ?? null };
+  const result: CreateRequestResult = {
+    requestId,
+    documentHash: primaryHash,
+    documents,
+    tokens,
+    templateId: input.templateId ?? null,
+  };
+  if (input.idempotencyKey) {
+    persistIdempotencyKey(db, {
+      scope: "request.create",
+      key: input.idempotencyKey,
+      requestId,
+      value: result,
+      now,
+    });
+  }
+  return result;
 }
 
 export function approveSigningRequest(
@@ -3145,6 +3172,7 @@ export type SignerSignResult = {
   totalSigners: number;
   remainingSigners: number;
   signedAt: string;
+  idempotent?: boolean;
 };
 
 export function signSigningRequest(
@@ -3154,9 +3182,14 @@ export function signSigningRequest(
     token: string;
     signerEmail?: string;
     signerName?: string;
+    idempotencyKey?: string;
     now?: Date;
   } & SignerSafetyChecks,
 ): SignerSignResult {
+  if (input.idempotencyKey) {
+    const cached = lookupIdempotencyKey<SignerSignResult>(db, "sign", input.idempotencyKey);
+    if (cached.hit) return { ...cached.value, idempotent: true };
+  }
   const request = getRequestRow(db, input.requestId);
   const provider = getPersistedProvider(request);
   ensureLocalProvider(request, provider);
@@ -3224,7 +3257,7 @@ export function signSigningRequest(
     now,
   });
 
-  return {
+  const finalResult: SignerSignResult = {
     requestId: request.id,
     providerRequestId,
     signerEmail: signer.email,
@@ -3235,6 +3268,16 @@ export function signSigningRequest(
     remainingSigners: result.remainingSigners,
     signedAt: result.signedAt,
   };
+  if (input.idempotencyKey) {
+    persistIdempotencyKey(db, {
+      scope: "sign",
+      key: input.idempotencyKey,
+      requestId: request.id,
+      value: finalResult,
+      now,
+    });
+  }
+  return finalResult;
 }
 
 export type SignerDeclineResult = {

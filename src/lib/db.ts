@@ -86,6 +86,15 @@ export function openDatabase(dbPath: string): SqliteDb {
       PRIMARY KEY (provider, event_key)
     );
 
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      request_id TEXT,
+      response_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (scope, key)
+    );
+
     CREATE TABLE IF NOT EXISTS signer_signing_states (
       request_id TEXT NOT NULL,
       signer_email TEXT NOT NULL,
