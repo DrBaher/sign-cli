@@ -2,6 +2,7 @@ import { createSign, createPrivateKey } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { docusignTabsForSigner, type SignatureField } from "./field-placement.js";
 import { retryFetch } from "./http.js";
 import type { SignerInput } from "./util.js";
 
@@ -10,6 +11,7 @@ export type DocuSignSendInput = {
   documentPaths?: string[];
   title: string;
   signers: SignerInput[];
+  fields?: SignatureField[];
   metadata: Record<string, string>;
   embeddedSigning?: boolean;
 };
@@ -200,14 +202,22 @@ export async function sendDocuSignEnvelope(input: DocuSignSendInput): Promise<{
         signers: input.signers
           .slice()
           .sort((left, right) => left.order - right.order)
-          .map((signer, index) => ({
-            name: signer.name,
-            email: signer.email,
-            recipientId: String(index + 1),
-            routingOrder: String(signer.order),
-            tabs: buildSignerTabs(index),
-            ...(input.embeddedSigning ? { clientUserId: signer.email } : {}),
-          })),
+          .map((signer, index) => {
+            const customTabs = (input.fields && input.fields.length > 0)
+              ? docusignTabsForSigner(signer.order, input.fields)
+              : null;
+            const tabs = customTabs && Object.keys(customTabs).length > 0
+              ? customTabs
+              : buildSignerTabs(index);
+            return {
+              name: signer.name,
+              email: signer.email,
+              recipientId: String(index + 1),
+              routingOrder: String(signer.order),
+              tabs,
+              ...(input.embeddedSigning ? { clientUserId: signer.email } : {}),
+            };
+          }),
       },
       customFields: {
         textCustomFields: Object.entries(input.metadata).map(([name, value]) => ({

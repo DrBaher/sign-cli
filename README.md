@@ -388,6 +388,34 @@ npm run start -- audit show --request-id <request_id>
 6. `request watch`
 
 
+## Field placement
+
+By default the CLI lets the provider auto-place a signature page at the end of the document. For real contracts you usually need each signature, date, or text field on a specific spot. Pass `--field` (repeatable) on `request create` / `run-email`:
+
+```bash
+node dist/cli.js request create \
+  --title "NDA" \
+  --document ./contract.pdf \
+  --signer name:Alice,email:alice@example.com,order:1 \
+  --field signer:1,page:1,x:100,y:200,type:signature \
+  --field signer:1,page:1,x:100,y:240,type:date \
+  --provider dropbox
+```
+
+Field spec keys:
+- `signer:<order>` — required; matches a `--signer order:N`.
+- `doc:<index>` — 0-based document index (defaults to 0). Use with multi-doc requests.
+- `type:<signature|initials|date|text|name|email>` — defaults to `signature`.
+- `page:<n>` `x:<pt>` `y:<pt>` — coordinate placement (required unless `anchor:` is given).
+- `width:<pt>` `height:<pt>` — optional; sensible defaults applied.
+- `required:true|false` — defaults to true.
+- `anchor:"text"` — DocuSign-only anchor strings (Dropbox/SignWell return a clear error). Optional `x-offset:<n>` / `y-offset:<n>` / `anchor-units:pixels|inches|mms|cms|points`.
+
+The fields are persisted on the request and forwarded to the provider at send time:
+- Dropbox Sign — `form_fields_per_document`
+- DocuSign — per-signer `tabs` (`signHereTabs`, `dateSignedTabs`, etc.) with anchor or coordinate
+- SignWell — `files[].fields` keyed by recipient_id
+
 ## Bulk send
 
 Drive a CSV of `name,email` columns to send one request per row:
