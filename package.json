@@ -1,16 +1,47 @@
 {
   "name": "cli-digital-signature-mvp",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.3.0",
+  "description": "CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, and SignWell — with embedded signing, webhook ingest, audit-chain verification, RFC 3161 timestamping, and PDF signature inspection.",
+  "private": false,
   "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "esign",
+    "digital-signature",
+    "dropbox-sign",
+    "docusign",
+    "signwell",
+    "webhook",
+    "pkcs7",
+    "pades",
+    "rfc3161",
+    "audit"
+  ],
   "bin": {
     "sign": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "scripts/smoke-signwell.sh",
+    "fixtures",
+    "README.md",
+    "ONBOARDING.md",
+    "PROVIDER_SELECTION.md",
+    "CHECKLIST.md",
+    "TROUBLESHOOTING.md",
+    "SIGNWELL_SETUP.md",
+    "EMBEDDED_SETUP.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "node dist/cli.js",
     "webhook:listen": "node dist/cli.js webhook listen",
-    "test": "npm run build && node --test dist/tests/*.test.js"
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@dropbox/sign": "^1.10.0"

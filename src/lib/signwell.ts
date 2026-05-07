@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { retryFetch } from "./http.js";
 import { parseBooleanFlag } from "./util.js";
 import type { SignerInput } from "./util.js";
 
@@ -75,7 +76,7 @@ async function signWellJsonRequest<T>(
     body?: unknown;
   },
 ): Promise<T> {
-  const response = await fetch(`${resolveSignWellBaseUrl(init.baseUrl)}${init.endpoint}`, {
+  const response = await retryFetch(`${resolveSignWellBaseUrl(init.baseUrl)}${init.endpoint}`, {
     method: init.method,
     headers: signWellHeaders(apiKey),
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -208,7 +209,7 @@ export async function fetchSignWellEmbeddedSignUrl(
 }
 
 export async function downloadSignWellCompletedPdf(apiKey: string, documentId: string, baseUrl?: string): Promise<Buffer> {
-  const response = await fetch(`${resolveSignWellBaseUrl(baseUrl)}/documents/${documentId}/completed_pdf`, {
+  const response = await retryFetch(`${resolveSignWellBaseUrl(baseUrl)}/documents/${documentId}/completed_pdf`, {
     method: "GET",
     headers: {
       accept: "application/pdf",

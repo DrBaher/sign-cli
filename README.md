@@ -4,13 +4,16 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, a
 
 ## What this gives you
 - Human approval tokens (single-use, TTL)
-- Local append-only audit chain (`hash_prev`, `hash_self`)
+- Local append-only audit chain (`hash_prev`, `hash_self`) with `audit verify`
 - Multi-signer support
-- Provider abstraction for send + status + watch + final download
-- Dropbox Sign: send + status + embedded signing + webhook ingest
-- DocuSign: send + status + final PDF download (JWT auth)
-- SignWell: send + status + embedded signing + webhook ingest + final PDF download
+- Provider abstraction for send + status + watch + final download + cancel
+- Dropbox Sign / DocuSign / SignWell — email send, embedded signing, and webhook ingest (DocuSign embedded uses `clientUserId` + recipient view)
 - Provider capability matrix via `doctor providers`
+- PDF signature inspection (`request verify-signed-pdf`) — parses `/ByteRange`, recomputes the digest, extracts X.509 signer cert
+- RFC 3161 timestamping (`audit timestamp`) — anchors the audit head against a public TSA
+- Tamper-evident bundle export (`audit export`) — writes `audit.json` + `signed.pdf` + `audit.tsr` + `manifest.json`
+- HTTP retry with `Retry-After`-aware 429 handling on every provider call
+- Structured logging for `request watch` (`--log json` / `--log human`)
 - Live SignWell smoke test (`smoke signwell` / `scripts/smoke-signwell.sh`)
 - Persisted provider, provider request ID, and signer IDs on requests
 
@@ -36,6 +39,9 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `doctor providers` (capability + config matrix)
 - `audit show`
 - `audit verify` (walks `hash_prev`/`hash_self` chain; exits 3 on tamper)
+- `audit timestamp` (RFC 3161 — issues + verifies a TSA token over the chain head)
+- `audit export` (signed PDF + audit JSON + TSR + manifest with sha256s)
+- `request verify-signed-pdf` (parses `/ByteRange`, recomputes digest, extracts signer cert)
 - `webhook verify [--provider dropbox|signwell]`
 - `webhook ingest [--provider dropbox|signwell]`
 - `webhook listen [--provider dropbox|signwell]`
@@ -143,7 +149,10 @@ While polling, stderr prints concise progress lines only on the first poll, stat
 
 ## Embedded signing journey (API-driven signing UI)
 
-Embedded signing is supported for Dropbox Sign (HelloSign Embedded JS) and SignWell (iframe). DocuSign is not wired for embedded signing in this CLI; calling embedded commands with `--provider docusign` returns a clear not-supported error.
+Embedded signing is supported across all three providers:
+- Dropbox Sign — HelloSign Embedded JS (requires `--client-id`)
+- SignWell — iframe over per-recipient `embedded_signing_url`
+- DocuSign — recipient view (`clientUserId` is set when sending via `send-embedded`; `sign-url` and `launch-embedded` require `--return-url`)
 
 ### 1) Send embedded request
 ```bash
@@ -182,8 +191,8 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
 ## Troubleshooting
 - `Missing parameter: client_id`
   - You opened embedded `sign_url` directly instead of via embedded JS + `clientId`.
-- `Embedded signing is not yet supported for DocuSign.`
-  - Use `request send`, `request status`, `request watch`, and `request fetch-final` with `--provider docusign`.
+- `DocuSign embedded signing requires --return-url.`
+  - DocuSign's recipient view requires a return URL the user is bounced back to after signing. Pass `--return-url https://...` to `request sign-url`/`request launch-embedded`.
 - `SignWell document <id> did not return an embedded signing URL for recipient <id>.`
   - The document was sent via `request send` instead of `request send-embedded` for SignWell. Re-run with `request send-embedded --provider signwell`.
 - `localhost is not a valid domain`
@@ -362,6 +371,27 @@ npm run start -- audit show --request-id <request_id>
 5. `webhook listen`
 6. `request watch`
 
+
+## Trust beyond the provider
+
+The CLI doesn't just ask the provider "did this get signed?" — it also gives you tooling to verify
+the result independently of the provider:
+
+```bash
+# Inspect the embedded PKCS#7 signature in the downloaded signed PDF.
+node dist/cli.js request verify-signed-pdf --request-id <id>
+
+# Anchor the audit head against a public RFC 3161 TSA (digicert by default).
+node dist/cli.js audit timestamp --request-id <id>
+
+# Bundle audit JSON + signed PDF + TSA token + sha256 manifest for archival.
+node dist/cli.js audit export --request-id <id> --out ./bundle/
+```
+
+`audit verify` walks the local hash chain. `request verify-signed-pdf` recomputes the SHA-256
+over the `/ByteRange` of the signed PDF and compares it to the `messageDigest` in the embedded
+PKCS#7 — exit code 3 if anything was modified after signing. `audit timestamp` issues a TimeStamp
+token from a TSA so the archive proves "the chain looked like this at time T."
 
 ## Account compatibility checks
 Use these before onboarding:
