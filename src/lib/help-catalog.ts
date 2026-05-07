@@ -245,6 +245,20 @@ export const HELP_CATALOG: CommandSpec[] = [
     command: "signer policy run-all",
     summary: "Loop the inbox and apply a policy to every request the agent has a token for.",
   },
+  {
+    command: "signer policy try",
+    summary: "Offline tester for a policy spec — supply a synthetic context and print the decision without touching state.",
+    flags: [
+      { name: "--spec", required: true, description: "Path to policy.json." },
+      { name: "--title", description: "Title for the synthetic context (or use --snapshot)." },
+      { name: "--document-sha256", description: "SHA-256 for the synthetic context (or use --snapshot)." },
+      { name: "--signer-email", description: "Signer email for the synthetic context (or use --snapshot)." },
+      { name: "--snapshot", description: "Path to a request show JSON file; pulls title/sha256/signer from it." },
+    ],
+    example:
+      `sign signer policy try --spec ./policy.json \\\n` +
+      `  --title "Mutual NDA" --document-sha256 abc... --signer-email alice@example.com`,
+  },
   // Audit + bundles
   {
     command: "audit show",
