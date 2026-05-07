@@ -21,7 +21,9 @@
     "sign": "./dist/cli.js"
   },
   "files": [
-    "dist",
+    "dist/cli.js",
+    "dist/lib",
+    "dist/types",
     "scripts/smoke-signwell.sh",
     "fixtures",
     "README.md",
@@ -38,6 +40,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "bundle": "node scripts/bundle.mjs",
+    "build:sea": "npm run bundle && node scripts/build-sea.mjs",
     "start": "node dist/cli.js",
     "webhook:listen": "node dist/cli.js webhook listen",
     "test": "npm run build && node --test dist/tests/*.test.js",
@@ -45,5 +49,9 @@
   },
   "dependencies": {
     "@dropbox/sign": "^1.10.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "postject": "^1.0.0-alpha.6"
   }
 }
