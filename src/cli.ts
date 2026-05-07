@@ -1128,6 +1128,8 @@ async function main(): Promise<void> {
       authRequired: Boolean(authToken),
       routes: [
         "GET /v1/health",
+        "GET /v1/metrics",
+        "GET /v1/openapi.json",
         "POST /v1/signer/list",
         "POST /v1/signer/fetch-document",
         "POST /v1/sign",

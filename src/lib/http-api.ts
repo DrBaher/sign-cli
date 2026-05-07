@@ -18,6 +18,7 @@ import {
 
 import { SIGN_CLI_VERSION } from "./help-catalog.js";
 import { buildOpenApiSpec } from "./openapi.js";
+import { renderPrometheusMetrics } from "./prom-metrics.js";
 
 type RouteHandler = (db: SqliteDb, body: Record<string, unknown>) => Promise<unknown> | unknown;
 
@@ -143,6 +144,21 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
         res.end(JSON.stringify({ ok: false, error: { code: "UNAUTHORIZED", message: "Missing or invalid Bearer token." } }));
         return;
       }
+    }
+
+    // Prometheus is text/plain; bypass the JSON dispatcher.
+    if (route === "GET /v1/metrics") {
+      try {
+        const body = renderPrometheusMetrics(opts.db);
+        res.statusCode = 200;
+        res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8");
+        res.end(body);
+      } catch (error) {
+        res.statusCode = 500;
+        res.setHeader("content-type", "text/plain; charset=utf-8");
+        res.end(`# error: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+      return;
     }
 
     if (!handler) {
