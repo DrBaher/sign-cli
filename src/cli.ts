@@ -9,6 +9,7 @@ import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySig
 import {
   approveSigningRequest,
   buildProviderMatrix,
+  cancelSigningRequest,
   createSigningRequest,
   getRequestSnapshot,
   fetchFinalSignedPdf,
@@ -17,12 +18,14 @@ import {
   ingestSignWellWebhookPayload,
   ingestWebhookPayload,
   listAuditEvents,
+  listSigningRequests,
   REQUEST_WATCH_EXIT_CODES,
   runDoctor,
   runProviderAccountCheck,
   runSignWellSmokeTest,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
+  verifyRequestAuditChain,
   watchSigningRequestStatus,
 } from "./lib/signing-service.js";
 import { parseSignerSpec } from "./lib/util.js";
@@ -92,11 +95,15 @@ sign request launch-embedded --request-id <id> --signature-id <signatureId> [--c
 sign request fetch-final --request-id <id> [--provider dropbox|docusign|signwell] [--out ./artifacts/signed.pdf]
 sign request status --request-id <id> [--provider dropbox|docusign|signwell]
 sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
+sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
+sign request list [--provider dropbox|docusign|signwell] [--status created|sent|approved|completed|canceled] [--limit 100]
+sign request show --request-id <id>
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
 sign audit show --request-id <id>
+sign audit verify --request-id <id>
 sign webhook verify [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json
 sign webhook ingest [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
 sign webhook listen [--provider dropbox|signwell] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
@@ -392,6 +399,40 @@ async function main(): Promise<void> {
     const requestId = flagValue(parsed, "request-id", true)!;
     const events = listAuditEvents(db, requestId);
     console.log(JSON.stringify(events, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "verify") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const result = verifyRequestAuditChain(db, requestId);
+    console.log(JSON.stringify({ requestId, ...result }, null, 2));
+    process.exitCode = result.valid ? 0 : 3;
+    return;
+  }
+
+  if (root === "request" && sub === "list") {
+    const provider = flagValue(parsed, "provider") ? selectedProvider : undefined;
+    const status = flagValue(parsed, "status");
+    const limit = flagValue(parsed, "limit") ? Number(flagValue(parsed, "limit")) : undefined;
+    const rows = listSigningRequests(db, { provider, status, limit });
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "cancel") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const reason = flagValue(parsed, "reason");
+    const confirmed = (flagValue(parsed, "yes") ?? "false") === "true";
+    if (!confirmed) {
+      throw new Error("request cancel is destructive at the provider. Re-run with --yes true to confirm.");
+    }
+    const result = await cancelSigningRequest(db, {
+      requestId,
+      provider: selectedProvider,
+      apiKey: resolveProviderApiKey(selectedProvider),
+      reason,
+    });
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 

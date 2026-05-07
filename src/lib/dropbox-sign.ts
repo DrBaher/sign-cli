@@ -139,6 +139,20 @@ export async function downloadSignedPdf(apiKey: string, signatureRequestId: stri
   return Buffer.from(arr);
 }
 
+export async function cancelDropboxSignatureRequest(apiKey: string, signatureRequestId: string): Promise<unknown> {
+  const response = await fetch(`https://api.hellosign.com/v3/signature_request/cancel/${signatureRequestId}`, {
+    method: "POST",
+    headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
+  });
+  if (response.status === 200 || response.status === 204) {
+    if (response.status === 204) return { ok: true };
+    return readJsonSafe(response);
+  }
+  const body = await readJsonSafe(response);
+  const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
+  throw new Error(`Dropbox Sign cancel failed: ${detail}`);
+}
+
 export async function checkDropboxAccount(apiKey: string): Promise<{ email: string | null; apiSignatureRequestsLeft: number | null }> {
   const response = await fetch("https://api.hellosign.com/v3/account", {
     method: "GET",

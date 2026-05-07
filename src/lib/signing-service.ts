@@ -1,15 +1,18 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { appendAuditEvent } from "./audit.js";
+import { appendAuditEvent, verifyAuditChain } from "./audit.js";
+import type { AuditVerificationResult } from "./audit.js";
 import {
   checkDocuSignAccountAccess,
   downloadDocuSignCombinedPdf,
   fetchDocuSignEnvelopeStatus,
   normalizeDocuSignStatus,
   sendDocuSignEnvelope,
+  voidDocuSignEnvelope,
 } from "./docusign.js";
 import type { SqliteDb } from "./db.js";
 import {
+  cancelDropboxSignatureRequest,
   checkDropboxAccount,
   createEmbeddedSignatureRequest,
   downloadSignedPdf,
@@ -18,6 +21,7 @@ import {
   sendSignatureRequest,
 } from "./dropbox-sign.js";
 import {
+  cancelSignWellDocument,
   checkSignWellAccount,
   downloadSignWellCompletedPdf,
   fetchSignWellDocumentStatus,
@@ -137,6 +141,11 @@ type ProviderApi = {
     providerRequestId: string;
     apiKey?: string;
   }): Promise<Buffer>;
+  cancel(input: {
+    providerRequestId: string;
+    apiKey?: string;
+    reason?: string;
+  }): Promise<{ remoteResponse: unknown }>;
 };
 
 function getRequestRow(db: SqliteDb, requestId: string): RequestRow {
@@ -318,6 +327,10 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       async downloadFinalPdf(input) {
         return downloadDocuSignCombinedPdf(input.providerRequestId);
       },
+      async cancel(input) {
+        const remoteResponse = await voidDocuSignEnvelope(input.providerRequestId, input.reason ?? "Voided via sign CLI");
+        return { remoteResponse };
+      },
     };
   }
 
@@ -391,6 +404,10 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       async downloadFinalPdf(input) {
         return downloadSignWellCompletedPdf(input.apiKey ?? "", input.providerRequestId, resolveSignWellBaseUrl());
       },
+      async cancel(input) {
+        const remoteResponse = await cancelSignWellDocument(input.apiKey ?? "", input.providerRequestId, resolveSignWellBaseUrl());
+        return { remoteResponse };
+      },
     };
   }
 
@@ -448,6 +465,10 @@ function getProviderApi(provider: SignProvider): ProviderApi {
     },
     async downloadFinalPdf(input) {
       return downloadSignedPdf(input.apiKey ?? "", input.providerRequestId);
+    },
+    async cancel(input) {
+      const remoteResponse = await cancelDropboxSignatureRequest(input.apiKey ?? "", input.providerRequestId);
+      return { remoteResponse };
     },
   };
 }
@@ -1348,6 +1369,133 @@ export function getRequestSnapshot(db: SqliteDb, requestId: string): {
     request: serializeRequestRow(getRequestRow(db, requestId)),
     approvals: listApprovalRows(db, requestId),
   };
+}
+
+export async function cancelSigningRequest(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    provider?: SignProvider;
+    apiKey?: string;
+    reason?: string;
+    now?: Date;
+  },
+): Promise<{
+  provider: SignProvider;
+  providerRequestId: string;
+  status: string;
+  remoteResponse: unknown;
+}> {
+  const request = getRequestRow(db, input.requestId);
+  const provider = input.provider ?? getPersistedProvider(request);
+  const providerRequestId = getProviderRequestId(request);
+  if (!providerRequestId) {
+    throw new Error(`Request has not been sent to ${providerDisplayName(provider)} yet; nothing to cancel.`);
+  }
+  if (provider === "docusign" && !input.reason) {
+    throw new Error("DocuSign cancel requires --reason \"<reason>\".");
+  }
+
+  const result = await getProviderApi(provider).cancel({
+    providerRequestId,
+    apiKey: input.apiKey,
+    reason: input.reason,
+  });
+
+  const now = input.now ?? new Date();
+  const newStatus = "canceled";
+  persistRequestProviderMetadata(db, {
+    requestId: request.id,
+    provider,
+    providerRequestId,
+    providerStatus: newStatus,
+    now,
+  });
+  updateRequestStatus(db, request.id, newStatus, now);
+
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.canceled",
+    payload: { provider, providerRequestId, reason: input.reason ?? null },
+    now,
+  });
+
+  return {
+    provider,
+    providerRequestId,
+    status: newStatus,
+    remoteResponse: result.remoteResponse,
+  };
+}
+
+export function listSigningRequests(
+  db: SqliteDb,
+  input: { provider?: SignProvider; status?: string; limit?: number } = {},
+): Array<{
+  id: string;
+  title: string;
+  status: string;
+  provider: SignProvider | null;
+  providerRequestId: string | null;
+  providerStatus: string | null;
+  signers: number;
+  createdAt: string;
+  updatedAt: string;
+}> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (input.provider) {
+    where.push("provider = ?");
+    params.push(input.provider);
+  }
+  if (input.status) {
+    where.push("status = ?");
+    params.push(input.status);
+  }
+  const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 500) : 100;
+  const rows = db.prepare(
+    `SELECT id, title, status, provider, provider_request_id, provider_status, signers_json, created_at, updated_at
+     FROM requests
+     ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY datetime(created_at) DESC
+     LIMIT ${limit}`,
+  ).all(...params) as Array<{
+    id: string;
+    title: string;
+    status: string;
+    provider: string | null;
+    provider_request_id: string | null;
+    provider_status: string | null;
+    signers_json: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+
+  return rows.map((row) => {
+    let signers = 0;
+    try {
+      const parsed = JSON.parse(row.signers_json);
+      signers = Array.isArray(parsed) ? parsed.length : 0;
+    } catch {
+      signers = 0;
+    }
+    return {
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      provider: row.provider as SignProvider | null,
+      providerRequestId: row.provider_request_id,
+      providerStatus: row.provider_status,
+      signers,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  });
+}
+
+export function verifyRequestAuditChain(db: SqliteDb, requestId: string): AuditVerificationResult {
+  getRequestRow(db, requestId);
+  return verifyAuditChain(db, requestId);
 }
 
 export async function runSignWellSmokeTest(
