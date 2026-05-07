@@ -133,7 +133,13 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request bulk",
-    summary: "One-request-per-row from a CSV.",
+    summary: "One-request-per-row from a CSV. Optionally emits a tokens roster (--emit-tokens ./tokens.json) compatible with `signer policy run-all --tokens-file …`.",
+    flags: [
+      { name: "--csv", required: true, description: "CSV file with name + email columns." },
+      { name: "--document", description: "PDF to attach (repeatable for multi-doc)." },
+      { name: "--title", description: "Title template; supports {{email}}, {{name}}, {{row}}." },
+      { name: "--emit-tokens", description: "Write a per-row tokens roster to this path (skipped from stdout)." },
+    ],
   },
   {
     command: "request list",

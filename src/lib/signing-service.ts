@@ -2586,6 +2586,11 @@ export type BulkRowResult = {
   signerEmail: string | null;
   error: string | null;
   providerRequestId: string | null;
+  // Populated only when bulk runs against --provider local without --auto-approve-only:
+  // the per-row signer token from createSigningRequest. Undefined for hosted providers
+  // (where the token is not the auth artifact for signing) or when not requested.
+  token: string | null;
+  tokenExpiresAt: string | null;
 };
 
 export async function bulkSendFromCsv(
@@ -2618,7 +2623,16 @@ export async function bulkSendFromCsv(
     if (!signerEmail || !signerName) {
       const error = "CSV row is missing name and/or email columns.";
       onProgress({ row: rowNumber, total: input.rows.length, phase: "error", error });
-      results.push({ row: rowNumber, ok: false, requestId: null, signerEmail: signerEmail || null, error, providerRequestId: null });
+      results.push({
+        row: rowNumber,
+        ok: false,
+        requestId: null,
+        signerEmail: signerEmail || null,
+        error,
+        providerRequestId: null,
+        token: null,
+        tokenExpiresAt: null,
+      });
       failed += 1;
       continue;
     }
@@ -2644,12 +2658,31 @@ export async function bulkSendFromCsv(
         testMode: input.testMode,
       });
       onProgress({ row: rowNumber, total: input.rows.length, phase: "done", signerEmail, requestId: created.requestId });
-      results.push({ row: rowNumber, ok: true, requestId: created.requestId, signerEmail, error: null, providerRequestId: sent.signatureRequestId });
+      const issued = created.tokens.find((t) => t.signer.email === signerEmail) ?? created.tokens[0];
+      results.push({
+        row: rowNumber,
+        ok: true,
+        requestId: created.requestId,
+        signerEmail,
+        error: null,
+        providerRequestId: sent.signatureRequestId,
+        token: issued?.token ?? null,
+        tokenExpiresAt: issued?.expiresAt ?? null,
+      });
       succeeded += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onProgress({ row: rowNumber, total: input.rows.length, phase: "error", signerEmail, error: message });
-      results.push({ row: rowNumber, ok: false, requestId: null, signerEmail, error: message, providerRequestId: null });
+      results.push({
+        row: rowNumber,
+        ok: false,
+        requestId: null,
+        signerEmail,
+        error: message,
+        providerRequestId: null,
+        token: null,
+        tokenExpiresAt: null,
+      });
       failed += 1;
     }
   }
