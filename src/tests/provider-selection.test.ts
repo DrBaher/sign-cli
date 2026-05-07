@@ -33,7 +33,11 @@ test("resolveSignProvider prefers explicit flag over env", () => {
   }
 });
 
-test("normalizeProviderStatus handles Dropbox and DocuSign payloads", () => {
+test("resolveSignProvider accepts signwell", () => {
+  assert.equal(resolveSignProvider("signwell"), "signwell");
+});
+
+test("normalizeProviderStatus handles Dropbox, DocuSign, and SignWell payloads", () => {
   assert.equal(normalizeProviderStatus("dropbox", {
     signature_request: {
       status_code: "sent",
@@ -44,10 +48,15 @@ test("normalizeProviderStatus handles Dropbox and DocuSign payloads", () => {
   assert.equal(normalizeProviderStatus("docusign", {
     status: "completed",
   }), "completed");
+
+  assert.equal(normalizeProviderStatus("signwell", {
+    status: "In Progress",
+  }), "in_progress");
 });
 
 test("resolveWatchTerminalStatus normalizes shared terminal states", () => {
   assert.equal(resolveWatchTerminalStatus("completed"), "completed");
   assert.equal(resolveWatchTerminalStatus("voided"), "declined");
   assert.equal(resolveWatchTerminalStatus("failed"), "error");
+  assert.equal(resolveWatchTerminalStatus("bounced"), "error");
 });

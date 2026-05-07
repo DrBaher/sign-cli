@@ -17,6 +17,14 @@ import {
   fetchSignatureRequestStatus,
   sendSignatureRequest,
 } from "./dropbox-sign.js";
+import {
+  checkSignWellAccount,
+  downloadSignWellCompletedPdf,
+  fetchSignWellDocumentStatus,
+  normalizeSignWellStatus,
+  resolveSignWellBaseUrl,
+  sendSignWellDocument,
+} from "./signwell.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
   createId,
@@ -246,7 +254,13 @@ export function normalizeDropboxStatus(remoteStatus: unknown): string {
 }
 
 export function normalizeProviderStatus(provider: SignProvider, remoteStatus: unknown): string {
-  return provider === "docusign" ? normalizeDocuSignStatus(remoteStatus) : normalizeDropboxStatus(remoteStatus);
+  if (provider === "docusign") {
+    return normalizeDocuSignStatus(remoteStatus);
+  }
+  if (provider === "signwell") {
+    return normalizeSignWellStatus(remoteStatus);
+  }
+  return normalizeDropboxStatus(remoteStatus);
 }
 
 export function resolveWatchTerminalStatus(status: string): WatchTerminalStatus | null {
@@ -258,7 +272,7 @@ export function resolveWatchTerminalStatus(status: string): WatchTerminalStatus 
   if (["declined", "rejected", "expired", "canceled", "cancelled", "voided"].includes(normalized)) {
     return "declined";
   }
-  if (["error", "invalid", "failed", "authentication_failed"].includes(normalized)) {
+  if (["error", "invalid", "failed", "authentication_failed", "bounced"].includes(normalized)) {
     return "error";
   }
   return null;
@@ -294,6 +308,46 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       },
       async downloadFinalPdf(input) {
         return downloadDocuSignCombinedPdf(input.providerRequestId);
+      },
+    };
+  }
+
+  if (provider === "signwell") {
+    return {
+      async send(input) {
+        const result = await sendSignWellDocument({
+          apiKey: input.apiKey ?? "",
+          baseUrl: resolveSignWellBaseUrl(),
+          documentPath: input.request.document_path,
+          title: input.request.title,
+          signers: input.signers,
+          metadata: {
+            request_id: input.request.id,
+            document_hash: input.request.document_hash,
+          },
+          testMode: input.testMode,
+        });
+        return {
+          providerRequestId: result.documentId,
+          signatureIds: result.recipientIds,
+          providerStatus: result.status || "sent",
+          responseBody: result.responseBody,
+        };
+      },
+      async getStatus(input) {
+        const remoteStatus = await fetchSignWellDocumentStatus(
+          input.apiKey ?? "",
+          input.providerRequestId,
+          resolveSignWellBaseUrl(),
+        );
+        return {
+          providerStatus: normalizeSignWellStatus(remoteStatus),
+          signatureIds: extractRemoteSignWellRecipientIds(remoteStatus),
+          remoteStatus,
+        };
+      },
+      async downloadFinalPdf(input) {
+        return downloadSignWellCompletedPdf(input.apiKey ?? "", input.providerRequestId, resolveSignWellBaseUrl());
       },
     };
   }
@@ -354,6 +408,15 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       return downloadSignedPdf(input.apiKey ?? "", input.providerRequestId);
     },
   };
+}
+
+function extractRemoteSignWellRecipientIds(remoteStatus: unknown): string[] {
+  const remote = remoteStatus as Record<string, any> | null;
+  return Array.isArray(remote?.recipients)
+    ? remote.recipients
+      .map((recipient: any) => recipient?.id)
+      .filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+    : [];
 }
 
 export function createSigningRequest(
@@ -538,6 +601,7 @@ export async function sendSigningRequest(
     apiKey?: string;
     testMode: boolean;
     now?: Date;
+    providerSend?: () => Promise<ProviderSendResult>;
     sendRequest?: typeof sendSignatureRequest;
   },
 ): Promise<{
@@ -550,7 +614,9 @@ export async function sendSigningRequest(
   const provider = input.provider ?? getPersistedProvider(request);
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const providerApi = getProviderApi(provider);
-  const send = input.sendRequest && provider === "dropbox"
+  const send = input.providerSend
+    ? input.providerSend
+    : input.sendRequest && provider === "dropbox"
     ? async () => {
       const result = await input.sendRequest!({
         apiKey: input.apiKey ?? "",
@@ -622,6 +688,21 @@ export async function runProviderAccountCheck(input: { provider: SignProvider; a
     };
   }
 
+  if (input.provider === "signwell") {
+    if (!input.apiKey) {
+      throw new Error("SIGNWELL_API_KEY is required for SignWell account check.");
+    }
+    const account = await checkSignWellAccount(input.apiKey, resolveSignWellBaseUrl());
+    return {
+      provider: "signwell",
+      account,
+      interpretation: {
+        apiLikelyEnabled: account.email !== null || account.name !== null,
+        note: "API key + /me endpoint succeeded.",
+      },
+    };
+  }
+
   const account = await checkDocuSignAccountAccess();
   return {
     provider: "docusign",
@@ -639,6 +720,8 @@ export async function runDoctor(apiKey?: string): Promise<Record<string, unknown
       provider: resolveSignProvider(),
       hasApiKey: Boolean(process.env.DROPBOX_SIGN_API_KEY),
       hasClientId: Boolean(process.env.DROPBOX_SIGN_CLIENT_ID),
+      hasSignWellApiKey: Boolean(process.env.SIGNWELL_API_KEY),
+      signWellBaseUrl: resolveSignWellBaseUrl(),
       hasDocuSignIntegrationKey: Boolean(process.env.DOCUSIGN_INTEGRATION_KEY),
       hasDocuSignUserId: Boolean(process.env.DOCUSIGN_USER_ID),
       hasDocuSignAccountId: Boolean(process.env.DOCUSIGN_ACCOUNT_ID),
@@ -661,7 +744,7 @@ export async function fetchFinalSignedPdf(
   const provider = input.provider ?? getPersistedProvider(request);
   const providerRequestId = getProviderRequestId(request);
   if (!providerRequestId) {
-    throw new Error(`Request has not been sent to ${provider === "docusign" ? "DocuSign" : "Dropbox Sign"} yet.`);
+    throw new Error(`Request has not been sent to ${providerDisplayName(provider)} yet.`);
   }
 
   const providerApi = getProviderApi(provider);
@@ -721,8 +804,8 @@ export async function sendEmbeddedSigningRequest(
 }> {
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
-  if (provider === "docusign") {
-    throw new Error("Embedded signing is not yet supported for DocuSign.");
+  if (provider !== "dropbox") {
+    throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
   }
 
   const signers = JSON.parse(request.signers_json) as SignerInput[];
@@ -794,8 +877,8 @@ export async function getEmbeddedSignUrl(
 ): Promise<{ signUrl: string; expiresAt: number | null; signatureId: string }> {
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
-  if (provider === "docusign") {
-    throw new Error("Embedded signing is not yet supported for DocuSign.");
+  if (provider !== "dropbox") {
+    throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
   }
 
   const result = await getProviderApi(provider).getEmbeddedSignUrl!({
@@ -823,7 +906,7 @@ export async function getSigningRequestStatus(
   const provider = input.provider ?? getPersistedProvider(request);
   const providerRequestId = getProviderRequestId(request);
   if (!providerRequestId) {
-    throw new Error(`Request has not been sent to ${provider === "docusign" ? "DocuSign" : "Dropbox Sign"} yet.`);
+    throw new Error(`Request has not been sent to ${providerDisplayName(provider)} yet.`);
   }
 
   const result = await getProviderApi(provider).getStatus({
@@ -852,6 +935,16 @@ export async function getSigningRequestStatus(
   });
 
   return { request: serializeRequestRow(getRequestRow(db, request.id)), remoteStatus: result.remoteStatus };
+}
+
+function providerDisplayName(provider: SignProvider): string {
+  if (provider === "docusign") {
+    return "DocuSign";
+  }
+  if (provider === "signwell") {
+    return "SignWell";
+  }
+  return "Dropbox Sign";
 }
 
 export async function watchSigningRequestStatus(

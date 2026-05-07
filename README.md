@@ -1,6 +1,6 @@
 # sign CLI MVP
 
-CLI for consent-gated, auditable e-sign workflows with Dropbox Sign and DocuSign.
+CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, and SignWell.
 
 ## What this gives you
 - Human approval tokens (single-use, TTL)
@@ -9,6 +9,7 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign and DocuSign
 - Provider abstraction for send + status + watch + final download
 - Dropbox Sign send + status + embedded signing
 - DocuSign send + status + final PDF download
+- SignWell send + status + final PDF download
 - Persisted provider, provider request ID, and signer IDs on requests
 
 ## Commands
@@ -54,6 +55,10 @@ DROPBOX_SIGN_API_KEY=your_api_key_here
 DROPBOX_SIGN_TEST_MODE=true
 DROPBOX_SIGN_CLIENT_ID=your_client_id_for_embedded
 
+SIGNWELL_API_KEY=your_signwell_api_key
+SIGNWELL_BASE_URL=https://www.signwell.com/api/v1
+SIGNWELL_TEST_MODE=true
+
 DOCUSIGN_INTEGRATION_KEY=your_integration_key
 DOCUSIGN_USER_ID=your_impersonated_user_guid
 DOCUSIGN_ACCOUNT_ID=your_account_id
@@ -61,7 +66,7 @@ DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
 DOCUSIGN_PRIVATE_KEY_PATH=./keys/docusign-private.key
 ```
 
-`SIGN_PROVIDER` defaults to `dropbox`. Every request command that talks to a remote provider also accepts `--provider dropbox|docusign`, and the CLI uses that flag over the env var when both are present.
+`SIGN_PROVIDER` defaults to `dropbox`. Every request command that talks to a remote provider also accepts `--provider dropbox|docusign|signwell`, and the CLI uses that flag over the env var when both are present.
 
 ## 4) Build
 ```bash
@@ -109,7 +114,7 @@ npm run start -- request watch --request-id <request_id> --interval-ms 5000 --fe
 npm run start -- audit show --request-id <request_id>
 ```
 
-You can add `--provider docusign` to `request send`, `request status`, `request watch`, and `request fetch-final` when working with DocuSign. Once a request has been sent, the persisted provider is reused for later polling and downloads.
+You can add `--provider docusign` or `--provider signwell` to `request send`, `request status`, `request watch`, and `request fetch-final` when working with those providers. Once a request has been sent, the persisted provider is reused for later polling and downloads.
 
 `request watch` exit codes:
 - `0`: completed
@@ -128,7 +133,7 @@ While polling, stderr prints concise progress lines only on the first poll, stat
 
 ## Embedded signing journey (API-driven signing UI)
 
-Embedded signing is currently supported only for Dropbox Sign. Calling embedded commands with `--provider docusign` returns a clear not-supported error.
+Embedded signing is currently supported only for Dropbox Sign. Calling embedded commands with `--provider docusign` or `--provider signwell` returns a clear not-supported error.
 
 ### 1) Send embedded request
 ```bash
@@ -169,6 +174,8 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
   - You opened embedded `sign_url` directly instead of via embedded JS + `clientId`.
 - `Embedded signing is not yet supported for DocuSign.`
   - Use `request send`, `request status`, `request watch`, and `request fetch-final` with `--provider docusign`.
+- `Embedded signing is not yet supported for SignWell.`
+  - Use `request send`, `request status`, `request watch`, and `request fetch-final` with `--provider signwell`.
 - `localhost is not a valid domain`
   - Use a public tunnel/domain and register it in API App.
 - `command not found: ngrok`
@@ -231,6 +238,60 @@ npm run start -- request watch \
 ```
 
 DocuSign terminal states are normalized into the same watch exit codes as Dropbox Sign: `completed` exits `0`, `declined/rejected/expired/voided` exits `2`, provider errors exit `3`, and timeouts exit `4`.
+
+---
+
+## SignWell setup
+
+### Agent onboarding (operator/setup checklist)
+1. Create a SignWell API key from `Settings -> API`.
+2. Store it locally as `SIGNWELL_API_KEY` and never commit it.
+3. Optionally override `SIGNWELL_BASE_URL`; otherwise the CLI uses `https://www.signwell.com/api/v1`.
+4. Keep `SIGNWELL_TEST_MODE=true` while validating the integration.
+5. Run `npm run start -- doctor` and confirm the SignWell env fields are present.
+6. Run `npm run start -- doctor account-check --provider signwell`.
+7. Run a smoke flow: `request create` → `approve` → `request send --provider signwell` → `request watch --provider signwell`.
+
+### User onboarding (daily usage)
+1. Set `SIGN_PROVIDER=signwell` to make SignWell the default provider, or use `--provider signwell` per command.
+2. Create + approve the request as usual.
+3. Send the request with SignWell.
+4. Use `request watch` or `request fetch-final` to complete the workflow.
+
+### Required env vars
+```env
+SIGN_PROVIDER=signwell
+SIGNWELL_API_KEY=your_signwell_api_key
+SIGNWELL_BASE_URL=https://www.signwell.com/api/v1
+SIGNWELL_TEST_MODE=true
+```
+
+### Send, watch, and download
+```bash
+npm run start -- request create \
+  --title "SignWell Consent Test" \
+  --document ./your.pdf \
+  --signer name:Alice,email:alice@example.com,order:1 \
+  --provider signwell
+
+npm run start -- approve --request-id <request_id> --token <token>
+
+npm run start -- request send \
+  --request-id <request_id> \
+  --provider signwell \
+  --test-mode true
+
+npm run start -- request watch \
+  --request-id <request_id> \
+  --provider signwell \
+  --interval-seconds 5 \
+  --fetch-final true \
+  --out ./artifacts/<request_id>-signed.pdf
+```
+
+SignWell terminal states are normalized into the same watch exit codes as the other providers: `completed` exits `0`, `declined/expired/canceled` exits `2`, `bounced/error` exits `3`, and timeouts exit `4`.
+
+See [SIGNWELL_SETUP.md](./SIGNWELL_SETUP.md) for the full setup and troubleshooting guide.
 
 ---
 
@@ -298,6 +359,7 @@ Use these before onboarding:
 ```bash
 npm run start -- doctor account-check --provider dropbox
 npm run start -- doctor account-check --provider docusign
+npm run start -- doctor account-check --provider signwell
 ```
 
-This verifies API access for each provider (Dropbox account endpoint, DocuSign JWT+account endpoint) and returns a machine-readable summary.
+This verifies API access for each provider (Dropbox account endpoint, DocuSign JWT+account endpoint, SignWell `/me` endpoint) and returns a machine-readable summary.

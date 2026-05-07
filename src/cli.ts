@@ -4,6 +4,7 @@ import { openDatabase } from "./lib/db.js";
 import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
 import { loadEnv } from "./lib/env.js";
 import { resolveSignProvider } from "./lib/providers.js";
+import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
 import {
   approveSigningRequest,
   createSigningRequest,
@@ -77,22 +78,42 @@ function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFla
 }
 
 function printUsage(): void {
-  console.log(`sign request create --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign]
-sign request run-email --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign] [--test-mode true]
+  console.log(`sign request create --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell]
+sign request run-email --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell] [--test-mode true]
 sign approve --request-id <id> --token <token>
-sign request send --request-id <id> [--provider dropbox|docusign] [--test-mode true]
-sign request send-embedded --request-id <id> --client-id <clientId> [--provider dropbox|docusign] [--test-mode true]
-sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign]
-sign request launch-embedded --request-id <id> --signature-id <signatureId> --client-id <clientId> [--provider dropbox|docusign]
-sign request fetch-final --request-id <id> [--provider dropbox|docusign] [--out ./artifacts/signed.pdf]
-sign request status --request-id <id> [--provider dropbox|docusign]
-sign request watch --request-id <id> [--provider dropbox|docusign] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
+sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
+sign request send-embedded --request-id <id> --client-id <clientId> [--provider dropbox|docusign|signwell] [--test-mode true]
+sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell]
+sign request launch-embedded --request-id <id> --signature-id <signatureId> --client-id <clientId> [--provider dropbox|docusign|signwell]
+sign request fetch-final --request-id <id> [--provider dropbox|docusign|signwell] [--out ./artifacts/signed.pdf]
+sign request status --request-id <id> [--provider dropbox|docusign|signwell]
+sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign doctor
-sign doctor account-check [--provider dropbox|docusign]
+sign doctor account-check [--provider dropbox|docusign|signwell]
 sign audit show --request-id <id>
 sign webhook verify --payload-file ./fixtures/sample-webhook.json
 sign webhook ingest --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
 sign webhook listen [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
+}
+
+function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>): string | undefined {
+  if (provider === "dropbox") {
+    return requireDropboxApiKey();
+  }
+  if (provider === "signwell") {
+    return requireSignWellApiKey();
+  }
+  return undefined;
+}
+
+function resolveProviderTestMode(provider: ReturnType<typeof resolveSignProvider>, flag?: string): boolean {
+  if (provider === "dropbox") {
+    return resolveDropboxTestMode(flag);
+  }
+  if (provider === "signwell") {
+    return resolveSignWellTestMode(flag);
+  }
+  return false;
 }
 
 async function main(): Promise<void> {
@@ -113,7 +134,11 @@ async function main(): Promise<void> {
   if (root === "doctor" && sub === "account-check") {
     const result = await runProviderAccountCheck({
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? process.env.DROPBOX_SIGN_API_KEY : undefined,
+      apiKey: selectedProvider === "dropbox"
+        ? process.env.DROPBOX_SIGN_API_KEY
+        : selectedProvider === "signwell"
+          ? process.env.SIGNWELL_API_KEY
+          : undefined,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -143,8 +168,8 @@ async function main(): Promise<void> {
     const sent = await sendSigningRequest(db, {
       requestId: created.requestId,
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
-      testMode: resolveDropboxTestMode(flagValue(parsed, "test-mode")),
+      apiKey: resolveProviderApiKey(selectedProvider),
+      testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
     });
     console.log(JSON.stringify({
       mode: "email-only",
@@ -187,8 +212,8 @@ async function main(): Promise<void> {
     const result = await sendSigningRequest(db, {
       requestId,
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
-      testMode: resolveDropboxTestMode(flagValue(parsed, "test-mode")),
+      apiKey: resolveProviderApiKey(selectedProvider),
+      testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -200,9 +225,9 @@ async function main(): Promise<void> {
     const result = await sendEmbeddedSigningRequest(db, {
       requestId,
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
+      apiKey: resolveProviderApiKey(selectedProvider),
       clientId: selectedProvider === "dropbox" ? requireDropboxClientId(flagValue(parsed, "client-id")) : undefined,
-      testMode: resolveDropboxTestMode(flagValue(parsed, "test-mode")),
+      testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -215,7 +240,7 @@ async function main(): Promise<void> {
       requestId,
       provider: selectedProvider,
       signatureId,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
+      apiKey: resolveProviderApiKey(selectedProvider),
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -226,14 +251,14 @@ async function main(): Promise<void> {
     const requestId = flagValue(parsed, "request-id", true)!;
     const signatureId = flagValue(parsed, "signature-id", true)!;
     if (selectedProvider !== "dropbox") {
-      throw new Error("Embedded signing is not yet supported for DocuSign.");
+      throw new Error(`Embedded signing is not yet supported for ${selectedProvider === "docusign" ? "DocuSign" : "SignWell"}.`);
     }
     const clientId = requireDropboxClientId(flagValue(parsed, "client-id"));
     const result = await getEmbeddedSignUrl(db, {
       requestId,
       provider: selectedProvider,
       signatureId,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
+      apiKey: resolveProviderApiKey(selectedProvider),
     });
     const file = flagValue(parsed, "out") ?? `./embedded-launch-${signatureId}.html`;
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Embedded Sign</title></head><body><h3>Launching signer...</h3><script src="https://cdn.hellosign.com/public/js/embedded/v2.11.1/embedded.development.js"></script><script>const client=new window.HelloSign();client.open(${JSON.stringify(result.signUrl)},{clientId:${JSON.stringify(clientId)},skipDomainVerification:true});</script></body></html>`;
@@ -249,7 +274,7 @@ async function main(): Promise<void> {
     const result = await fetchFinalSignedPdf(db, {
       requestId,
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
+      apiKey: resolveProviderApiKey(selectedProvider),
       outPath,
     });
     console.log(JSON.stringify(result, null, 2));
@@ -261,7 +286,7 @@ async function main(): Promise<void> {
     const result = await getSigningRequestStatus(db, {
       requestId,
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
+      apiKey: resolveProviderApiKey(selectedProvider),
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -277,7 +302,7 @@ async function main(): Promise<void> {
     const result = await watchSigningRequestStatus(db, {
       requestId,
       provider: selectedProvider,
-      apiKey: selectedProvider === "dropbox" ? requireDropboxApiKey() : undefined,
+      apiKey: resolveProviderApiKey(selectedProvider),
       intervalMs,
       timeoutMs,
       fetchFinalPdf,
