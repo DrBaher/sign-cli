@@ -3806,3 +3806,43 @@ export function runSignerPolicyAll(
   }
   return { total: candidates.length, succeeded, failed, results };
 }
+
+export async function exportAuditChainAsJsonLd(
+  db: SqliteDb,
+  input: { requestId: string; outPath: string; now?: Date },
+): Promise<{ outPath: string; bytes: number; events: number }> {
+  const { renderAuditChainAsJsonLd } = await import("./audit-jsonld.js");
+  const fs = await import("node:fs");
+  const pathMod = await import("node:path");
+  const requestRow = getRequestRow(db, input.requestId);
+  const request = serializeRequestRow(requestRow);
+  const events = listAuditEvents(db, input.requestId);
+  const signers = JSON.parse(requestRow.signers_json) as SignerInput[];
+  const snapshot = getRequestSnapshot(db, input.requestId, { now: input.now });
+  const json = renderAuditChainAsJsonLd({
+    request: {
+      id: request.id,
+      title: request.title,
+      status: request.status,
+      provider: request.normalizedProvider,
+      documentSha256: requestRow.document_hash ?? null,
+    },
+    signers: signers.map((s) => ({ email: s.email, name: s.name, order: s.order })),
+    signedBy: snapshot.signedBy?.map((s) => ({ email: s.email, name: s.name, signedAt: s.signedAt })) ?? null,
+    events,
+    now: input.now,
+  });
+  const resolved = pathMod.resolve(input.outPath);
+  fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+  const text = JSON.stringify(json, null, 2);
+  fs.writeFileSync(resolved, text);
+
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "audit.exported_jsonld",
+    payload: { outPath: resolved, bytes: text.length, events: events.length },
+    now: input.now ?? new Date(),
+  });
+
+  return { outPath: resolved, bytes: text.length, events: events.length };
+}

@@ -41,6 +41,7 @@ import {
   runLocalDemo,
   createSigningRequest,
   exportAuditBundle,
+  exportAuditChainAsJsonLd,
   exportRequestReceipt,
   fetchUnsignedDocumentForSigner,
   getRequestSnapshot,
@@ -816,6 +817,14 @@ async function main(): Promise<void> {
     const requestId = flagValue(parsed, "request-id", true)!;
     const out = flagValue(parsed, "out", true)!;
     const result = await exportAuditBundle(db, { requestId, outDir: out });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "export-jsonld") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const out = flagValue(parsed, "out", true)!;
+    const result = await exportAuditChainAsJsonLd(db, { requestId, outPath: out });
     console.log(JSON.stringify(result, null, 2));
     return;
   }
