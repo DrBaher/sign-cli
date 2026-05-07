@@ -152,6 +152,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "request diff",
+    summary: "Compare two requests (handy for repeat counterparties): title/status/provider deltas, added/removed/same signers, and whether the document hash changed. Exits 0 on identical, 1 on any diff.",
+    flags: [
+      { name: "--before", required: true, description: "Earlier request id." },
+      { name: "--after", required: true, description: "Later request id." },
+    ],
+  },
+  {
     command: "request show",
     summary: "Enriched snapshot: request, approvals, signedBy[], nextSteps[]. With --metrics true, also returns counters (events, fetches, webhook replays, time-to-first-sign, time-to-complete).",
     flags: [
