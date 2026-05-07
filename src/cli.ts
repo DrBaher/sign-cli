@@ -3,20 +3,24 @@ import process from "node:process";
 import { openDatabase } from "./lib/db.js";
 import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
 import { loadEnv } from "./lib/env.js";
-import { resolveSignProvider } from "./lib/providers.js";
+import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
+import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySignWellCallback } from "./lib/signwell-webhook.js";
 import {
   approveSigningRequest,
+  buildProviderMatrix,
   createSigningRequest,
   getRequestSnapshot,
   fetchFinalSignedPdf,
   getEmbeddedSignUrl,
   getSigningRequestStatus,
+  ingestSignWellWebhookPayload,
   ingestWebhookPayload,
   listAuditEvents,
   REQUEST_WATCH_EXIT_CODES,
   runDoctor,
   runProviderAccountCheck,
+  runSignWellSmokeTest,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
   watchSigningRequestStatus,
@@ -82,18 +86,20 @@ function printUsage(): void {
 sign request run-email --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell] [--test-mode true]
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
-sign request send-embedded --request-id <id> --client-id <clientId> [--provider dropbox|docusign|signwell] [--test-mode true]
-sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell]
-sign request launch-embedded --request-id <id> --signature-id <signatureId> --client-id <clientId> [--provider dropbox|docusign|signwell]
+sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|signwell] [--test-mode true]
+sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|signwell]
+sign request launch-embedded --request-id <id> --signature-id <signatureId> [--client-id <clientId>] [--provider dropbox|signwell]
 sign request fetch-final --request-id <id> [--provider dropbox|docusign|signwell] [--out ./artifacts/signed.pdf]
 sign request status --request-id <id> [--provider dropbox|docusign|signwell]
 sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
+sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
+sign doctor providers
 sign audit show --request-id <id>
-sign webhook verify --payload-file ./fixtures/sample-webhook.json
-sign webhook ingest --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
-sign webhook listen [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
+sign webhook verify [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json
+sign webhook ingest [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
+sign webhook listen [--provider dropbox|signwell] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
 }
 
 function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>): string | undefined {
@@ -104,6 +110,16 @@ function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>)
     return requireSignWellApiKey();
   }
   return undefined;
+}
+
+function resolveWebhookProvider(provider: SignProvider): "dropbox" | "signwell" {
+  if (provider === "signwell") {
+    return "signwell";
+  }
+  if (provider === "docusign") {
+    throw new Error("Webhook commands support --provider dropbox or signwell only.");
+  }
+  return "dropbox";
 }
 
 function resolveProviderTestMode(provider: ReturnType<typeof resolveSignProvider>, flag?: string): boolean {
@@ -130,6 +146,36 @@ async function main(): Promise<void> {
 
   const [root, sub, action] = parsed.positionals;
 
+
+  if (root === "doctor" && sub === "providers") {
+    console.log(JSON.stringify(buildProviderMatrix(), null, 2));
+    return;
+  }
+
+  if (root === "smoke" && sub === "signwell") {
+    const documentPath = flagValue(parsed, "document", true)!;
+    const apiKey = requireSignWellApiKey();
+    const signerName = flagValue(parsed, "signer-name");
+    const signerEmail = flagValue(parsed, "signer-email");
+    const intervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000 })!;
+    const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds", defaultMs: 60_000 })!;
+    const fetchFinalPdf = (flagValue(parsed, "fetch-final") ?? "false") === "true";
+    const outPath = flagValue(parsed, "out");
+    const result = await runSignWellSmokeTest(db, {
+      apiKey,
+      documentPath,
+      title: flagValue(parsed, "title"),
+      signerName,
+      signerEmail,
+      intervalMs,
+      timeoutMs,
+      fetchFinalPdf,
+      outPath,
+      onProgress: (line) => console.error(line),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
 
   if (root === "doctor" && sub === "account-check") {
     const result = await runProviderAccountCheck({
@@ -229,6 +275,18 @@ async function main(): Promise<void> {
       clientId: selectedProvider === "dropbox" ? requireDropboxClientId(flagValue(parsed, "client-id")) : undefined,
       testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
     });
+    if (selectedProvider === "signwell") {
+      const document = (result.responseBody as any) ?? {};
+      const recipients = Array.isArray(document?.recipients)
+        ? document.recipients.map((recipient: any) => ({
+          id: recipient?.id,
+          email: recipient?.email,
+          embeddedSigningUrl: recipient?.embedded_signing_url ?? null,
+        }))
+        : [];
+      console.log(JSON.stringify({ ...result, signwell: { documentId: result.signatureRequestId, recipients } }, null, 2));
+      return;
+    }
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -250,10 +308,9 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "launch-embedded") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const signatureId = flagValue(parsed, "signature-id", true)!;
-    if (selectedProvider !== "dropbox") {
-      throw new Error(`Embedded signing is not yet supported for ${selectedProvider === "docusign" ? "DocuSign" : "SignWell"}.`);
+    if (selectedProvider === "docusign") {
+      throw new Error("Embedded signing is not yet supported for DocuSign.");
     }
-    const clientId = requireDropboxClientId(flagValue(parsed, "client-id"));
     const result = await getEmbeddedSignUrl(db, {
       requestId,
       provider: selectedProvider,
@@ -261,10 +318,17 @@ async function main(): Promise<void> {
       apiKey: resolveProviderApiKey(selectedProvider),
     });
     const file = flagValue(parsed, "out") ?? `./embedded-launch-${signatureId}.html`;
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Embedded Sign</title></head><body><h3>Launching signer...</h3><script src="https://cdn.hellosign.com/public/js/embedded/v2.11.1/embedded.development.js"></script><script>const client=new window.HelloSign();client.open(${JSON.stringify(result.signUrl)},{clientId:${JSON.stringify(clientId)},skipDomainVerification:true});</script></body></html>`;
     const fs = await import("node:fs/promises");
+    if (selectedProvider === "signwell") {
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>SignWell Embedded Sign</title><style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;}</style></head><body><iframe src=${JSON.stringify(result.signUrl)} allow="camera *; microphone *" allowfullscreen></iframe></body></html>`;
+      await fs.writeFile(file, html, "utf8");
+      console.log(JSON.stringify({ ...result, launcherFile: file, mode: "iframe" }, null, 2));
+      return;
+    }
+    const clientId = requireDropboxClientId(flagValue(parsed, "client-id"));
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Embedded Sign</title></head><body><h3>Launching signer...</h3><script src="https://cdn.hellosign.com/public/js/embedded/v2.11.1/embedded.development.js"></script><script>const client=new window.HelloSign();client.open(${JSON.stringify(result.signUrl)},{clientId:${JSON.stringify(clientId)},skipDomainVerification:true});</script></body></html>`;
     await fs.writeFile(file, html, "utf8");
-    console.log(JSON.stringify({ ...result, launcherFile: file }, null, 2));
+    console.log(JSON.stringify({ ...result, launcherFile: file, mode: "hellosign-embedded-js" }, null, 2));
     return;
   }
 
@@ -332,16 +396,36 @@ async function main(): Promise<void> {
   }
 
   if (root === "webhook" && sub === "verify") {
+    const webhookProvider = resolveWebhookProvider(selectedProvider);
     const payloadFile = flagValue(parsed, "payload-file", true)!;
+    if (webhookProvider === "signwell") {
+      const secret = requireSignWellWebhookSecret();
+      const payload = await loadSignWellWebhookPayloadFile(payloadFile);
+      const verified = verifySignWellCallback(secret, payload, null);
+      console.log(JSON.stringify({ provider: "signwell", verified, event: payload.event ?? null }, null, 2));
+      return;
+    }
     const apiKey = requireDropboxApiKey();
     const payload = await loadWebhookPayloadFile(payloadFile);
     const verified = verifyDropboxCallback(apiKey, payload);
-    console.log(JSON.stringify({ verified, event: payload.event ?? null }, null, 2));
+    console.log(JSON.stringify({ provider: "dropbox", verified, event: payload.event ?? null }, null, 2));
     return;
   }
 
   if (root === "webhook" && sub === "ingest") {
+    const webhookProvider = resolveWebhookProvider(selectedProvider);
     const payloadFile = flagValue(parsed, "payload-file", true)!;
+    if (webhookProvider === "signwell") {
+      const secret = requireSignWellWebhookSecret();
+      const payload = await loadSignWellWebhookPayloadFile(payloadFile);
+      const result = ingestSignWellWebhookPayload(db, {
+        payload,
+        secret,
+        requestId: flagValue(parsed, "request-id"),
+      });
+      console.log(JSON.stringify({ provider: "signwell", ...result }, null, 2));
+      return;
+    }
     const apiKey = requireDropboxApiKey();
     const payload = await loadWebhookPayloadFile(payloadFile);
     const result = ingestWebhookPayload(db, {
@@ -349,14 +433,18 @@ async function main(): Promise<void> {
       apiKey,
       requestId: flagValue(parsed, "request-id"),
     });
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ provider: "dropbox", ...result }, null, 2));
     return;
   }
 
   if (root === "webhook" && sub === "listen") {
-    const apiKey = requireDropboxApiKey();
+    const webhookProvider = resolveWebhookProvider(selectedProvider);
+    const apiKey = webhookProvider === "signwell"
+      ? requireSignWellWebhookSecret()
+      : requireDropboxApiKey();
     const port = Number(flagValue(parsed, "port") ?? "3000");
-    const webhookPath = flagValue(parsed, "path") ?? "/dropbox/callback";
+    const defaultPath = webhookProvider === "signwell" ? "/signwell/callback" : "/dropbox/callback";
+    const webhookPath = flagValue(parsed, "path") ?? defaultPath;
     const requestId = flagValue(parsed, "request-id");
     const server = startWebhookServer({
       dbPath,
@@ -364,16 +452,20 @@ async function main(): Promise<void> {
       port,
       path: webhookPath,
       requestId,
+      provider: webhookProvider,
     });
     process.on("SIGINT", () => server.close(() => process.exit(0)));
     process.on("SIGTERM", () => server.close(() => process.exit(0)));
     console.log(JSON.stringify({
       listening: true,
+      provider: webhookProvider,
       port,
       path: webhookPath,
       requestId: requestId ?? null,
       callbackUrl: `http://127.0.0.1:${port}${webhookPath}`,
-      signatureVerification: "event_hash via API key HMAC",
+      signatureVerification: webhookProvider === "signwell"
+        ? "event.hash via SIGNWELL_WEBHOOK_SECRET HMAC (or X-SignWell-Webhook-Signature header)"
+        : "event_hash via API key HMAC",
       expectedSuccessExitCode: REQUEST_WATCH_EXIT_CODES.completed,
     }, null, 2));
     return;

@@ -52,7 +52,40 @@ npm run start -- request watch \
 - The CLI sends SignWell documents through `POST /documents` with `with_signature_page=true`, so field placement is not required for this MVP.
 - Signer ordering is carried into SignWell via `apply_signing_order=true` whenever there is more than one signer.
 - The persisted `signatureIds` field contains SignWell recipient IDs.
-- Embedded signing is not wired for SignWell in this CLI. Use the standard send/status/watch/fetch-final flow.
+- Embedded signing is supported via `embedded_signing=true`. The recipient response carries a per-signer `embedded_signing_url`. The CLI exposes that via `request sign-url` (returns the URL) and `request launch-embedded` (writes a tiny iframe HTML wrapper).
+- Webhooks are supported via `webhook ingest --provider signwell` and `webhook listen --provider signwell`. Verification follows the same shape as Dropbox Sign (HMAC of `time + type` using the webhook secret).
+
+## Embedded signing flow
+```bash
+node dist/cli.js request create --title "SW Embedded" --document ./your.pdf \
+  --signer name:Alice,email:alice@example.com,order:1 \
+  --provider signwell
+
+node dist/cli.js approve --request-id <request_id> --token <token>
+
+node dist/cli.js request send-embedded --request-id <request_id> --provider signwell --test-mode true
+# Response includes signwell.recipients[].embeddedSigningUrl
+
+node dist/cli.js request sign-url --request-id <request_id> --provider signwell --signature-id <recipient_id>
+node dist/cli.js request launch-embedded --request-id <request_id> --provider signwell --signature-id <recipient_id>
+# Writes ./embedded-launch-<recipient_id>.html (an iframe wrapper around the SignWell URL)
+```
+
+## Webhook flow
+```bash
+SIGNWELL_WEBHOOK_SECRET=$SIGNWELL_API_KEY \
+  node dist/cli.js webhook listen --provider signwell --port 3000 --path /signwell/callback
+
+# Or just verify a saved payload:
+node dist/cli.js webhook ingest --provider signwell --payload-file ./fixtures/sample-signwell-webhook.json
+```
+Set the public URL (e.g. via localtunnel) at `https://www.signwell.com/account/api` so SignWell calls back. The CLI verifies HMAC-SHA256(`time` + `type`, secret) and falls back to the `X-SignWell-Webhook-Signature` header when present.
+
+## Live smoke test (real account)
+```bash
+SIGNWELL_API_KEY=sk_live_... ./scripts/smoke-signwell.sh ./your.pdf
+```
+The script noops if no key is set, so it's safe to put in CI.
 
 ## Troubleshooting
 - `SIGNWELL_API_KEY is not set.`
@@ -61,5 +94,5 @@ npm run start -- request watch \
   - Check the API key, API plan access, and whether the uploaded file type is supported by SignWell.
 - `SignWell PDF download failed: ...`
   - The document is usually not fully completed yet, or SignWell is still generating the final PDF. Retry after `request watch` reports `completed`.
-- `Embedded signing is not yet supported for SignWell.`
-  - This CLI currently supports SignWell for email/request lifecycle flows only.
+- `SignWell document <id> did not return an embedded signing URL for recipient <id>.`
+  - Document was sent via `request send` instead of `request send-embedded`. SignWell only fills `embedded_signing_url` when `embedded_signing=true` was set at create time.

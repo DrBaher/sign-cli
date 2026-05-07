@@ -165,6 +165,48 @@ export async function fetchSignWellDocumentStatus(apiKey: string, documentId: st
   });
 }
 
+export function extractSignWellEmbeddedSignUrl(document: any, recipientId: string): { signUrl: string; expiresAt: number | null } | null {
+  if (!document || !Array.isArray(document.recipients)) {
+    return null;
+  }
+  const recipient = document.recipients.find((entry: any) => entry?.id === recipientId);
+  const signUrl = recipient?.embedded_signing_url
+    ?? recipient?.signing_url
+    ?? recipient?.embedded_signature_url
+    ?? null;
+  if (typeof signUrl !== "string" || signUrl.length === 0) {
+    return null;
+  }
+  const expiresRaw = recipient?.embedded_signing_url_expires_at ?? recipient?.embedded_signing_expires_at ?? null;
+  const expiresAt = typeof expiresRaw === "number"
+    ? expiresRaw
+    : typeof expiresRaw === "string" && expiresRaw.length > 0
+      ? Date.parse(expiresRaw) || null
+      : null;
+  return { signUrl, expiresAt };
+}
+
+export async function fetchSignWellEmbeddedSignUrl(
+  apiKey: string,
+  documentId: string,
+  recipientId: string,
+  baseUrl?: string,
+): Promise<{ signUrl: string; expiresAt: number | null; responseBody: unknown }> {
+  const document = await signWellJsonRequest<any>(apiKey, {
+    method: "GET",
+    endpoint: `/documents/${documentId}`,
+    baseUrl,
+  });
+  const extracted = extractSignWellEmbeddedSignUrl(document, recipientId);
+  if (!extracted) {
+    throw new Error(
+      `SignWell document ${documentId} did not return an embedded signing URL for recipient ${recipientId}. ` +
+      `Make sure the document was created with --provider signwell send-embedded and that the recipient ID matches.`,
+    );
+  }
+  return { signUrl: extracted.signUrl, expiresAt: extracted.expiresAt, responseBody: document };
+}
+
 export async function downloadSignWellCompletedPdf(apiKey: string, documentId: string, baseUrl?: string): Promise<Buffer> {
   const response = await fetch(`${resolveSignWellBaseUrl(baseUrl)}/documents/${documentId}/completed_pdf`, {
     method: "GET",

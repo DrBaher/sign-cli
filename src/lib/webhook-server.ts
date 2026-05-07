@@ -1,5 +1,7 @@
 import http from "node:http";
-import { handleWebhookHttpRequest } from "./webhook-http.js";
+import { handleSignWellWebhookHttpRequest, handleWebhookHttpRequest } from "./webhook-http.js";
+
+export type WebhookProvider = "dropbox" | "signwell";
 
 export type WebhookServerOptions = {
   dbPath: string;
@@ -7,9 +9,11 @@ export type WebhookServerOptions = {
   port: number;
   path: string;
   requestId?: string;
+  provider?: WebhookProvider;
 };
 
 export function startWebhookServer(options: WebhookServerOptions): http.Server {
+  const provider = options.provider ?? "dropbox";
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
 
@@ -20,6 +24,10 @@ export function startWebhookServer(options: WebhookServerOptions): http.Server {
       return;
     }
 
+    if (provider === "signwell") {
+      await handleSignWellWebhookHttpRequest(request, response, options);
+      return;
+    }
     await handleWebhookHttpRequest(request, response, options);
   });
 
