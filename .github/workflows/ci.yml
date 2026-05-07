@@ -18,6 +18,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      - name: Coverage report (Node built-in --experimental-test-coverage)
+        run: npm run coverage
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-lcov
+          path: coverage.lcov
       - name: SignWell smoke (no-ops without credentials)
         env:
           SIGNWELL_API_KEY: ${{ secrets.SIGNWELL_API_KEY }}
