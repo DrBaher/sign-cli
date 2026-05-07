@@ -13,6 +13,13 @@ export function openDatabase(dbPath: string): SqliteDb {
   const resolved = path.resolve(dbPath);
   mkdirSync(path.dirname(resolved), { recursive: true });
   const db = new DatabaseSync(resolved);
+  try {
+    db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA synchronous = NORMAL;");
+    db.exec("PRAGMA busy_timeout = 5000;");
+  } catch {
+    // Best-effort; continue with default journal mode.
+  }
   db.exec(`
     PRAGMA foreign_keys = ON;
 

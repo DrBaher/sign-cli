@@ -4,8 +4,11 @@ import { openDatabase } from "./lib/db.js";
 import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
 import { loadEnv } from "./lib/env.js";
 import { loadCsvFile } from "./lib/csv.js";
+import { backupDatabase, verifyDatabase } from "./lib/db-admin.js";
 import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wizard.js";
 import { createLogger, resolveLogMode } from "./lib/logger.js";
+import { redactErrorMessage } from "./lib/secret.js";
+import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
 import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySignWellCallback } from "./lib/signwell-webhook.js";
@@ -99,7 +102,7 @@ function printUsage(): void {
 sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
 sign approve --request-id <id> --token <token>
-sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
+sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
 sign request launch-embedded --request-id <id> --signature-id <signatureId> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -114,6 +117,10 @@ sign request show --request-id <id>
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign init [--out ./.env]
+sign db backup --out ./backup.db
+sign db verify
+
+Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
@@ -160,6 +167,9 @@ function resolveProviderTestMode(provider: ReturnType<typeof resolveSignProvider
 async function main(): Promise<void> {
   loadEnv();
   const parsed = parseArgs(process.argv.slice(2));
+  if ((flagValue(parsed, "verbose") ?? "false") === "true") {
+    process.env.SIGN_DEBUG = "1";
+  }
   const dbPath = process.env.SIGN_DB_PATH ?? "./data/sign.db";
   const db = openDatabase(dbPath);
   const selectedProvider = resolveSignProvider(flagValue(parsed, "provider"));
@@ -174,6 +184,20 @@ async function main(): Promise<void> {
 
   if (root === "doctor" && sub === "providers") {
     console.log(JSON.stringify(buildProviderMatrix(), null, 2));
+    return;
+  }
+
+  if (root === "db" && sub === "backup") {
+    const out = flagValue(parsed, "out", true)!;
+    const result = backupDatabase(db, dbPath, out);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "db" && sub === "verify") {
+    const result = verifyDatabase(db);
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.ok ? 0 : 3;
     return;
   }
 
@@ -253,8 +277,12 @@ async function main(): Promise<void> {
     if (documentPaths.length === 0) {
       throw new Error("Missing required flag: --document");
     }
+    documentPaths.forEach((p) => validateDocumentPath(p));
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    signers.forEach((signer) => validateEmail(signer.email, "Signer email"));
+    validateSignerCount(signers.length);
     const fields = flagValues(parsed, "field").map(parseFieldSpec);
+    validateFieldCount(fields.length);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "30");
     const created = createSigningRequest(db, {
       title,
@@ -286,6 +314,8 @@ async function main(): Promise<void> {
     const templateId = flagValue(parsed, "template-id", true)!;
     const title = flagValue(parsed, "title") ?? `Template ${templateId}`;
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    signers.forEach((signer) => validateEmail(signer.email, "Signer email"));
+    validateSignerCount(signers.length);
     const prefills = flagValues(parsed, "prefill").map(parsePrefillSpec);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
     const result = createSigningRequest(db, {
@@ -307,8 +337,12 @@ async function main(): Promise<void> {
     if (documentPaths.length === 0) {
       throw new Error("Missing required flag: --document");
     }
+    documentPaths.forEach((p) => validateDocumentPath(p));
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    signers.forEach((signer) => validateEmail(signer.email, "Signer email"));
+    validateSignerCount(signers.length);
     const fields = flagValues(parsed, "field").map(parseFieldSpec);
+    validateFieldCount(fields.length);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
     const result = createSigningRequest(db, {
       title,
@@ -333,11 +367,13 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "send") {
     const requestId = flagValue(parsed, "request-id", true)!;
+    const force = (flagValue(parsed, "force") ?? "false") === "true";
     const result = await sendSigningRequest(db, {
       requestId,
       provider: selectedProvider,
       apiKey: resolveProviderApiKey(selectedProvider),
       testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
+      force,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -372,12 +408,14 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "sign-url") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const signatureId = flagValue(parsed, "signature-id", true)!;
+    const returnUrl = flagValue(parsed, "return-url");
+    if (returnUrl) validateReturnUrl(returnUrl);
     const result = await getEmbeddedSignUrl(db, {
       requestId,
       provider: selectedProvider,
       signatureId,
       apiKey: resolveProviderApiKey(selectedProvider),
-      returnUrl: flagValue(parsed, "return-url"),
+      returnUrl,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -387,12 +425,14 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "launch-embedded") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const signatureId = flagValue(parsed, "signature-id", true)!;
+    const returnUrl = flagValue(parsed, "return-url");
+    if (returnUrl) validateReturnUrl(returnUrl);
     const result = await getEmbeddedSignUrl(db, {
       requestId,
       provider: selectedProvider,
       signatureId,
       apiKey: resolveProviderApiKey(selectedProvider),
-      returnUrl: flagValue(parsed, "return-url"),
+      returnUrl,
     });
     const file = flagValue(parsed, "out") ?? `./embedded-launch-${signatureId}.html`;
     const fs = await import("node:fs/promises");
@@ -542,9 +582,11 @@ async function main(): Promise<void> {
     if (documentPaths.length === 0) {
       throw new Error("Missing required flag: --document");
     }
+    documentPaths.forEach((p) => validateDocumentPath(p));
     const titleTemplate = flagValue(parsed, "title") ?? "Bulk send for {{email}}";
     const tokenTtlMinutes = flagValue(parsed, "token-ttl-minutes") ? Number(flagValue(parsed, "token-ttl-minutes")) : undefined;
     const rows = await loadCsvFile(csvPath);
+    validateBulkRowCount(rows.length);
     const logger = createLogger({ mode: resolveLogMode(flagValue(parsed, "log")) });
     const result = await bulkSendFromCsv(db, {
       rows,
@@ -668,6 +710,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(redactErrorMessage(error));
   process.exitCode = 1;
 });

@@ -18,6 +18,15 @@
 | `request cancel is destructive at the provider. Re-run with --yes true to confirm.` | Safety guard. | Re-run with `--yes true`. |
 | `DocuSign cancel requires --reason "..."` | DocuSign requires a void reason. | Pass `--reason "Reason"`. |
 | `Dropbox Sign reminders require --email <signer email>.` | Dropbox's remind endpoint needs the signer email. | Pass `--email signer@example.com` to `request remind`. |
+| `Document path escapes the working directory: ...` | Path validation blocked an absolute path or `..` traversal. | Move the file under your CWD or set `SIGN_ALLOW_ABSOLUTE_DOCS=1`. |
+| `Document "X" is N bytes, exceeding the limit of M` | Document over `SIGN_MAX_DOCUMENT_BYTES` (default 25 MiB). | Override via env or use a smaller PDF. |
+| `Signer email is not a valid email address` | Email failed the basic format check. | Fix the typo or surrounding whitespace. |
+| `--return-url protocol "javascript:" is not allowed` / `--return-url must use https://` | URL allowlist for embedded `--return-url`. | Use https or a localhost http URL. |
+| `Too many signers / fields / CSV rows` | Hard limit reached. | Split into multiple requests, or override per-call by editing the validate.ts limits. |
+| `request send` returns `idempotent: true` and skips the provider call | The request already has a `provider_request_id`. | Pass `--force true` to send again, or treat the original `provider_request_id` as the source of truth. |
+| Errors in CI/logs leak API keys | Errors are now run through `redactErrorMessage` before printing. | Make sure `DROPBOX_SIGN_API_KEY` / `SIGNWELL_API_KEY` / `SIGNWELL_WEBHOOK_SECRET` / `DOCUSIGN_INTEGRATION_KEY` are set in env so they're known and stripped from messages. |
+| Need to debug a provider HTTP call | Use `--verbose true` (or `SIGN_DEBUG=1`). | Authorization / x-api-key / x-signwell-* headers are auto-redacted. |
+| Database integrity concerns | Run `node dist/cli.js db verify`. | `db backup --out ./snap.db` writes a consistent copy via SQLite VACUUM INTO. |
 | `Template requests need role:<name> on every --signer` | A `request from-template` signer was missing `role:`. | Add `role:<roleName>` matching the template role/placeholder. |
 | `--template-id and --document cannot be combined` | Both flags were passed to a single request. | Use `request from-template --template-id ...` (no `--document`) or `request create --document ...` (no template). |
 | `Template send is not supported for <provider>.` | The provider's send-from-template helper isn't wired (shouldn't happen for the bundled providers). | Make sure you're on the latest CLI; all three providers support templates. |

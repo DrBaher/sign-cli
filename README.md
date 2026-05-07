@@ -23,6 +23,7 @@ node dist/cli.js doctor providers
 - Local append-only audit chain (`hash_prev`, `hash_self`) with `audit verify`
 - Multi-signer support
 - Built-in `--provider local` that simulates the entire flow with no API keys, plus a self-signed PAdES PDF signer so `request verify-signed-pdf` validates a real chain
+- Production hardening: input validation (path-traversal/email/return-url/sizes), secret redaction in errors and HTTP debug logs, idempotent `request send` (refuses to double-send unless `--force true`), `db backup` / `db verify` (SQLite WAL mode), and `--verbose` HTTP tracing with header redaction
 - Provider abstraction for send + status + watch + final download + cancel + remind
 - Multi-document requests (`--document` repeatable on `request create` / `run-email` / `bulk`)
 - CSV-driven bulk send (`request bulk --csv`)
