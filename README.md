@@ -1,6 +1,17 @@
 # sign-cli
 
-CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, SignWell, and a built-in local provider.
+> **TL;DR**
+> - **Agent-as-signer** for `--provider local`: per-signer tokens, declarative policy, MCP server. ([signer-side flow](#signer-side-flow-agent-friendly), [MCP server](#mcp-server-for-llm-agents))
+> - **Compliance-grade audit**: hash-chained events, RFC 3161 timestamping, signed receipt bundles. ([trust beyond the provider](#trust-beyond-the-provider))
+> - **Bring-your-own-provider**: Dropbox Sign / DocuSign / SignWell with a built-in local simulator that needs no signup. ([providers](#commands))
+
+```bash
+npx sign-cli demo                    # zero-account end-to-end demo (local provider)
+sign --help                          # grouped command index
+sign examples                        # 7 curated walkthroughs
+sign --catalog json | jq             # machine-readable command + flag catalog
+sign mcp serve                       # stdio MCP server for LLM agents
+```
 
 ## Quick start
 
