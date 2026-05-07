@@ -2406,6 +2406,61 @@ export function verifyRequestAuditChain(db: SqliteDb, requestId: string): AuditV
   return verifyAuditChain(db, requestId);
 }
 
+export type AuditScanReport = {
+  total: number;
+  valid: number;
+  invalid: number;
+  results: Array<{
+    requestId: string;
+    title: string;
+    status: string;
+    valid: boolean;
+    events: number;
+    break: AuditVerificationResult["break"];
+  }>;
+};
+
+export function scanAllAuditChains(
+  db: SqliteDb,
+  input: { provider?: SignProvider; status?: string; limit?: number } = {},
+): AuditScanReport {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (input.provider) {
+    where.push("provider = ?");
+    params.push(input.provider);
+  }
+  if (input.status) {
+    where.push("status = ?");
+    params.push(input.status);
+  }
+  const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 5000) : 1000;
+  const rows = db.prepare(
+    `SELECT id, title, status FROM requests
+     ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY datetime(created_at) DESC
+     LIMIT ${limit}`,
+  ).all(...params) as Array<{ id: string; title: string; status: string }>;
+
+  let valid = 0;
+  let invalid = 0;
+  const results: AuditScanReport["results"] = [];
+  for (const row of rows) {
+    const chain = verifyAuditChain(db, row.id);
+    results.push({
+      requestId: row.id,
+      title: row.title,
+      status: row.status,
+      valid: chain.valid,
+      events: chain.events,
+      break: chain.break,
+    });
+    if (chain.valid) valid += 1;
+    else invalid += 1;
+  }
+  return { total: rows.length, valid, invalid, results };
+}
+
 function findSignedPdfArtifact(db: SqliteDb, requestId: string): { id: string; path: string; created_at: string; metadata_json: string } | null {
   const row = db.prepare(
     `SELECT id, path, created_at, metadata_json

@@ -56,6 +56,7 @@ import {
   remindSigningRequest,
   runSignerPolicy,
   runSignerPolicyAll,
+  scanAllAuditChains,
   runDoctor,
   runProviderAccountCheck,
   runSignWellSmokeTest,
@@ -168,6 +169,7 @@ sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
 sign audit show --request-id <id>
 sign audit verify --request-id <id>
+sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
@@ -754,6 +756,20 @@ async function main(): Promise<void> {
     const result = verifyRequestAuditChain(db, requestId);
     console.log(JSON.stringify({ requestId, ...result }, null, 2));
     process.exitCode = result.valid ? 0 : 3;
+    return;
+  }
+
+  if (root === "audit" && sub === "scan") {
+    const provider = flagValue(parsed, "provider") ? selectedProvider : undefined;
+    const status = flagValue(parsed, "status");
+    const limitFlag = flagValue(parsed, "limit");
+    const result = scanAllAuditChains(db, {
+      provider,
+      status,
+      limit: limitFlag ? Number(limitFlag) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.invalid === 0 ? 0 : 3;
     return;
   }
 

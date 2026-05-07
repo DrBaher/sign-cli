@@ -229,6 +229,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Verify the audit chain's hash linkage; exits 3 on a break.",
   },
   {
+    command: "audit scan",
+    summary: "Verify the audit chain for every request in the local DB at once. Exits 3 if any chain is broken.",
+    flags: [
+      { name: "--provider", description: "Filter by provider (dropbox/docusign/signwell/local)." },
+      { name: "--status", description: "Filter by request status." },
+      { name: "--limit", description: "Cap rows scanned (default 1000, max 5000)." },
+    ],
+  },
+  {
     command: "audit timestamp",
     summary: "Append an RFC 3161 timestamp to the chain head.",
   },
