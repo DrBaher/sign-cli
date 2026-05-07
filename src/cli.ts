@@ -39,6 +39,7 @@ import {
   reissueSignerToken,
   remindSigningRequest,
   runSignerPolicy,
+  runSignerPolicyAll,
   runDoctor,
   runProviderAccountCheck,
   runSignWellSmokeTest,
@@ -124,6 +125,7 @@ sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
 sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minutes 30]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
+sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -497,6 +499,47 @@ async function main(): Promise<void> {
     const spec = loadPolicySpec(specPath);
     const outcome = runSignerPolicy(db, { requestId, token, spec, dryRun });
     console.log(JSON.stringify(outcome, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "policy" && action === "run-all") {
+    const specPath = flagValue(parsed, "spec", true)!;
+    const tokensPath = flagValue(parsed, "tokens-file", true)!;
+    const dryRun = (flagValue(parsed, "dry-run") ?? "false") === "true";
+    const fs = await import("node:fs");
+    let tokens: Record<string, string>;
+    try {
+      const raw = JSON.parse(fs.readFileSync(tokensPath, "utf8"));
+      if (Array.isArray(raw)) {
+        tokens = {};
+        for (const entry of raw as Array<{ requestId?: string; token?: string }>) {
+          if (typeof entry?.requestId === "string" && typeof entry?.token === "string") {
+            tokens[entry.requestId] = entry.token;
+          }
+        }
+      } else if (raw && typeof raw === "object") {
+        tokens = Object.fromEntries(
+          Object.entries(raw as Record<string, unknown>)
+            .filter(([, v]) => typeof v === "string") as Array<[string, string]>,
+        );
+      } else {
+        throw new Error("expected an object or an array of {requestId, token} entries");
+      }
+    } catch (error) {
+      throw new SignCliError({
+        code: "INVALID_SPEC",
+        message: `Failed to load --tokens-file ${tokensPath}: ${(error as Error).message}`,
+      });
+    }
+    const spec = loadPolicySpec(specPath);
+    const outcome = runSignerPolicyAll(db, {
+      signerEmail: flagValue(parsed, "signer-email"),
+      tokens,
+      spec,
+      dryRun,
+    });
+    console.log(JSON.stringify(outcome, null, 2));
+    if (outcome.failed > 0) process.exitCode = 3;
     return;
   }
 

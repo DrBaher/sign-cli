@@ -65,6 +65,9 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `request show` (enriched: `signedBy`, per-approval `tokenHint`/`expiresAt`/`expired`/`signed`, and a `nextSteps[]` array telling humans/agents what to do next)
 - `request create --spec ./request.json` (declarative alternative to long `--signer/--field/--prefill` flag chains; example at `fixtures/request-spec.example.json`)
 - `signer policy run --request-id <id> --token <t> --spec ./policy.json [--dry-run true]` (declarative sign/decline rules + non-negotiable expectations; example at `fixtures/signer-policy.example.json`)
+- `signer policy run-all --tokens-file ./tokens.json --spec ./policy.json` (apply a policy across every pending request the agent has a token for; per-row results, exits 3 if any row failed)
+- `request receipt --request-id <id> --out ./receipt/` (audit-export bundle plus a detached `manifest.sig` + `manifest.cert.pem`; openssl-verifiable)
+- `SIGN_LOCAL_NOTIFY_URL=https://...` (fires a fire-and-forget JSON POST on `request.signed_by_signer` / `request.signer_declined` / `request.final_pdf_downloaded` / `request.receipt_signed` / `request.signer_token_reissued` / `request.signer_policy_evaluated` / `request.canceled`)
 - `init` (interactive `.env` wizard)
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
 - `doctor`
