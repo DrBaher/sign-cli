@@ -68,6 +68,7 @@ import {
   type LocalDocumentSigningState,
   type LocalSignerInboxEntry,
 } from "./local-provider.js";
+import { evaluatePolicy, type PolicyDecision, type PolicySpec } from "./policy-engine.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import { SignCliError } from "./sign-error.js";
 import {
@@ -3077,5 +3078,95 @@ export function fetchUnsignedDocumentForSigner(
     bytes: document.bytes,
     sha256: document.sha256,
     outPath,
+  };
+}
+
+export type SignerPolicyOutcome = {
+  requestId: string;
+  signerEmail: string;
+  decision: PolicyDecision;
+  applied: boolean;
+  result: SignerSignResult | SignerDeclineResult | null;
+};
+
+export function runSignerPolicy(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    token: string;
+    spec: PolicySpec;
+    dryRun?: boolean;
+    now?: Date;
+  },
+): SignerPolicyOutcome {
+  const request = getRequestRow(db, input.requestId);
+  const provider = getPersistedProvider(request);
+  ensureLocalProvider(request, provider);
+  const now = input.now ?? new Date();
+  const { signer } = resolveSignerFromToken(db, request, input.token, now);
+
+  const decision = evaluatePolicy(input.spec, {
+    title: request.title,
+    documentSha256: request.document_hash ?? "",
+    signerEmail: signer.email,
+  });
+
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.signer_policy_evaluated",
+    payload: {
+      signerEmail: signer.email,
+      action: decision.action,
+      matchedRuleIndex: decision.matchedRuleIndex,
+      reason: decision.reason,
+      dryRun: Boolean(input.dryRun),
+    },
+    now,
+  });
+
+  if (input.dryRun || decision.action === "report") {
+    return {
+      requestId: request.id,
+      signerEmail: signer.email,
+      decision,
+      applied: false,
+      result: null,
+    };
+  }
+
+  if (decision.action === "sign") {
+    // Cross-check: enforce expectations as require-* on the underlying sign call so any drift
+    // between policy evaluation and state mutation is caught with a structured error.
+    const expectations = input.spec.expectations;
+    const result = signSigningRequest(db, {
+      requestId: request.id,
+      token: input.token,
+      requireHash: expectations?.documentSha256,
+      requireTitle: expectations?.titleMatches,
+      requireSignerEmail: expectations?.signerEmail,
+      now,
+    });
+    return {
+      requestId: request.id,
+      signerEmail: signer.email,
+      decision,
+      applied: true,
+      result,
+    };
+  }
+
+  // decline
+  const declineResult = declineSigningRequestAsSigner(db, {
+    requestId: request.id,
+    token: input.token,
+    reason: decision.reason ?? "Declined by policy.",
+    now,
+  });
+  return {
+    requestId: request.id,
+    signerEmail: signer.email,
+    decision,
+    applied: true,
+    result: declineResult,
   };
 }

@@ -64,6 +64,7 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `request list` (local SQLite; filterable by `--provider` and `--status`)
 - `request show` (enriched: `signedBy`, per-approval `tokenHint`/`expiresAt`/`expired`/`signed`, and a `nextSteps[]` array telling humans/agents what to do next)
 - `request create --spec ./request.json` (declarative alternative to long `--signer/--field/--prefill` flag chains; example at `fixtures/request-spec.example.json`)
+- `signer policy run --request-id <id> --token <t> --spec ./policy.json [--dry-run true]` (declarative sign/decline rules + non-negotiable expectations; example at `fixtures/signer-policy.example.json`)
 - `init` (interactive `.env` wizard)
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
 - `doctor`
