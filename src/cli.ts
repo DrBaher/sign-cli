@@ -44,6 +44,8 @@ import {
   exportAuditBundle,
   exportAuditChainAsJsonLd,
   exportRequestReceipt,
+  signAuditHead,
+  verifyAuditHeadProof,
   fetchUnsignedDocumentForSigner,
   getRequestSnapshot,
   fetchFinalSignedPdf,
@@ -828,6 +830,24 @@ async function main(): Promise<void> {
     const out = flagValue(parsed, "out", true)!;
     const result = await exportAuditChainAsJsonLd(db, { requestId, outPath: out });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "sign-head") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const out = flagValue(parsed, "out");
+    const result = await signAuditHead(db, { requestId, outPath: out });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "verify-head") {
+    const proofPath = flagValue(parsed, "proof", true)!;
+    const fs = await import("node:fs");
+    const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+    const result = await verifyAuditHeadProof(proof);
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.ok ? 0 : 3;
     return;
   }
 
