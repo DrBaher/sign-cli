@@ -1831,6 +1831,34 @@ export function ingestSignWellWebhookPayload(
       signatureIds: extractSignWellWebhookRecipientIds(document),
       now,
     });
+
+    // Map SignWell recipient IDs back to signers (recipient.id is "1","2",... matching signer.order).
+    const recipients = Array.isArray((document as { recipients?: unknown })?.recipients)
+      ? ((document as { recipients?: Array<{ id?: string; signed_at?: string | null; status?: string }> }).recipients ?? [])
+      : [];
+    if (recipients.length > 0) {
+      try {
+        const requestRow = getRequestRow(db, requestId);
+        const signers = JSON.parse(requestRow.signers_json) as SignerInput[];
+        const signersByOrder = new Map(signers.map((s) => [s.order, s]));
+        for (const recipient of recipients) {
+          if (!recipient.signed_at) continue;
+          const order = Number(recipient.id ?? "0");
+          const signer = Number.isFinite(order) ? signersByOrder.get(order) : undefined;
+          if (!signer) continue;
+          recordSignerSigningState(db, {
+            requestId,
+            signerEmail: signer.email,
+            signerName: signer.name,
+            signedAt: recipient.signed_at,
+            source: "signwell",
+            now,
+          });
+        }
+      } catch {
+        // Best-effort; webhook should never throw from a missing/malformed signer row.
+      }
+    }
   }
 
   return {
@@ -1888,6 +1916,26 @@ export function ingestWebhookPayload(
       signatureIds,
       now,
     });
+
+    const signatures = Array.isArray(input.payload.signature_request?.signatures)
+      ? (input.payload.signature_request!.signatures as Array<{ signer_email_address?: string; signer_email?: string; signer_name?: string; signed_at?: number | string | null }>)
+      : [];
+    for (const sig of signatures) {
+      const email = (sig.signer_email_address ?? sig.signer_email ?? "").toString().trim();
+      if (!email) continue;
+      if (sig.signed_at === null || sig.signed_at === undefined) continue;
+      const signedAt = typeof sig.signed_at === "number"
+        ? new Date(sig.signed_at * 1000).toISOString()
+        : new Date(sig.signed_at).toISOString();
+      recordSignerSigningState(db, {
+        requestId,
+        signerEmail: email,
+        signerName: sig.signer_name,
+        signedAt,
+        source: "dropbox",
+        now,
+      });
+    }
   }
 
   return { verified, requestId, eventType };
@@ -1902,10 +1950,19 @@ export type EnrichedApproval = ApprovalRow & {
   signed: boolean;
 };
 
+export type SnapshotSignedByEntry = {
+  email: string;
+  name: string;
+  signedAt: string;
+  certFingerprintSha256?: string;
+  certSubjectCommonName?: string;
+  source?: string;
+};
+
 export type RequestSnapshot = {
   request: RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider };
   approvals: EnrichedApproval[];
-  signedBy: LocalDocumentSigningState["signedBy"] | null;
+  signedBy: SnapshotSignedByEntry[] | null;
   declinedBy: string | null;
   declineReason: string | null;
   nextSteps: string[];
@@ -1960,6 +2017,84 @@ function buildNextSteps(input: {
   return steps;
 }
 
+export type SignerSigningStateRow = {
+  request_id: string;
+  signer_email: string;
+  signer_name: string | null;
+  signed_at: string | null;
+  declined_at: string | null;
+  decline_reason: string | null;
+  source: string;
+  updated_at: string;
+};
+
+export function recordSignerSigningState(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    signerEmail: string;
+    signerName?: string;
+    signedAt?: string | null;
+    declinedAt?: string | null;
+    declineReason?: string | null;
+    source: "local" | "dropbox" | "signwell" | "docusign";
+    now?: Date;
+  },
+): void {
+  const updatedAt = (input.now ?? new Date()).toISOString();
+  // Merge: if a row already exists, preserve any existing non-null fields the caller didn't set.
+  const existing = db.prepare(
+    "SELECT * FROM signer_signing_states WHERE request_id = ? AND lower(signer_email) = lower(?)",
+  ).get(input.requestId, input.signerEmail) as SignerSigningStateRow | undefined;
+  const signedAt = input.signedAt ?? existing?.signed_at ?? null;
+  const declinedAt = input.declinedAt ?? existing?.declined_at ?? null;
+  const declineReason = input.declineReason ?? existing?.decline_reason ?? null;
+  const signerName = input.signerName ?? existing?.signer_name ?? null;
+  db.prepare(
+    `INSERT INTO signer_signing_states (request_id, signer_email, signer_name, signed_at, declined_at, decline_reason, source, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(request_id, signer_email) DO UPDATE SET
+       signer_name = excluded.signer_name,
+       signed_at = excluded.signed_at,
+       declined_at = excluded.declined_at,
+       decline_reason = excluded.decline_reason,
+       source = excluded.source,
+       updated_at = excluded.updated_at`,
+  ).run(
+    input.requestId,
+    input.signerEmail,
+    signerName,
+    signedAt,
+    declinedAt,
+    declineReason,
+    input.source,
+    updatedAt,
+  );
+}
+
+export type SignerSigningStateView = {
+  email: string;
+  name: string;
+  signedAt: string | null;
+  declinedAt: string | null;
+  declineReason: string | null;
+  source: string;
+};
+
+export function listSignerSigningStates(db: SqliteDb, requestId: string): SignerSigningStateView[] {
+  const rows = db.prepare(
+    "SELECT * FROM signer_signing_states WHERE request_id = ? ORDER BY updated_at ASC",
+  ).all(requestId) as SignerSigningStateRow[];
+  return rows.map((row) => ({
+    email: row.signer_email,
+    name: row.signer_name ?? row.signer_email,
+    signedAt: row.signed_at,
+    declinedAt: row.declined_at,
+    declineReason: row.decline_reason,
+    source: row.source,
+  }));
+}
+
 export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?: Date } = {}): RequestSnapshot {
   const requestRow = getRequestRow(db, requestId);
   const request = serializeRequestRow(requestRow);
@@ -1976,9 +2111,27 @@ export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?
     }
   }
 
-  const signedEmails = new Set(
-    (signingState?.signedBy ?? []).map((entry) => entry.email.trim().toLowerCase()),
+  // Merge signedBy/declined info from the cross-provider signing-states table.
+  const states = listSignerSigningStates(db, requestId);
+  const localSignedByMap = new Map(
+    (signingState?.signedBy ?? []).map((entry) => [entry.email.trim().toLowerCase(), entry]),
   );
+  const mergedSignedBy = states
+    .filter((s) => s.signedAt !== null)
+    .map((s) => {
+      const localEntry = localSignedByMap.get(s.email.trim().toLowerCase());
+      return {
+        email: s.email,
+        name: s.name,
+        signedAt: s.signedAt!,
+        ...(localEntry?.certFingerprintSha256 ? { certFingerprintSha256: localEntry.certFingerprintSha256 } : {}),
+        ...(localEntry?.certSubjectCommonName ? { certSubjectCommonName: localEntry.certSubjectCommonName } : {}),
+        source: s.source,
+      };
+    });
+  const mergedDeclinedState = states.find((s) => s.declinedAt !== null) ?? null;
+
+  const signedEmails = new Set(mergedSignedBy.map((entry) => entry.email.trim().toLowerCase()));
 
   const approvals: EnrichedApproval[] = rawApprovals.map((approval) => ({
     ...approval,
@@ -1992,12 +2145,20 @@ export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?
 
   const nextSteps = buildNextSteps({ request, approvals, signingState });
 
+  // For local provider, prefer the local-record signedBy[] (richer cert info from PR #23) when present.
+  // For hosted providers, use the merged cross-provider table.
+  const signedBy = mergedSignedBy.length > 0
+    ? mergedSignedBy
+    : (signingState?.signedBy ?? null);
+  const declinedBy = mergedDeclinedState?.email ?? signingState?.declinedBy ?? null;
+  const declineReason = mergedDeclinedState?.declineReason ?? signingState?.declineReason ?? null;
+
   return {
     request,
     approvals,
-    signedBy: signingState?.signedBy ?? null,
-    declinedBy: signingState?.declinedBy ?? null,
-    declineReason: signingState?.declineReason ?? null,
+    signedBy,
+    declinedBy,
+    declineReason,
     nextSteps,
   };
 }
@@ -2789,6 +2950,15 @@ export function signSigningRequest(
     now,
   });
 
+  recordSignerSigningState(db, {
+    requestId: request.id,
+    signerEmail: signer.email,
+    signerName: input.signerName ?? signer.name,
+    signedAt: result.signedAt,
+    source: "local",
+    now,
+  });
+
   const requestStatus = result.status === "completed" ? "completed" : "sent";
   persistRequestProviderMetadata(db, {
     requestId: request.id,
@@ -2850,6 +3020,16 @@ export function declineSigningRequestAsSigner(
   const result = declineLocalDocument(providerRequestId, {
     signerEmail: signer.email,
     reason: input.reason,
+    now,
+  });
+
+  recordSignerSigningState(db, {
+    requestId: request.id,
+    signerEmail: signer.email,
+    signerName: signer.name,
+    declinedAt: result.declinedAt,
+    declineReason: result.declineReason,
+    source: "local",
     now,
   });
 
