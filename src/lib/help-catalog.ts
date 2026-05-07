@@ -217,6 +217,16 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Mint a new per-signer token and invalidate the old one.",
   },
   {
+    command: "signer watch",
+    summary: "Long-running tail of the signer inbox; emits new entries as they appear.",
+    flags: [
+      { name: "--signer-email", description: "Filter the inbox to one signer." },
+      { name: "--exit-on-first", description: "true to exit on the first new entry (otherwise runs forever / until --timeout-seconds)." },
+      { name: "--interval-seconds", description: "Belt-and-suspenders poll interval (default 1s)." },
+      { name: "--timeout-seconds", description: "Exit code 4 after this many seconds with no new entry." },
+    ],
+  },
+  {
     command: "signer policy run",
     summary: "Apply a declarative policy spec to a single request.",
   },

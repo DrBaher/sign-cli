@@ -12,6 +12,7 @@ import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
 import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
+import { runSignerWatch } from "./lib/signer-watch.js";
 import {
   buildCatalogJson,
   findCommand,
@@ -143,6 +144,7 @@ sign signer list [--signer-email <e>]
 sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [--signer-email <e>]
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
 sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minutes 30]
+sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
@@ -534,6 +536,27 @@ async function main(): Promise<void> {
       reason: flagValue(parsed, "reason"),
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "watch") {
+    const signerEmail = flagValue(parsed, "signer-email");
+    const exitOnFirst = (flagValue(parsed, "exit-on-first") ?? "false") === "true";
+    const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
+    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 1000 })!;
+    process.stderr.write(`[signer watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""} (Ctrl+C to stop)\n`);
+    const outcome = await runSignerWatch(db, {
+      signerEmail,
+      exitOnFirst,
+      timeoutMs,
+      pollIntervalMs,
+      onEntry: (entry) => {
+        const tag = entry.firstSeen ? "+ NEW" : "  initial";
+        process.stderr.write(`${tag} ${entry.requestId} title=${JSON.stringify(entry.title)} signers=${entry.signers.length}\n`);
+      },
+    });
+    console.log(JSON.stringify(outcome, null, 2));
+    process.exitCode = outcome.exitReason === "timeout" ? 4 : 0;
     return;
   }
 
