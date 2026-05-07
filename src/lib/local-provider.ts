@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { readFileSync, mkdirSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { loadOrCreateSignerKeyPair } from "./local-keys.js";
 import { signPdfLocally } from "./local-pdf-signer.js";
 import { sha256 } from "./util.js";
 import type { PrefillInput, SignerInput } from "./util.js";
@@ -34,7 +35,13 @@ type LocalDocumentRecord = {
   createdAt: string;
   signedAt: string | null;
   signedPdfPath: string | null;
-  signedBy: Array<{ email: string; name: string; signedAt: string }>;
+  signedBy: Array<{
+    email: string;
+    name: string;
+    signedAt: string;
+    certFingerprintSha256?: string;
+    certSubjectCommonName?: string;
+  }>;
   declinedBy: string | null;
   declineReason: string | null;
 };
@@ -405,7 +412,17 @@ export function signLocalDocument(
   const now = input.now ?? new Date();
   const signedAt = now.toISOString();
   if (!alreadySigned) {
-    record.signedBy.push({ email: signer.email, name: input.signerName ?? signer.name, signedAt });
+    const signerKey = loadOrCreateSignerKeyPair({
+      email: signer.email,
+      name: input.signerName ?? signer.name,
+    });
+    record.signedBy.push({
+      email: signer.email,
+      name: input.signerName ?? signer.name,
+      signedAt,
+      certFingerprintSha256: signerKey.fingerprintSha256,
+      certSubjectCommonName: signerKey.subjectCommonName,
+    });
   }
   const totalSigners = record.signers.length;
   if (record.signedBy.length >= totalSigners) {

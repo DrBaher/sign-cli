@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { generateKeyPairSync, X509Certificate, createSign } from "node:crypto";
+import { createHash, createSign, generateKeyPairSync, X509Certificate } from "node:crypto";
 import { parseAsn1 } from "./asn1.js";
 import {
   asn1,
@@ -14,6 +14,10 @@ import {
 } from "./asn1-encode.js";
 
 export const LOCAL_KEY_DIR = process.env.SIGN_LOCAL_KEY_DIR ?? "./data/local-keys";
+
+function localKeyDir(): string {
+  return process.env.SIGN_LOCAL_KEY_DIR ?? "./data/local-keys";
+}
 const KEY_FILE = "signer.key.pem";
 const CERT_FILE = "signer.cert.pem";
 
@@ -73,11 +77,12 @@ function buildSelfSignedCertificate(privateKeyPem: string, publicKeyDer: Buffer,
   return { certificateDer, certificatePem };
 }
 
-export function loadOrCreateLocalSigner(options: { commonName?: string; organization?: string } = {}): LocalSignerKeyPair {
-  const dir = path.resolve(LOCAL_KEY_DIR);
+function loadOrCreateAtPath(
+  dir: string,
+  options: { commonName: string; organization: string },
+): LocalSignerKeyPair {
   const keyPath = path.join(dir, KEY_FILE);
   const certPath = path.join(dir, CERT_FILE);
-
   if (existsSync(keyPath) && existsSync(certPath)) {
     const privateKeyPem = readFileSync(keyPath, "utf8");
     const certificatePem = readFileSync(certPath, "utf8");
@@ -85,19 +90,41 @@ export function loadOrCreateLocalSigner(options: { commonName?: string; organiza
     const certificate = new X509Certificate(certificateDer);
     return { privateKeyPem, certificatePem, certificateDer, certificate };
   }
-
   mkdirSync(dir, { recursive: true });
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
   const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
-  const cert = buildSelfSignedCertificate(privateKeyPem, publicKeyDer, {
-    commonName: options.commonName ?? "Sign CLI Local Signer",
-    organization: options.organization ?? "Sign CLI Local Provider",
-  });
+  const cert = buildSelfSignedCertificate(privateKeyPem, publicKeyDer, options);
   writeFileSync(keyPath, privateKeyPem, { mode: 0o600 });
   writeFileSync(certPath, cert.certificatePem, { mode: 0o644 });
   const certificate = new X509Certificate(cert.certificateDer);
   return { privateKeyPem, certificatePem: cert.certificatePem, certificateDer: cert.certificateDer, certificate };
+}
+
+export function loadOrCreateLocalSigner(options: { commonName?: string; organization?: string } = {}): LocalSignerKeyPair {
+  return loadOrCreateAtPath(path.resolve(localKeyDir()), {
+    commonName: options.commonName ?? "Sign CLI Local Signer",
+    organization: options.organization ?? "Sign CLI Local Provider",
+  });
+}
+
+function emailSlug(email: string): string {
+  return email.trim().toLowerCase().replace(/[^a-z0-9._-]+/gu, "_");
+}
+
+export function loadOrCreateSignerKeyPair(input: {
+  email: string;
+  name?: string;
+  organization?: string;
+}): LocalSignerKeyPair & { fingerprintSha256: string; subjectCommonName: string } {
+  const subjectCommonName = input.name ? `${input.name} <${input.email}>` : input.email;
+  const dir = path.join(path.resolve(localKeyDir()), "signers", emailSlug(input.email));
+  const keyPair = loadOrCreateAtPath(dir, {
+    commonName: subjectCommonName,
+    organization: input.organization ?? "Sign CLI Local Provider — per-signer identity",
+  });
+  const fingerprintSha256 = createHash("sha256").update(keyPair.certificateDer).digest("hex");
+  return { ...keyPair, fingerprintSha256, subjectCommonName };
 }
 
 export function extractCertSerialAndIssuer(certificateDer: Buffer): { serialNumber: Buffer; issuerDer: Buffer } {
