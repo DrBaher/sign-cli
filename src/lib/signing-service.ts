@@ -8,6 +8,7 @@ import {
   fetchDocuSignEnvelopeStatus,
   getDocuSignRecipientView,
   normalizeDocuSignStatus,
+  remindDocuSignEnvelope,
   sendDocuSignEnvelope,
   voidDocuSignEnvelope,
 } from "./docusign.js";
@@ -19,6 +20,7 @@ import {
   downloadSignedPdf,
   fetchEmbeddedSignUrl,
   fetchSignatureRequestStatus,
+  remindDropboxSignatureRequest,
   sendSignatureRequest,
 } from "./dropbox-sign.js";
 import {
@@ -28,6 +30,7 @@ import {
   fetchSignWellDocumentStatus,
   fetchSignWellEmbeddedSignUrl,
   normalizeSignWellStatus,
+  remindSignWellDocument,
   resolveSignWellBaseUrl,
   sendSignWellDocument,
 } from "./signwell.js";
@@ -64,7 +67,8 @@ type WatchTerminalStatus = keyof typeof REQUEST_WATCH_EXIT_CODES;
 
 export type CreateRequestInput = {
   title: string;
-  documentPath: string;
+  documentPath?: string;
+  documentPaths?: string[];
   signers: SignerInput[];
   tokenTtlMinutes: number;
   autoApprove?: boolean;
@@ -85,9 +89,34 @@ type RequestRow = {
   dropbox_status: string | null;
   signature_ids_json: string | null;
   signers_json: string;
+  documents_json: string | null;
   created_at: string;
   updated_at: string;
 };
+
+export type RequestDocument = {
+  path: string;
+  hash: string;
+  name: string;
+};
+
+function parseDocumentsJson(raw: string | null): RequestDocument[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is RequestDocument =>
+      entry && typeof entry.path === "string" && typeof entry.hash === "string" && typeof entry.name === "string");
+  } catch {
+    return [];
+  }
+}
+
+export function getRequestDocuments(request: RequestRow): RequestDocument[] {
+  const parsed = parseDocumentsJson(request.documents_json);
+  if (parsed.length > 0) return parsed;
+  return [{ path: request.document_path, hash: request.document_hash, name: path.basename(request.document_path) }];
+}
 
 type ApprovalRow = {
   id: string;
@@ -121,12 +150,14 @@ type ProviderApi = {
   send(input: {
     request: RequestRow;
     signers: SignerInput[];
+    documents: RequestDocument[];
     apiKey?: string;
     testMode: boolean;
   }): Promise<ProviderSendResult>;
   sendEmbedded?: (input: {
     request: RequestRow;
     signers: SignerInput[];
+    documents: RequestDocument[];
     apiKey?: string;
     clientId?: string;
     testMode: boolean;
@@ -151,6 +182,11 @@ type ProviderApi = {
     apiKey?: string;
     reason?: string;
   }): Promise<{ remoteResponse: unknown }>;
+  remind?: (input: {
+    providerRequestId: string;
+    apiKey?: string;
+    email?: string;
+  }) => Promise<{ remoteResponse: unknown }>;
 };
 
 function getRequestRow(db: SqliteDb, requestId: string): RequestRow {
@@ -253,13 +289,14 @@ function persistRequestProviderMetadata(
   );
 }
 
-function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider } {
+function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; documents: RequestDocument[]; normalizedProvider: SignProvider } {
   return {
     ...request,
     provider: request.provider ?? getPersistedProvider(request),
     provider_request_id: getProviderRequestId(request),
     provider_status: getProviderStatusValue(request),
     signatureIds: parseSignatureIdsJson(request.signature_ids_json),
+    documents: getRequestDocuments(request),
     normalizedProvider: getPersistedProvider(request),
   };
 }
@@ -306,7 +343,8 @@ function getProviderApi(provider: SignProvider): ProviderApi {
     return {
       async send(input) {
         const result = await sendDocuSignEnvelope({
-          documentPath: input.request.document_path,
+          documentPath: input.documents[0].path,
+          documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
           metadata: {
@@ -323,7 +361,8 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       },
       async sendEmbedded(input) {
         const result = await sendDocuSignEnvelope({
-          documentPath: input.request.document_path,
+          documentPath: input.documents[0].path,
+          documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
           metadata: {
@@ -380,6 +419,10 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         const remoteResponse = await voidDocuSignEnvelope(input.providerRequestId, input.reason ?? "Voided via sign CLI");
         return { remoteResponse };
       },
+      async remind(input) {
+        const remoteResponse = await remindDocuSignEnvelope(input.providerRequestId);
+        return { remoteResponse };
+      },
     };
   }
 
@@ -389,7 +432,8 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         const result = await sendSignWellDocument({
           apiKey: input.apiKey ?? "",
           baseUrl: resolveSignWellBaseUrl(),
-          documentPath: input.request.document_path,
+          documentPath: input.documents[0].path,
+          documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
           metadata: {
@@ -409,7 +453,8 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         const result = await sendSignWellDocument({
           apiKey: input.apiKey ?? "",
           baseUrl: resolveSignWellBaseUrl(),
-          documentPath: input.request.document_path,
+          documentPath: input.documents[0].path,
+          documentPaths: input.documents.map((doc) => doc.path),
           title: input.request.title,
           signers: input.signers,
           metadata: {
@@ -457,6 +502,10 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         const remoteResponse = await cancelSignWellDocument(input.apiKey ?? "", input.providerRequestId, resolveSignWellBaseUrl());
         return { remoteResponse };
       },
+      async remind(input) {
+        const remoteResponse = await remindSignWellDocument(input.apiKey ?? "", input.providerRequestId, resolveSignWellBaseUrl());
+        return { remoteResponse };
+      },
     };
   }
 
@@ -464,7 +513,8 @@ function getProviderApi(provider: SignProvider): ProviderApi {
     async send(input) {
       const result = await sendSignatureRequest({
         apiKey: input.apiKey ?? "",
-        documentPath: input.request.document_path,
+        documentPath: input.documents[0].path,
+        documentPaths: input.documents.map((doc) => doc.path),
         title: input.request.title,
         signers: input.signers,
         metadata: {
@@ -484,7 +534,8 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       const result = await createEmbeddedSignatureRequest({
         apiKey: input.apiKey ?? "",
         clientId: input.clientId ?? "",
-        documentPath: input.request.document_path,
+        documentPath: input.documents[0].path,
+        documentPaths: input.documents.map((doc) => doc.path),
         title: input.request.title,
         signers: input.signers,
         metadata: {
@@ -519,6 +570,13 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       const remoteResponse = await cancelDropboxSignatureRequest(input.apiKey ?? "", input.providerRequestId);
       return { remoteResponse };
     },
+    async remind(input) {
+      if (!input.email) {
+        throw new Error("Dropbox Sign reminders require --email <signer email>.");
+      }
+      const remoteResponse = await remindDropboxSignatureRequest(input.apiKey ?? "", input.providerRequestId, input.email);
+      return { remoteResponse };
+    },
   };
 }
 
@@ -537,6 +595,7 @@ export function createSigningRequest(
 ): {
   requestId: string;
   documentHash: string;
+  documents: RequestDocument[];
   tokens: Array<{ signer: SignerInput; token: string; expiresAt: string }>;
 } {
   if (input.signers.length === 0) {
@@ -562,19 +621,33 @@ export function createSigningRequest(
   const now = input.now ?? new Date();
   const requestId = createId("req");
   const createdAt = nowIso(now);
-  const documentPath = path.resolve(input.documentPath);
-  const documentHash = sha256(readFileSync(documentPath));
+  const allPaths = (input.documentPaths && input.documentPaths.length > 0
+    ? input.documentPaths
+    : input.documentPath ? [input.documentPath] : []);
+  if (allPaths.length === 0) {
+    throw new Error("At least one --document is required.");
+  }
+  const documents: RequestDocument[] = allPaths.map((rawPath) => {
+    const resolved = path.resolve(rawPath);
+    return {
+      path: resolved,
+      hash: sha256(readFileSync(resolved)),
+      name: path.basename(resolved),
+    };
+  });
+  const primary = documents[0];
   const signersJson = stableStringify(sortedSigners);
+  const documentsJson = stableStringify(documents);
 
   db.prepare(
     `INSERT INTO requests (
-      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, documents_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     requestId,
     input.title,
-    documentPath,
-    documentHash,
+    primary.path,
+    primary.hash,
     "created",
     input.provider ?? null,
     null,
@@ -583,22 +656,25 @@ export function createSigningRequest(
     null,
     null,
     signersJson,
+    documentsJson,
     createdAt,
     createdAt,
   );
 
-  db.prepare(
-    `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    createId("art"),
-    requestId,
-    "document",
-    documentPath,
-    documentHash,
-    stableStringify({ title: input.title }),
-    createdAt,
-  );
+  for (const document of documents) {
+    db.prepare(
+      `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      createId("art"),
+      requestId,
+      "document",
+      document.path,
+      document.hash,
+      stableStringify({ title: input.title, name: document.name }),
+      createdAt,
+    );
+  }
 
   const tokens = sortedSigners.map((signer) => {
     const token = createToken();
@@ -615,7 +691,7 @@ export function createSigningRequest(
       signer.order,
       sha256(token),
       tokenHint(token),
-      documentHash,
+      primary.hash,
       expiresAt,
       null,
       null,
@@ -634,8 +710,9 @@ export function createSigningRequest(
     eventType: "request.created",
     payload: {
       title: input.title,
-      documentPath,
-      documentHash,
+      documentPath: primary.path,
+      documentHash: primary.hash,
+      documents,
       provider: input.provider ?? null,
       signers: sortedSigners,
       tokenTtlMinutes: input.tokenTtlMinutes,
@@ -644,7 +721,7 @@ export function createSigningRequest(
     now,
   });
 
-  return { requestId, documentHash, tokens };
+  return { requestId, documentHash: primary.hash, documents, tokens };
 }
 
 export function approveSigningRequest(
@@ -725,6 +802,7 @@ export async function sendSigningRequest(
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
   const signers = JSON.parse(request.signers_json) as SignerInput[];
+  const documents = getRequestDocuments(request);
   const providerApi = getProviderApi(provider);
   const send = input.providerSend
     ? input.providerSend
@@ -732,7 +810,8 @@ export async function sendSigningRequest(
     ? async () => {
       const result = await input.sendRequest!({
         apiKey: input.apiKey ?? "",
-        documentPath: request.document_path,
+        documentPath: documents[0].path,
+        documentPaths: documents.map((doc) => doc.path),
         title: request.title,
         signers,
         metadata: {
@@ -748,7 +827,7 @@ export async function sendSigningRequest(
         responseBody: result.responseBody,
       };
     }
-    : () => providerApi.send({ request, signers, apiKey: input.apiKey, testMode: input.testMode });
+    : () => providerApi.send({ request, signers, documents, apiKey: input.apiKey, testMode: input.testMode });
 
   const result = await send();
   const now = input.now ?? new Date();
@@ -1027,12 +1106,14 @@ export async function sendEmbeddedSigningRequest(
   }
 
   const signers = JSON.parse(request.signers_json) as SignerInput[];
+  const documents = getRequestDocuments(request);
   const sendEmbedded = input.createEmbeddedRequest && provider === "dropbox"
     ? async () => {
       const result = await input.createEmbeddedRequest!({
         apiKey: input.apiKey ?? "",
         clientId: input.clientId ?? "",
-        documentPath: request.document_path,
+        documentPath: documents[0].path,
+        documentPaths: documents.map((doc) => doc.path),
         title: request.title,
         signers,
         metadata: {
@@ -1051,6 +1132,7 @@ export async function sendEmbeddedSigningRequest(
     : () => providerApi.sendEmbedded!({
       request,
       signers,
+      documents,
       apiKey: input.apiKey,
       clientId: input.clientId,
       testMode: input.testMode,
@@ -1477,6 +1559,45 @@ export async function cancelSigningRequest(
   };
 }
 
+export async function remindSigningRequest(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    provider?: SignProvider;
+    apiKey?: string;
+    email?: string;
+    now?: Date;
+  },
+): Promise<{
+  provider: SignProvider;
+  providerRequestId: string;
+  remoteResponse: unknown;
+}> {
+  const request = getRequestRow(db, input.requestId);
+  const provider = input.provider ?? getPersistedProvider(request);
+  const providerRequestId = getProviderRequestId(request);
+  if (!providerRequestId) {
+    throw new Error(`Request has not been sent to ${providerDisplayName(provider)} yet; nothing to remind.`);
+  }
+  const providerApi = getProviderApi(provider);
+  if (!providerApi.remind) {
+    throw new Error(`Reminders are not yet supported for ${providerDisplayName(provider)}.`);
+  }
+  const result = await providerApi.remind({
+    providerRequestId,
+    apiKey: input.apiKey,
+    email: input.email,
+  });
+  const now = input.now ?? new Date();
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.reminded",
+    payload: { provider, providerRequestId, email: input.email ?? null },
+    now,
+  });
+  return { provider, providerRequestId, remoteResponse: result.remoteResponse };
+}
+
 export function listSigningRequests(
   db: SqliteDb,
   input: { provider?: SignProvider; status?: string; limit?: number } = {},
@@ -1718,6 +1839,83 @@ export async function exportAuditBundle(
   });
 
   return { outDir, files, manifestPath, chain };
+}
+
+export type BulkRowResult = {
+  row: number;
+  ok: boolean;
+  requestId: string | null;
+  signerEmail: string | null;
+  error: string | null;
+  providerRequestId: string | null;
+};
+
+export async function bulkSendFromCsv(
+  db: SqliteDb,
+  input: {
+    rows: Array<Record<string, string>>;
+    titleTemplate: string;
+    documentPaths: string[];
+    provider: SignProvider;
+    apiKey?: string;
+    testMode: boolean;
+    tokenTtlMinutes?: number;
+    onProgress?: (event: { row: number; total: number; phase: "send" | "create" | "done" | "error"; signerEmail?: string; requestId?: string; error?: string }) => void;
+  },
+): Promise<{
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: BulkRowResult[];
+}> {
+  const onProgress = input.onProgress ?? (() => {});
+  const results: BulkRowResult[] = [];
+  let succeeded = 0;
+  let failed = 0;
+  for (let index = 0; index < input.rows.length; index += 1) {
+    const row = input.rows[index];
+    const rowNumber = index + 1;
+    const signerEmail = (row.email ?? row.signer_email ?? "").trim();
+    const signerName = (row.name ?? row.signer_name ?? "").trim();
+    if (!signerEmail || !signerName) {
+      const error = "CSV row is missing name and/or email columns.";
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "error", error });
+      results.push({ row: rowNumber, ok: false, requestId: null, signerEmail: signerEmail || null, error, providerRequestId: null });
+      failed += 1;
+      continue;
+    }
+    const title = input.titleTemplate
+      .replaceAll("{{email}}", signerEmail)
+      .replaceAll("{{name}}", signerName)
+      .replaceAll("{{row}}", String(rowNumber));
+    try {
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "create", signerEmail });
+      const created = createSigningRequest(db, {
+        title,
+        documentPaths: input.documentPaths,
+        signers: [{ name: signerName, email: signerEmail, order: 1 }],
+        tokenTtlMinutes: input.tokenTtlMinutes ?? 30,
+        provider: input.provider,
+        autoApprove: true,
+      });
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "send", signerEmail, requestId: created.requestId });
+      const sent = await sendSigningRequest(db, {
+        requestId: created.requestId,
+        provider: input.provider,
+        apiKey: input.apiKey,
+        testMode: input.testMode,
+      });
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "done", signerEmail, requestId: created.requestId });
+      results.push({ row: rowNumber, ok: true, requestId: created.requestId, signerEmail, error: null, providerRequestId: sent.signatureRequestId });
+      succeeded += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "error", signerEmail, error: message });
+      results.push({ row: rowNumber, ok: false, requestId: null, signerEmail, error: message, providerRequestId: null });
+      failed += 1;
+    }
+  }
+  return { total: input.rows.length, succeeded, failed, results };
 }
 
 export async function runSignWellSmokeTest(

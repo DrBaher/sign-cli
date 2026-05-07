@@ -3,6 +3,8 @@ import process from "node:process";
 import { openDatabase } from "./lib/db.js";
 import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
 import { loadEnv } from "./lib/env.js";
+import { loadCsvFile } from "./lib/csv.js";
+import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wizard.js";
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
@@ -10,6 +12,7 @@ import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySig
 import {
   approveSigningRequest,
   buildProviderMatrix,
+  bulkSendFromCsv,
   cancelSigningRequest,
   createSigningRequest,
   exportAuditBundle,
@@ -23,6 +26,7 @@ import {
   listAuditEvents,
   listSigningRequests,
   REQUEST_WATCH_EXIT_CODES,
+  remindSigningRequest,
   runDoctor,
   runProviderAccountCheck,
   runSignWellSmokeTest,
@@ -89,8 +93,8 @@ function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFla
 }
 
 function printUsage(): void {
-  console.log(`sign request create --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell]
-sign request run-email --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell] [--test-mode true]
+  console.log(`sign request create --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell]
+sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell] [--test-mode true]
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
@@ -98,11 +102,14 @@ sign request sign-url --request-id <id> --signature-id <signatureId> [--provider
 sign request launch-embedded --request-id <id> --signature-id <signatureId> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--return-url https://...]
 sign request fetch-final --request-id <id> [--provider dropbox|docusign|signwell] [--out ./artifacts/signed.pdf]
 sign request status --request-id <id> [--provider dropbox|docusign|signwell]
-sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
+sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf] [--log human|json]
+sign request remind --request-id <id> [--provider dropbox|docusign|signwell] [--email signer@example.com]
 sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
+sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell] [--title "Bulk for {{email}}"] [--test-mode true]
 sign request list [--provider dropbox|docusign|signwell] [--status created|sent|approved|completed|canceled] [--limit 100]
 sign request show --request-id <id>
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
+sign init [--out ./.env]
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
@@ -166,6 +173,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (root === "init") {
+    const { io, close } = createDefaultIo();
+    try {
+      const answers = await collectInitAnswers(io);
+      const result = writeEnvFile(answers, { path: flagValue(parsed, "out") });
+      console.log(JSON.stringify({ provider: answers.provider, ...result }, null, 2));
+    } finally {
+      close();
+    }
+    return;
+  }
+
   if (root === "smoke" && sub === "signwell") {
     const documentPath = flagValue(parsed, "document", true)!;
     const apiKey = requireSignWellApiKey();
@@ -214,12 +233,15 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "run-email") {
     const title = flagValue(parsed, "title", true)!;
-    const documentPath = flagValue(parsed, "document", true)!;
+    const documentPaths = flagValues(parsed, "document");
+    if (documentPaths.length === 0) {
+      throw new Error("Missing required flag: --document");
+    }
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "30");
     const created = createSigningRequest(db, {
       title,
-      documentPath,
+      documentPaths,
       signers,
       tokenTtlMinutes,
       provider: selectedProvider,
@@ -244,12 +266,15 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "create") {
     const title = flagValue(parsed, "title", true)!;
-    const documentPath = flagValue(parsed, "document", true)!;
+    const documentPaths = flagValues(parsed, "document");
+    if (documentPaths.length === 0) {
+      throw new Error("Missing required flag: --document");
+    }
     const signers = flagValues(parsed, "signer").map(parseSignerSpec);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
     const result = createSigningRequest(db, {
       title,
-      documentPath,
+      documentPaths,
       signers,
       tokenTtlMinutes,
       provider: selectedProvider,
@@ -456,6 +481,46 @@ async function main(): Promise<void> {
     const limit = flagValue(parsed, "limit") ? Number(flagValue(parsed, "limit")) : undefined;
     const rows = listSigningRequests(db, { provider, status, limit });
     console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "remind") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const email = flagValue(parsed, "email");
+    const result = await remindSigningRequest(db, {
+      requestId,
+      provider: selectedProvider,
+      apiKey: resolveProviderApiKey(selectedProvider),
+      email,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "bulk") {
+    const csvPath = flagValue(parsed, "csv", true)!;
+    const documentPaths = flagValues(parsed, "document");
+    if (documentPaths.length === 0) {
+      throw new Error("Missing required flag: --document");
+    }
+    const titleTemplate = flagValue(parsed, "title") ?? "Bulk send for {{email}}";
+    const tokenTtlMinutes = flagValue(parsed, "token-ttl-minutes") ? Number(flagValue(parsed, "token-ttl-minutes")) : undefined;
+    const rows = await loadCsvFile(csvPath);
+    const logger = createLogger({ mode: resolveLogMode(flagValue(parsed, "log")) });
+    const result = await bulkSendFromCsv(db, {
+      rows,
+      titleTemplate,
+      documentPaths,
+      provider: selectedProvider,
+      apiKey: resolveProviderApiKey(selectedProvider),
+      testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
+      tokenTtlMinutes,
+      onProgress: (event) => {
+        logger.info("bulk", event);
+      },
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.failed > 0) process.exitCode = 3;
     return;
   }
 

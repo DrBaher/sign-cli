@@ -7,6 +7,7 @@ import type { SignerInput } from "./util.js";
 
 export type DocuSignSendInput = {
   documentPath: string;
+  documentPaths?: string[];
   title: string;
   signers: SignerInput[];
   metadata: Record<string, string>;
@@ -175,21 +176,26 @@ export async function sendDocuSignEnvelope(input: DocuSignSendInput): Promise<{
   responseBody: unknown;
 }> {
   const config = requireDocuSignConfig();
-  const documentBuffer = readFileSync(path.resolve(input.documentPath));
+  const allPaths = (input.documentPaths && input.documentPaths.length > 0)
+    ? input.documentPaths
+    : [input.documentPath];
+  const documents = allPaths.map((rawPath, index) => {
+    const resolved = path.resolve(rawPath);
+    const buffer = readFileSync(resolved);
+    return {
+      documentBase64: buffer.toString("base64"),
+      name: path.basename(resolved),
+      fileExtension: path.extname(resolved).replace(/^\./u, "") || "pdf",
+      documentId: String(index + 1),
+    };
+  });
   const body = await docusignJsonRequest(config, {
     method: "POST",
     endpoint: "/envelopes",
     body: {
       emailSubject: input.title,
       status: "sent",
-      documents: [
-        {
-          documentBase64: documentBuffer.toString("base64"),
-          name: path.basename(input.documentPath),
-          fileExtension: path.extname(input.documentPath).replace(/^\./u, "") || "pdf",
-          documentId: "1",
-        },
-      ],
+      documents,
       recipients: {
         signers: input.signers
           .slice()
@@ -285,6 +291,22 @@ export async function getDocuSignRecipientView(input: {
     throw new Error("DocuSign recipient view did not return a url.");
   }
   return { url: body.url, responseBody: body };
+}
+
+export async function remindDocuSignEnvelope(envelopeId: string): Promise<unknown> {
+  const config = requireDocuSignConfig();
+  return docusignJsonRequest(config, {
+    method: "PUT",
+    endpoint: `/envelopes/${envelopeId}/notification`,
+    body: {
+      useAccountDefaults: false,
+      reminders: {
+        reminderEnabled: "true",
+        reminderDelay: "0",
+        reminderFrequency: "1",
+      },
+    },
+  });
 }
 
 export async function voidDocuSignEnvelope(envelopeId: string, reason: string): Promise<unknown> {

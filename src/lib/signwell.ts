@@ -10,6 +10,7 @@ export type SignWellSendInput = {
   apiKey: string;
   baseUrl?: string;
   documentPath: string;
+  documentPaths?: string[];
   title: string;
   signers: SignerInput[];
   metadata: Record<string, string>;
@@ -116,7 +117,17 @@ export async function sendSignWellDocument(input: SignWellSendInput): Promise<{
   status: string;
   responseBody: unknown;
 }> {
-  const documentBuffer = await readFile(path.resolve(input.documentPath));
+  const allPaths = (input.documentPaths && input.documentPaths.length > 0)
+    ? input.documentPaths
+    : [input.documentPath];
+  const files = await Promise.all(allPaths.map(async (rawPath) => {
+    const resolved = path.resolve(rawPath);
+    const buffer = await readFile(resolved);
+    return {
+      name: path.basename(resolved),
+      file_base64: buffer.toString("base64"),
+    };
+  }));
   const signers = sortSigners(input.signers);
   const body = await signWellJsonRequest<any>(input.apiKey, {
     method: "POST",
@@ -131,12 +142,7 @@ export async function sendSignWellDocument(input: SignWellSendInput): Promise<{
       with_signature_page: true,
       apply_signing_order: signers.length > 1,
       embedded_signing: Boolean(input.embeddedSigning),
-      files: [
-        {
-          name: path.basename(input.documentPath),
-          file_base64: documentBuffer.toString("base64"),
-        },
-      ],
+      files,
       recipients: signers.map((signer, index) => ({
         id: String(index + 1),
         name: signer.name,
@@ -228,6 +234,14 @@ export async function cancelSignWellDocument(apiKey: string, documentId: string,
   return signWellJsonRequest(apiKey, {
     method: "DELETE",
     endpoint: `/documents/${documentId}`,
+    baseUrl,
+  });
+}
+
+export async function remindSignWellDocument(apiKey: string, documentId: string, baseUrl?: string): Promise<unknown> {
+  return signWellJsonRequest(apiKey, {
+    method: "POST",
+    endpoint: `/documents/${documentId}/remind`,
     baseUrl,
   });
 }

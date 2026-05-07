@@ -84,6 +84,9 @@ export function openDatabase(dbPath: string): SqliteDb {
   if (!hasColumn(db, "requests", "provider_status")) {
     db.exec("ALTER TABLE requests ADD COLUMN provider_status TEXT");
   }
+  if (!hasColumn(db, "requests", "documents_json")) {
+    db.exec("ALTER TABLE requests ADD COLUMN documents_json TEXT");
+  }
 
   return db;
 }
