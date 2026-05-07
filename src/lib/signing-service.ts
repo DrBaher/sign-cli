@@ -2882,21 +2882,146 @@ export function declineSigningRequestAsSigner(
   };
 }
 
-export type SignerInboxItem = LocalSignerInboxEntry;
+export type InboxTokenInfo = {
+  signerEmail: string;
+  tokenHint: string;
+  expiresAt: string;
+  expired: boolean;
+  expiresSoon: boolean;
+};
+
+export type SignerInboxItem = LocalSignerInboxEntry & { tokens: InboxTokenInfo[] };
+
+const INBOX_EXPIRES_SOON_MINUTES = 5;
+
+function loadInboxTokens(
+  db: SqliteDb,
+  requestId: string,
+  signers: SignerInput[],
+  now: Date,
+): InboxTokenInfo[] {
+  const rows = db.prepare(
+    "SELECT signer_email, token_hint, expires_at FROM approvals WHERE request_id = ?",
+  ).all(requestId) as Array<{ signer_email: string; token_hint: string; expires_at: string }>;
+  const known = new Set(signers.map((s) => s.email.trim().toLowerCase()));
+  const nowMs = now.getTime();
+  const soonThreshold = INBOX_EXPIRES_SOON_MINUTES * 60_000;
+  return rows
+    .filter((row) => known.has(row.signer_email.trim().toLowerCase()))
+    .map((row) => {
+      const expMs = new Date(row.expires_at).getTime();
+      const expired = expMs < nowMs;
+      return {
+        signerEmail: row.signer_email,
+        tokenHint: row.token_hint,
+        expiresAt: row.expires_at,
+        expired,
+        expiresSoon: !expired && expMs - nowMs < soonThreshold,
+      };
+    });
+}
 
 export function listSignerInbox(
   db: SqliteDb,
-  input: { signerEmail?: string } = {},
+  input: { signerEmail?: string; now?: Date } = {},
 ): SignerInboxItem[] {
   const inbox = listLocalSignerInbox(input.signerEmail);
-  // Hydrate requestId from DB when local record doesn't have it (defensive — sendLocalDocument already stores it).
+  const now = input.now ?? new Date();
   return inbox.map((entry) => {
-    if (entry.requestId) return entry;
-    const row = db.prepare(
-      "SELECT id FROM requests WHERE provider = 'local' AND provider_request_id = ?",
-    ).get(entry.documentId) as { id: string } | undefined;
-    return row ? { ...entry, requestId: row.id } : entry;
+    let requestId = entry.requestId;
+    if (!requestId) {
+      const row = db.prepare(
+        "SELECT id FROM requests WHERE provider = 'local' AND provider_request_id = ?",
+      ).get(entry.documentId) as { id: string } | undefined;
+      requestId = row?.id ?? null;
+    }
+    const tokens = requestId ? loadInboxTokens(db, requestId, entry.signers, now) : [];
+    return { ...entry, requestId, tokens };
   });
+}
+
+export type ReissueSignerTokenResult = {
+  requestId: string;
+  signerEmail: string;
+  token: string;
+  tokenHint: string;
+  expiresAt: string;
+};
+
+export function reissueSignerToken(
+  db: SqliteDb,
+  input: { requestId: string; signerEmail: string; tokenTtlMinutes?: number; now?: Date },
+): ReissueSignerTokenResult {
+  const request = getRequestRow(db, input.requestId);
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
+  const normalizedEmail = input.signerEmail.trim().toLowerCase();
+  const signer = signers.find((s) => s.email.trim().toLowerCase() === normalizedEmail);
+  if (!signer) {
+    throw new SignCliError({
+      code: "SIGNER_NOT_RECIPIENT",
+      message: `Signer ${input.signerEmail} is not a recipient on request ${request.id}.`,
+      details: { requestId: request.id },
+    });
+  }
+  const provider = getPersistedProvider(request);
+  if (provider === "local" && getProviderRequestId(request)) {
+    try {
+      const state = getLocalDocumentSigningState(getProviderRequestId(request)!);
+      const alreadySigned = state.signedBy.some(
+        (entry) => entry.email.trim().toLowerCase() === normalizedEmail,
+      );
+      if (alreadySigned) {
+        throw new SignCliError({
+          code: "SIGNER_ALREADY_SIGNED",
+          message: `Signer ${signer.email} has already signed request ${request.id}; reissuing the token has no effect.`,
+          details: { requestId: request.id, signer: signer.email },
+        });
+      }
+    } catch (error) {
+      if (error instanceof SignCliError) throw error;
+      // record missing on disk — proceed with reissue
+    }
+  }
+  const approvalRow = db.prepare(
+    "SELECT id FROM approvals WHERE request_id = ? AND lower(signer_email) = lower(?)",
+  ).get(request.id, signer.email) as { id: string } | undefined;
+  if (!approvalRow) {
+    throw new SignCliError({
+      code: "INTERNAL",
+      message: `No approval row found for ${signer.email} on request ${request.id}.`,
+    });
+  }
+  const ttl = Number.isFinite(input.tokenTtlMinutes) && (input.tokenTtlMinutes ?? 0) > 0
+    ? input.tokenTtlMinutes!
+    : 30;
+  const now = input.now ?? new Date();
+  const newToken = createToken();
+  const newHash = sha256(newToken);
+  const newHint = tokenHint(newToken);
+  const expiresAt = nowIso(new Date(now.getTime() + ttl * 60_000));
+  db.prepare(
+    "UPDATE approvals SET token_hash = ?, token_hint = ?, expires_at = ? WHERE id = ?",
+  ).run(newHash, newHint, expiresAt, approvalRow.id);
+
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.signer_token_reissued",
+    payload: {
+      signerEmail: signer.email,
+      tokenHint: newHint,
+      expiresAt,
+      ttlMinutes: ttl,
+    },
+    now,
+  });
+
+  return {
+    requestId: request.id,
+    signerEmail: signer.email,
+    token: newToken,
+    tokenHint: newHint,
+    expiresAt,
+  };
 }
 
 export type FetchUnsignedDocumentResult = {

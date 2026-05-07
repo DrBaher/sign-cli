@@ -35,6 +35,7 @@ import {
   listSignerInbox,
   listSigningRequests,
   REQUEST_WATCH_EXIT_CODES,
+  reissueSignerToken,
   remindSigningRequest,
   runDoctor,
   runProviderAccountCheck,
@@ -116,6 +117,7 @@ sign sign --request-id <id> --token <token> [--signer-email <e>] [--signer-name 
 sign signer list [--signer-email <e>]
 sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [--signer-email <e>]
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
+sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minutes 30]
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -424,6 +426,19 @@ async function main(): Promise<void> {
       token,
       signerEmail: flagValue(parsed, "signer-email"),
       reason: flagValue(parsed, "reason"),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "reissue-token") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const signerEmail = flagValue(parsed, "signer-email", true)!;
+    const ttl = flagValue(parsed, "token-ttl-minutes");
+    const result = reissueSignerToken(db, {
+      requestId,
+      signerEmail,
+      tokenTtlMinutes: ttl ? Number(ttl) : undefined,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
