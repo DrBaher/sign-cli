@@ -260,6 +260,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     command: "audit export",
     summary: "Bundle audit.json + signed.pdf + audit.tsr + manifest.json.",
   },
+  {
+    command: "audit export-jsonld",
+    summary: "Export the audit chain as a JSON-LD document with a stable @context (interoperable with external auditors / SBOM-style tooling).",
+    flags: [
+      { name: "--request-id", required: true, description: "Request id." },
+      { name: "--out", required: true, description: "Output path for audit.jsonld." },
+    ],
+  },
   // Webhooks
   {
     command: "webhook verify",
