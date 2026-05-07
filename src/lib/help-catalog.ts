@@ -268,6 +268,19 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--out", required: true, description: "Output path for audit.jsonld." },
     ],
   },
+  {
+    command: "audit sign-head",
+    summary: "Sign the latest audit chain hash with the local signer key. Produces a small standalone proof.",
+    flags: [
+      { name: "--request-id", required: true, description: "Request id." },
+      { name: "--out", description: "Optional path to write the proof JSON." },
+    ],
+  },
+  {
+    command: "audit verify-head",
+    summary: "Verify a head-proof JSON file produced by `audit sign-head`.",
+    flags: [{ name: "--proof", required: true, description: "Path to the proof JSON." }],
+  },
   // Webhooks
   {
     command: "webhook verify",

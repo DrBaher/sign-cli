@@ -3846,3 +3846,81 @@ export async function exportAuditChainAsJsonLd(
 
   return { outPath: resolved, bytes: text.length, events: events.length };
 }
+
+export type AuditHeadProof = {
+  requestId: string;
+  events: number;
+  hashSelf: string;
+  signature: string;
+  signatureBytes: number;
+  signerSubject: string;
+  signerCertificatePem: string;
+  signedAt: string;
+};
+
+// Signs the latest audit_events.hash_self for the request with the local CLI
+// key, producing a small standalone proof a verifier can check with openssl
+// or the matching X.509 cert. Records audit.head_signed in the chain so the
+// proof itself is anchored.
+export async function signAuditHead(
+  db: SqliteDb,
+  input: { requestId: string; outPath?: string; now?: Date },
+): Promise<AuditHeadProof> {
+  const cryptoMod = await import("node:crypto");
+  const { loadOrCreateLocalSigner } = await import("./local-keys.js");
+  getRequestRow(db, input.requestId);
+  const lastEvent = db.prepare(
+    "SELECT hash_self FROM audit_events WHERE request_id = ? ORDER BY id DESC LIMIT 1",
+  ).get(input.requestId) as { hash_self: string } | undefined;
+  if (!lastEvent) {
+    throw new Error(`No audit events to sign for request ${input.requestId}.`);
+  }
+  const signer = loadOrCreateLocalSigner();
+  const signerObj = cryptoMod.createSign("RSA-SHA256");
+  signerObj.update(Buffer.from(lastEvent.hash_self, "utf8"));
+  const signatureBuf = signerObj.sign(signer.privateKeyPem);
+  const now = input.now ?? new Date();
+  const eventsCountRow = db.prepare(
+    "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ?",
+  ).get(input.requestId) as { n: number };
+  const proof: AuditHeadProof = {
+    requestId: input.requestId,
+    events: eventsCountRow.n,
+    hashSelf: lastEvent.hash_self,
+    signature: signatureBuf.toString("base64"),
+    signatureBytes: signatureBuf.length,
+    signerSubject: signer.certificate.subject ?? "unknown",
+    signerCertificatePem: signer.certificatePem,
+    signedAt: now.toISOString(),
+  };
+  if (input.outPath) {
+    const fs = await import("node:fs");
+    const pathMod = await import("node:path");
+    const resolved = pathMod.resolve(input.outPath);
+    fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+    fs.writeFileSync(resolved, JSON.stringify(proof, null, 2));
+  }
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "audit.head_signed",
+    payload: {
+      hashSelf: lastEvent.hash_self,
+      events: proof.events,
+      signatureBytes: proof.signatureBytes,
+      signerSubject: proof.signerSubject,
+    },
+    now,
+  });
+  return proof;
+}
+
+export async function verifyAuditHeadProof(proof: AuditHeadProof): Promise<{ ok: boolean; signerSubject: string }> {
+  const cryptoMod = await import("node:crypto");
+  const cert = new cryptoMod.X509Certificate(proof.signerCertificatePem);
+  const verify = cryptoMod.createVerify("RSA-SHA256");
+  verify.update(Buffer.from(proof.hashSelf, "utf8"));
+  return {
+    ok: verify.verify(cert.publicKey, Buffer.from(proof.signature, "base64")),
+    signerSubject: cert.subject ?? "",
+  };
+}
