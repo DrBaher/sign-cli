@@ -153,15 +153,42 @@ export function parseRequestSpec(raw: unknown): RequestSpec {
   };
 }
 
-export function loadRequestSpec(filePath: string): RequestSpec {
-  let raw: unknown;
+export function applyRequestSpecTemplate(
+  text: string,
+  params: Record<string, string>,
+): string {
+  return text.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/gu, (_match, key: string) => {
+    const trimmed = key.trim();
+    if (!(trimmed in params)) {
+      throw new SignCliError({
+        code: "INVALID_SPEC",
+        message: `Spec template references unknown param "${trimmed}". Pass --param ${trimmed}=<value>.`,
+        details: { missingParam: trimmed, providedParams: Object.keys(params) },
+      });
+    }
+    return params[trimmed];
+  });
+}
+
+export function loadRequestSpec(filePath: string, params: Record<string, string> = {}): RequestSpec {
+  let text: string;
   try {
-    const text = readFileSync(filePath, "utf8");
-    raw = JSON.parse(text);
+    text = readFileSync(filePath, "utf8");
   } catch (error) {
     throw new SignCliError({
       code: "INVALID_SPEC",
       message: `Failed to load request spec from ${filePath}: ${(error as Error).message}`,
+      details: { filePath: path.resolve(filePath) },
+    });
+  }
+  const substituted = Object.keys(params).length > 0 ? applyRequestSpecTemplate(text, params) : text;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(substituted);
+  } catch (error) {
+    throw new SignCliError({
+      code: "INVALID_SPEC",
+      message: `Failed to parse request spec from ${filePath}: ${(error as Error).message}`,
       details: { filePath: path.resolve(filePath) },
     });
   }

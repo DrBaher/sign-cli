@@ -3195,3 +3195,65 @@ export function readLocalDocumentForResource(db: SqliteDb, requestId: string): L
     sha256: document.sha256,
   };
 }
+
+export type ReceiptResult = {
+  outDir: string;
+  manifestPath: string;
+  signaturePath: string;
+  certPath: string;
+  manifestSha256: string;
+  signatureBytes: number;
+  files: Array<{ name: string; sha256: string; bytes: number }>;
+  chain: AuditVerificationResult;
+};
+
+export async function exportRequestReceipt(
+  db: SqliteDb,
+  input: { requestId: string; outDir: string; now?: Date },
+): Promise<ReceiptResult> {
+  const bundle = await exportAuditBundle(db, {
+    requestId: input.requestId,
+    outDir: input.outDir,
+    now: input.now,
+  });
+  const fs = await import("node:fs");
+  const cryptoMod = await import("node:crypto");
+  const { loadOrCreateLocalSigner } = await import("./local-keys.js");
+
+  const manifestBytes = fs.readFileSync(bundle.manifestPath);
+  const manifestHash = sha256(manifestBytes);
+  const signer = loadOrCreateLocalSigner();
+  const signerObj = cryptoMod.createSign("RSA-SHA256");
+  signerObj.update(manifestBytes);
+  const signature = signerObj.sign(signer.privateKeyPem);
+
+  const pathMod = await import("node:path");
+  const signaturePath = pathMod.join(bundle.outDir, "manifest.sig");
+  const certPath = pathMod.join(bundle.outDir, "manifest.cert.pem");
+  fs.writeFileSync(signaturePath, signature);
+  fs.writeFileSync(certPath, signer.certificatePem);
+
+  const now = input.now ?? new Date();
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "request.receipt_signed",
+    payload: {
+      outDir: bundle.outDir,
+      manifestSha256: manifestHash,
+      signatureBytes: signature.length,
+      signerSubject: signer.certificate.subject,
+    },
+    now,
+  });
+
+  return {
+    outDir: bundle.outDir,
+    manifestPath: bundle.manifestPath,
+    signaturePath,
+    certPath,
+    manifestSha256: manifestHash,
+    signatureBytes: signature.length,
+    files: bundle.files,
+    chain: bundle.chain,
+  };
+}
