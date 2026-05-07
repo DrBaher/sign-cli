@@ -351,6 +351,11 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db backend",
+    summary: "Report the active storage backend (sqlite | postgres). The Postgres backend is a documented stub today — see MIGRATION.md.",
+    flags: [{ name: "--backend", description: "Override SIGN_DB_BACKEND for this call." }],
+  },
+  {
     command: "mcp serve",
     summary: "Stdio Model Context Protocol server (tools + resources for LLM agents).",
   },
