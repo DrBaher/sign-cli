@@ -442,6 +442,19 @@ Example wiring (Claude Desktop's `claude_desktop_config.json`):
 }
 ```
 
+## HTTP API (for non-MCP clients)
+
+`sign serve --port 4000 [--bind 127.0.0.1] [--auth-token <t>]` exposes the same surface as the MCP server but over plain HTTP/JSON. Bearer auth via `--auth-token` or `SIGN_HTTP_AUTH_TOKEN`.
+
+```bash
+curl -s http://127.0.0.1:4000/v1/health
+curl -s -X POST http://127.0.0.1:4000/v1/sign \
+  -H "content-type: application/json" \
+  -d '{"request_id":"req_abc","token":"alice-tok-..."}'
+```
+
+All responses are `{ ok: true, result: ... }` on success or the standard `formatCliError` envelope (`{ ok: false, error: { code, message, ... } }`) on failure. Routes: `/v1/health`, `/v1/signer/list`, `/v1/signer/fetch-document`, `/v1/sign`, `/v1/signer/decline`, `/v1/signer/reissue-token`, `/v1/request/show`, `/v1/request/status`, `/v1/request/receipt`, `/v1/audit/verify`, `/v1/audit/scan`.
+
 ## Signer-side flow (agent-friendly)
 
 For `--provider local`, an automated agent can act as a signer end-to-end without an email link. The hosted providers (Dropbox Sign / DocuSign / SignWell) still require their own email/embedded UI; these signer commands refuse non-local providers with a clear error.

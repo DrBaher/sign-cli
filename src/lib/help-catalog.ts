@@ -301,6 +301,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Stdio Model Context Protocol server (tools + resources for LLM agents).",
   },
   {
+    command: "serve",
+    summary: "HTTP REST surface mirroring the MCP tools for non-MCP clients. Bearer auth via --auth-token or SIGN_HTTP_AUTH_TOKEN.",
+    flags: [
+      { name: "--port", description: "Port to bind (default 4000)." },
+      { name: "--bind", description: "Bind address (default 127.0.0.1)." },
+      { name: "--auth-token", description: "Required Bearer token; falls back to SIGN_HTTP_AUTH_TOKEN env var." },
+    ],
+  },
+  {
     command: "mcp tools",
     summary: "Print the MCP tool catalog without starting the server.",
   },

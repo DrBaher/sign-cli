@@ -10,6 +10,7 @@ import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
 import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
+import { startHttpApiServer } from "./lib/http-api.js";
 import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
 import { runSignerWatch } from "./lib/signer-watch.js";
@@ -166,6 +167,7 @@ sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
+sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>]   (HTTP REST surface mirroring the MCP tools for non-MCP clients)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
@@ -1068,6 +1070,35 @@ async function main(): Promise<void> {
           ? "X-DocuSign-Signature-1/-2/-3 HMAC (base64 or hex) using DOCUSIGN_WEBHOOK_SECRET"
           : "event_hash via API key HMAC",
       expectedSuccessExitCode: REQUEST_WATCH_EXIT_CODES.completed,
+    }, null, 2));
+    return;
+  }
+
+  if (root === "serve") {
+    const port = Number(flagValue(parsed, "port") ?? "4000");
+    const bind = flagValue(parsed, "bind") ?? "127.0.0.1";
+    const authToken = flagValue(parsed, "auth-token") ?? process.env.SIGN_HTTP_AUTH_TOKEN ?? undefined;
+    const server = startHttpApiServer({ db, port, bind, authToken });
+    const shutdown = () => server.close(() => process.exit(0));
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    console.log(JSON.stringify({
+      listening: true,
+      url: `http://${bind}:${port}`,
+      authRequired: Boolean(authToken),
+      routes: [
+        "GET /v1/health",
+        "POST /v1/signer/list",
+        "POST /v1/signer/fetch-document",
+        "POST /v1/sign",
+        "POST /v1/signer/decline",
+        "POST /v1/signer/reissue-token",
+        "POST /v1/request/show",
+        "POST /v1/request/status",
+        "POST /v1/request/receipt",
+        "POST /v1/audit/verify",
+        "POST /v1/audit/scan",
+      ],
     }, null, 2));
     return;
   }
