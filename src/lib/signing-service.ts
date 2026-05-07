@@ -67,6 +67,7 @@ import {
   type LocalSignerInboxEntry,
 } from "./local-provider.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
+import { SignCliError } from "./sign-error.js";
 import {
   createId,
   createToken,
@@ -2499,15 +2500,20 @@ export async function runSignWellSmokeTest(
 
 function ensureLocalProvider(request: RequestRow, provider: SignProvider): void {
   if (provider !== "local") {
-    throw new Error(
-      `Signer-side flow only supports --provider local; this request uses ${providerDisplayName(provider)}. ` +
-      `Use the provider's email link to sign.`,
-    );
+    throw new SignCliError({
+      code: "NON_LOCAL_PROVIDER",
+      message: `Signer-side flow only supports --provider local; this request uses ${providerDisplayName(provider)}. Use the provider's email link to sign.`,
+      hint: "Hosted providers deliver email/embedded sign URLs to recipients; only the local simulator exposes signer-side commands.",
+      details: { requestId: request.id, provider },
+    });
   }
   if (!getProviderRequestId(request)) {
-    throw new Error(
-      `Request ${request.id} has not been sent to the local provider yet; nothing to sign.`,
-    );
+    throw new SignCliError({
+      code: "REQUEST_NOT_SENT",
+      message: `Request ${request.id} has not been sent to the local provider yet; nothing to sign.`,
+      hint: `Run \`sign request send --request-id ${request.id} --provider local\` first.`,
+      details: { requestId: request.id },
+    });
   }
 }
 
@@ -2519,17 +2525,31 @@ function resolveSignerFromToken(
 ): { signer: SignerInput; approval: ApprovalRow } {
   const trimmed = (token ?? "").trim();
   if (!trimmed) {
-    throw new Error("--token is required for signer-side commands.");
+    throw new SignCliError({
+      code: "TOKEN_REQUIRED",
+      message: "--token is required for signer-side commands.",
+      hint: "Pass the per-signer token from the `tokens[]` array `request create` returned to the requester.",
+    });
   }
   const tokenHash = sha256(trimmed);
   const approval = db.prepare(
     "SELECT * FROM approvals WHERE request_id = ? AND token_hash = ?",
   ).get(request.id, tokenHash) as ApprovalRow | undefined;
   if (!approval) {
-    throw new Error(`Token does not match any signer on request ${request.id}.`);
+    throw new SignCliError({
+      code: "TOKEN_INVALID",
+      message: `Token does not match any signer on request ${request.id}.`,
+      hint: "Confirm the token + --request-id pair the requester sent you.",
+      details: { requestId: request.id },
+    });
   }
   if (new Date(approval.expires_at).getTime() < now.getTime()) {
-    throw new Error(`Token has expired (expiresAt=${approval.expires_at}).`);
+    throw new SignCliError({
+      code: "TOKEN_EXPIRED",
+      message: `Token has expired (expiresAt=${approval.expires_at}).`,
+      hint: "Ask the requester to re-issue with a longer --token-ttl-minutes, or re-run `request create`.",
+      details: { requestId: request.id, expiresAt: approval.expires_at },
+    });
   }
   return {
     signer: {
@@ -2549,9 +2569,12 @@ function assertSignerEmailMatchesToken(
   const expected = signerEmailFlag.trim().toLowerCase();
   const actual = signer.email.trim().toLowerCase();
   if (expected !== actual) {
-    throw new Error(
-      `--signer-email ${signerEmailFlag} does not match the signer (${signer.email}) the token authorizes.`,
-    );
+    throw new SignCliError({
+      code: "TOKEN_SIGNER_MISMATCH",
+      message: `--signer-email ${signerEmailFlag} does not match the signer (${signer.email}) the token authorizes.`,
+      hint: "Drop --signer-email (the token alone is sufficient) or fix the email to match.",
+      details: { tokenSigner: signer.email, flag: signerEmailFlag },
+    });
   }
 }
 
@@ -2570,9 +2593,12 @@ function applySignerSafetyChecks(
     const expected = checks.requireHash.trim().toLowerCase();
     const actual = (request.document_hash ?? "").trim().toLowerCase();
     if (expected !== actual) {
-      throw new Error(
-        `Pre-sign safety check failed: --require-hash ${expected} does not match request document hash ${actual}.`,
-      );
+      throw new SignCliError({
+        code: "PRE_SIGN_HASH_MISMATCH",
+        message: `Pre-sign safety check failed: --require-hash ${expected} does not match request document hash ${actual}.`,
+        hint: "Re-fetch the document with `signer fetch-document` and confirm the SHA-256 the requester told you to expect.",
+        details: { expected, actual },
+      });
     }
   }
   if (checks.requireTitle) {
@@ -2580,21 +2606,29 @@ function applySignerSafetyChecks(
     try {
       pattern = new RegExp(checks.requireTitle);
     } catch (error) {
-      throw new Error(`--require-title is not a valid regular expression: ${(error as Error).message}`);
+      throw new SignCliError({
+        code: "PRE_SIGN_TITLE_BAD_REGEX",
+        message: `--require-title is not a valid regular expression: ${(error as Error).message}`,
+        details: { input: checks.requireTitle },
+      });
     }
     if (!pattern.test(request.title)) {
-      throw new Error(
-        `Pre-sign safety check failed: title ${JSON.stringify(request.title)} does not match --require-title /${checks.requireTitle}/.`,
-      );
+      throw new SignCliError({
+        code: "PRE_SIGN_TITLE_MISMATCH",
+        message: `Pre-sign safety check failed: title ${JSON.stringify(request.title)} does not match --require-title /${checks.requireTitle}/.`,
+        details: { title: request.title, pattern: checks.requireTitle },
+      });
     }
   }
   if (checks.requireSignerEmail) {
     const expected = checks.requireSignerEmail.trim().toLowerCase();
     const actual = signer.email.trim().toLowerCase();
     if (expected !== actual) {
-      throw new Error(
-        `Pre-sign safety check failed: --require-signer-email ${expected} does not match resolved signer ${actual}.`,
-      );
+      throw new SignCliError({
+        code: "PRE_SIGN_SIGNER_MISMATCH",
+        message: `Pre-sign safety check failed: --require-signer-email ${expected} does not match resolved signer ${actual}.`,
+        details: { expected, actual },
+      });
     }
   }
 }
@@ -2640,7 +2674,12 @@ export function signSigningRequest(
     (entry) => entry.email.trim().toLowerCase() === normalizedSigner,
   );
   if (alreadySigned) {
-    throw new Error(`Signer ${signer.email} has already signed request ${request.id}.`);
+    throw new SignCliError({
+      code: "SIGNER_ALREADY_SIGNED",
+      message: `Signer ${signer.email} has already signed request ${request.id}.`,
+      hint: "Each token can sign its slot at most once; if you need to undo, the requester must `request cancel` and start over.",
+      details: { requestId: request.id, signer: signer.email },
+    });
   }
   const result = signLocalDocument(providerRequestId, {
     signerEmail: signer.email,

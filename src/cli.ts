@@ -8,6 +8,7 @@ import { backupDatabase, verifyDatabase } from "./lib/db-admin.js";
 import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wizard.js";
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
+import { formatCliError, SignCliError } from "./lib/sign-error.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
@@ -80,7 +81,11 @@ function parseArgs(argv: string[]): ParsedArgs {
 function flagValue(args: ParsedArgs, name: string, required = false): string | undefined {
   const values = args.flags.get(name);
   if ((!values || values.length === 0) && required) {
-    throw new Error(`Missing required flag: --${name}`);
+    throw new SignCliError({
+      code: "MISSING_FLAG",
+      message: `Missing required flag: --${name}`,
+      details: { flag: name },
+    });
   }
   return values?.at(-1);
 }
@@ -763,10 +768,19 @@ async function main(): Promise<void> {
   }
 
   printUsage();
-  throw new Error(`Unknown command: ${parsed.positionals.join(" ")}`);
+  throw new SignCliError({
+    code: "UNKNOWN_COMMAND",
+    message: `Unknown command: ${parsed.positionals.join(" ")}`,
+    details: { positionals: parsed.positionals },
+  });
 }
 
 main().catch((error) => {
-  console.error(redactErrorMessage(error));
+  const envelope = formatCliError(error);
+  if (process.env.SIGN_ERROR_FORMAT === "text") {
+    console.error(redactErrorMessage(error));
+  } else {
+    console.error(JSON.stringify(envelope, null, 2));
+  }
   process.exitCode = 1;
 });
