@@ -426,6 +426,8 @@ Tool arguments are validated against each tool's `inputSchema` before the handle
 
 **Resources** — `resources/list` enumerates `request://<id>` (snapshot), `request://<id>/document` (unsigned PDF, base64), and `request://<id>/audit` (audit chain) for every local-provider request. Use `resources/read` to fetch any of them. This lets MCP clients browse and prefetch without needing prior knowledge of the tool catalog.
 
+**Prompts** — `prompts/list` advertises four agent-as-signer templates (`review_and_sign`, `policy_check`, `inbox_triage`, `verify_receipt`). `prompts/get` fills in the request id / token / paths and returns a fully-formed user-message text the LLM can act on. Reduces cognitive load: agents don't have to re-derive the safety contract each session.
+
 Example wiring (Claude Desktop's `claude_desktop_config.json`):
 
 ```json
