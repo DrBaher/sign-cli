@@ -153,6 +153,7 @@ sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minu
 sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
+sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -605,6 +606,47 @@ async function main(): Promise<void> {
     const spec = loadPolicySpec(specPath);
     const outcome = runSignerPolicy(db, { requestId, token, spec, dryRun });
     console.log(JSON.stringify(outcome, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "policy" && action === "try") {
+    const specPath = flagValue(parsed, "spec", true)!;
+    const { evaluatePolicy, loadPolicySpec } = await import("./lib/policy-engine.js");
+    const spec = loadPolicySpec(specPath);
+
+    const snapshotPath = flagValue(parsed, "snapshot");
+    let title: string;
+    let documentSha256: string;
+    let signerEmail: string;
+    if (snapshotPath) {
+      const fs = await import("node:fs");
+      const snap = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+      title = snap?.request?.title ?? "";
+      documentSha256 = snap?.request?.document_hash ?? "";
+      const fromSignersJson = (() => {
+        if (typeof snap?.request?.signers_json !== "string") return undefined;
+        try {
+          const parsed = JSON.parse(snap.request.signers_json);
+          return Array.isArray(parsed) ? parsed[0]?.email : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      signerEmail = flagValue(parsed, "signer-email")
+        ?? snap?.signedBy?.[0]?.email
+        ?? fromSignersJson
+        ?? "";
+    } else {
+      title = flagValue(parsed, "title", true)!;
+      documentSha256 = flagValue(parsed, "document-sha256", true)!;
+      signerEmail = flagValue(parsed, "signer-email", true)!;
+    }
+
+    const decision = evaluatePolicy(spec, { title, documentSha256, signerEmail });
+    console.log(JSON.stringify({
+      ctx: { title, documentSha256, signerEmail },
+      decision,
+    }, null, 2));
     return;
   }
 
