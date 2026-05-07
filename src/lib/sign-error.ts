@@ -19,6 +19,8 @@ export type SignErrorCode =
   | "INVALID_SPEC"
   | "POLICY_VIOLATION"
   | "UNKNOWN_TOOL"
+  | "INVALID_ARGS"
+  | "UNKNOWN_RESOURCE"
   | "INTERNAL";
 
 export type SignErrorEnvelope = {

@@ -111,6 +111,7 @@ test("dispatchMcp tools/list lists every signer-side tool", { concurrency: false
         "audit_verify",
         "request_show",
         "request_status",
+        "request_watch",
         "sign",
         "signer_decline",
         "signer_fetch_document",
