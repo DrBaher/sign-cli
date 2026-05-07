@@ -17,6 +17,7 @@ import {
 } from "./signing-service.js";
 
 import { SIGN_CLI_VERSION } from "./help-catalog.js";
+import { buildOpenApiSpec } from "./openapi.js";
 
 type RouteHandler = (db: SqliteDb, body: Record<string, unknown>) => Promise<unknown> | unknown;
 
@@ -29,6 +30,8 @@ function str(body: Record<string, unknown>, key: string, required: boolean = fal
 
 const ROUTES: Record<string, RouteHandler> = {
   "GET /v1/health": (_db) => ({ ok: true, version: SIGN_CLI_VERSION }),
+
+  "GET /v1/openapi.json": (_db) => buildOpenApiSpec(),
 
   "POST /v1/signer/list": (db, body) =>
     listSignerInbox(db, { signerEmail: str(body, "signer_email") }),
@@ -154,7 +157,12 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
       const result = await handler(opts.db, body);
       res.statusCode = 200;
       res.setHeader("content-type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: true, result }));
+      // OpenAPI consumers expect the raw spec, not the wrapped envelope.
+      if (route === "GET /v1/openapi.json") {
+        res.end(JSON.stringify(result));
+      } else {
+        res.end(JSON.stringify({ ok: true, result }));
+      }
     } catch (error) {
       const envelope = formatCliError(error);
       res.statusCode = envelope.error.code === "INTERNAL" ? 500 : 400;
