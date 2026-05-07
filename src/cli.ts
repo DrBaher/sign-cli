@@ -8,6 +8,7 @@ import { backupDatabase, verifyDatabase } from "./lib/db-admin.js";
 import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wizard.js";
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
+import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
 import {
@@ -177,7 +178,7 @@ sign request create --spec ./request.json [--param key=value ...]   (variable su
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
 sign webhook ingest [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>] [--request-id <id>]
-sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
+sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>] [--pretty true]`);
 }
 
 function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>): string | undefined {
@@ -991,6 +992,7 @@ async function main(): Promise<void> {
         : "/dropbox/callback";
     const webhookPath = flagValue(parsed, "path") ?? defaultPath;
     const requestId = flagValue(parsed, "request-id");
+    const pretty = (flagValue(parsed, "pretty") ?? "false") === "true";
     const server = startWebhookServer({
       dbPath,
       apiKey,
@@ -999,8 +1001,17 @@ async function main(): Promise<void> {
       requestId,
       provider: webhookProvider,
     });
-    process.on("SIGINT", () => server.close(() => process.exit(0)));
-    process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    let detachPretty: (() => void) | null = null;
+    if (pretty) {
+      console.error(`[webhook listen --pretty] tailing audit events to stderr; one line per event…`);
+      detachPretty = attachPrettyAuditPrinter(db, process.stderr);
+    }
+    const shutdown = () => {
+      if (detachPretty) detachPretty();
+      server.close(() => process.exit(0));
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
     console.log(JSON.stringify({
       listening: true,
       provider: webhookProvider,
