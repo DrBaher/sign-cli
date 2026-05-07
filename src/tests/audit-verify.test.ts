@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { appendAuditEvent, verifyAuditChain } from "../lib/audit.js";
+import { withAuditTamperingAllowed } from "../lib/db.js";
 import { createSigningRequest, verifyRequestAuditChain } from "../lib/signing-service.js";
 import { createDb, createDocumentFixture, makeTempDb } from "./helpers.js";
 
@@ -47,7 +48,9 @@ test("verifyAuditChain detects payload tampering", () => {
       tokenTtlMinutes: 60,
       now: new Date(),
     });
-    db.prepare("UPDATE audit_events SET payload_json = ? WHERE request_id = ?").run("{\"hacked\":true}", created.requestId);
+    withAuditTamperingAllowed(db, () => {
+      db.prepare("UPDATE audit_events SET payload_json = ? WHERE request_id = ?").run("{\"hacked\":true}", created.requestId);
+    });
 
     const result = verifyRequestAuditChain(db, created.requestId);
     assert.equal(result.valid, false);
@@ -74,7 +77,9 @@ test("verifyAuditChain detects deleted middle event", () => {
     appendAuditEvent(db, { requestId: created.requestId, eventType: "evt.b", payload: { b: 2 }, now: new Date() });
 
     const middle = db.prepare("SELECT id FROM audit_events WHERE request_id = ? ORDER BY id ASC LIMIT 1 OFFSET 1").get(created.requestId) as { id: number };
-    db.prepare("DELETE FROM audit_events WHERE id = ?").run(middle.id);
+    withAuditTamperingAllowed(db, () => {
+      db.prepare("DELETE FROM audit_events WHERE id = ?").run(middle.id);
+    });
 
     const result = verifyAuditChain(db, created.requestId);
     assert.equal(result.valid, false);

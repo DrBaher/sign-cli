@@ -117,5 +117,46 @@ export function openDatabase(dbPath: string): SqliteDb {
     db.exec("ALTER TABLE requests ADD COLUMN prefills_json TEXT");
   }
 
+  installAuditAppendOnlyTriggers(db);
+
   return db;
+}
+
+const AUDIT_NO_UPDATE_TRIGGER = `
+CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+  BEFORE UPDATE ON audit_events
+  BEGIN
+    SELECT RAISE(ABORT, 'audit_events is append-only; UPDATE not permitted');
+  END;
+`;
+const AUDIT_NO_DELETE_TRIGGER = `
+CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+  BEFORE DELETE ON audit_events
+  BEGIN
+    SELECT RAISE(ABORT, 'audit_events is append-only; DELETE not permitted');
+  END;
+`;
+
+export function installAuditAppendOnlyTriggers(db: SqliteDb): void {
+  db.exec(AUDIT_NO_UPDATE_TRIGGER);
+  db.exec(AUDIT_NO_DELETE_TRIGGER);
+}
+
+export function dropAuditAppendOnlyTriggers(db: SqliteDb): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS audit_events_no_update;
+    DROP TRIGGER IF EXISTS audit_events_no_delete;
+  `);
+}
+
+// Test-only helper. Drops the audit append-only triggers, runs `fn`, then
+// re-installs them. Use from tests that simulate an attacker bypassing the
+// guard to verify the hash-chain still catches the tamper.
+export function withAuditTamperingAllowed<T>(db: SqliteDb, fn: () => T): T {
+  dropAuditAppendOnlyTriggers(db);
+  try {
+    return fn();
+  } finally {
+    installAuditAppendOnlyTriggers(db);
+  }
 }
