@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { readFileSync, mkdirSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { loadOrCreateSignerKeyPair } from "./local-keys.js";
-import { signPdfLocally } from "./local-pdf-signer.js";
+import { signPdfLocally, signPdfLocallyMultiSigner } from "./local-pdf-signer.js";
 import { sha256 } from "./util.js";
 import type { PrefillInput, SignerInput } from "./util.js";
 
@@ -230,14 +230,30 @@ trailer << /Root 1 0 R /Size 5 >>
 %%EOF`, "latin1");
   }
 
-  const result = signPdfLocally(sourcePdf);
+  // Use per-signer keys for the embedded PAdES signature(s) when we have signedBy
+  // entries — one PKCS#7 dict per signer, each with that signer's own cert.
   const dir = storeDir();
   mkdirSync(dir, { recursive: true });
   const outPath = path.join(dir, `${documentId}.signed.pdf`);
-  writeFileSync(outPath, result.signedPdf);
+  let signedPdf: Buffer;
+  if (record.signedBy.length > 0) {
+    const multi = signPdfLocallyMultiSigner(
+      sourcePdf,
+      record.signedBy.map((entry) => ({
+        keyPair: loadOrCreateSignerKeyPair({ email: entry.email, name: entry.name }),
+        signerLabel: entry.email,
+        signingTime: entry.signedAt ? new Date(entry.signedAt) : undefined,
+      })),
+    );
+    signedPdf = multi.signedPdf;
+  } else {
+    const result = signPdfLocally(sourcePdf);
+    signedPdf = result.signedPdf;
+  }
+  writeFileSync(outPath, signedPdf);
   record.signedPdfPath = outPath;
   writeRecord(record);
-  return result.signedPdf;
+  return signedPdf;
 }
 
 export function cancelLocalDocument(documentId: string): unknown {
