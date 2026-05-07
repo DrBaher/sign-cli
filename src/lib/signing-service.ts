@@ -3990,3 +3990,78 @@ export async function verifyAuditHeadProof(proof: AuditHeadProof): Promise<{ ok:
     signerSubject: cert.subject ?? "",
   };
 }
+
+export type BulkReceiptOutcome = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    requestId: string;
+    title: string;
+    status: string;
+    ok: boolean;
+    outDir: string | null;
+    error: { code: string; message: string } | null;
+  }>;
+};
+
+export async function issueAuditReceiptsBulk(
+  db: SqliteDb,
+  input: {
+    outDir: string;
+    provider?: SignProvider;
+    status?: string;
+    limit?: number;
+    onProgress?: (event: { row: number; total: number; requestId: string; phase: "issuing" | "done" | "error"; error?: string }) => void;
+    now?: Date;
+  },
+): Promise<BulkReceiptOutcome> {
+  const fs = await import("node:fs");
+  const pathMod = await import("node:path");
+  const onProgress = input.onProgress ?? (() => {});
+
+  const where: string[] = [];
+  const params: (string | number | null)[] = [];
+  if (input.provider) { where.push("provider = ?"); params.push(input.provider); }
+  if (input.status) { where.push("status = ?"); params.push(input.status); }
+  const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 5000) : 1000;
+  const rows = db.prepare(
+    `SELECT id, title, status FROM requests
+     ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY datetime(created_at) DESC
+     LIMIT ${limit}`,
+  ).all(...params) as Array<{ id: string; title: string; status: string }>;
+
+  fs.mkdirSync(pathMod.resolve(input.outDir), { recursive: true });
+  const results: BulkReceiptOutcome["results"] = [];
+  let succeeded = 0;
+  let failed = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const rowOutDir = pathMod.join(pathMod.resolve(input.outDir), row.id);
+    onProgress({ row: i + 1, total: rows.length, requestId: row.id, phase: "issuing" });
+    try {
+      const eventCount = (db.prepare(
+        "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ?",
+      ).get(row.id) as { n: number } | undefined)?.n ?? 0;
+      if (eventCount === 0) {
+        throw new SignCliError({
+          code: "INVALID_SPEC",
+          message: `Request ${row.id} has no audit events; refusing to issue a receipt for an empty chain.`,
+        });
+      }
+      await exportRequestReceipt(db, { requestId: row.id, outDir: rowOutDir, now: input.now });
+      results.push({ requestId: row.id, title: row.title, status: row.status, ok: true, outDir: rowOutDir, error: null });
+      succeeded += 1;
+      onProgress({ row: i + 1, total: rows.length, requestId: row.id, phase: "done" });
+    } catch (error) {
+      const err = error as { code?: unknown; message?: string };
+      const code = typeof err?.code === "string" ? err.code : "INTERNAL";
+      const message = typeof err?.message === "string" ? err.message : String(error);
+      results.push({ requestId: row.id, title: row.title, status: row.status, ok: false, outDir: null, error: { code, message } });
+      failed += 1;
+      onProgress({ row: i + 1, total: rows.length, requestId: row.id, phase: "error", error: message });
+    }
+  }
+  return { total: rows.length, succeeded, failed, results };
+}

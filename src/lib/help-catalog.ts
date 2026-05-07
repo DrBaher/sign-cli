@@ -320,6 +320,16 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Verify a head-proof JSON file produced by `audit sign-head`.",
     flags: [{ name: "--proof", required: true, description: "Path to the proof JSON." }],
   },
+  {
+    command: "audit issue-receipts",
+    summary: "Bulk-issue one signed receipt-bundle per matching request (filters: --provider, --status, --limit). Exits 3 if any row failed.",
+    flags: [
+      { name: "--out", required: true, description: "Parent directory; one subdir per request id." },
+      { name: "--provider", description: "Only consider requests for this provider." },
+      { name: "--status", description: "Only consider requests with this status (e.g. completed)." },
+      { name: "--limit", description: "Cap rows processed (default 1000, max 5000)." },
+    ],
+  },
   // Webhooks
   {
     command: "webhook verify",
