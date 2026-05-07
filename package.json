@@ -62,15 +62,18 @@
     "build:sea": "npm run bundle && node scripts/build-sea.mjs",
     "start": "node dist/cli.js",
     "webhook:listen": "node dist/cli.js webhook listen",
+    "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "coverage": "npm run build && node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=coverage.lcov --test-reporter=spec --test-reporter-destination=stdout dist/tests/*.test.js",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
     "@dropbox/sign": "^1.10.0"
   },
   "devDependencies": {
+    "@types/node": "^22.19.17",
     "esbuild": "^0.28.0",
-    "postject": "^1.0.0-alpha.6"
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "5.9"
   }
 }

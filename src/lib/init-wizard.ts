@@ -43,6 +43,7 @@ const PROVIDER_FIELDS: Record<SignProvider, Array<{ key: string; description: st
     { key: "DOCUSIGN_BASE_PATH", description: "Base path", default: "https://demo.docusign.net/restapi" },
     { key: "DOCUSIGN_PRIVATE_KEY_PATH", description: "Path to RSA private key file", default: "./keys/docusign-private.key" },
   ],
+  local: [],
 };
 
 export async function collectInitAnswers(io: WizardIo): Promise<InitAnswers> {
