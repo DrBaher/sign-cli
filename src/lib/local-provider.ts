@@ -320,6 +320,25 @@ export function listLocalSignerInbox(signerEmail?: string): LocalSignerInboxEntr
   return entries.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
+export type LocalDocumentSigningState = {
+  documentId: string;
+  status: LocalDocumentRecord["status"];
+  signedBy: LocalDocumentRecord["signedBy"];
+  declinedBy: string | null;
+  declineReason: string | null;
+};
+
+export function getLocalDocumentSigningState(documentId: string): LocalDocumentSigningState {
+  const record = readRecord(documentId);
+  return {
+    documentId: record.id,
+    status: record.status,
+    signedBy: record.signedBy,
+    declinedBy: record.declinedBy,
+    declineReason: record.declineReason,
+  };
+}
+
 export type LocalDocumentReadResult = {
   documentId: string;
   title: string;

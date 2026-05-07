@@ -58,12 +58,14 @@ import {
   downloadLocalCompletedPdf,
   fetchLocalDocumentStatus,
   fetchLocalEmbeddedSignUrl,
+  getLocalDocumentSigningState,
   listLocalSignerInbox,
   normalizeLocalStatus,
   readLocalDocument,
   remindLocalDocument,
   sendLocalDocument,
   signLocalDocument,
+  type LocalDocumentSigningState,
   type LocalSignerInboxEntry,
 } from "./local-provider.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
@@ -1890,13 +1892,112 @@ export function ingestWebhookPayload(
   return { verified, requestId, eventType };
 }
 
-export function getRequestSnapshot(db: SqliteDb, requestId: string): {
+export type EnrichedApproval = ApprovalRow & {
+  tokenHint: string;
+  expiresAt: string;
+  approvedAt: string | null;
+  usedAt: string | null;
+  expired: boolean;
+  signed: boolean;
+};
+
+export type RequestSnapshot = {
   request: RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider };
-  approvals: ApprovalRow[];
-} {
+  approvals: EnrichedApproval[];
+  signedBy: LocalDocumentSigningState["signedBy"] | null;
+  declinedBy: string | null;
+  declineReason: string | null;
+  nextSteps: string[];
+};
+
+function buildNextSteps(input: {
+  request: RequestRow & { normalizedProvider: SignProvider };
+  approvals: EnrichedApproval[];
+  signingState: LocalDocumentSigningState | null;
+}): string[] {
+  const { request, approvals, signingState } = input;
+  const status = (request.status ?? "").toLowerCase();
+  const provider = request.normalizedProvider;
+  const steps: string[] = [];
+
+  if (status === "created") {
+    steps.push(`Run \`sign request send --request-id ${request.id} --provider ${provider}\` to dispatch.`);
+    return steps;
+  }
+
+  if (status === "canceled" || status === "declined") {
+    steps.push(`Request is terminal (status=${status}). Start a new request if needed.`);
+    return steps;
+  }
+
+  if (status === "completed") {
+    steps.push(`Run \`sign request fetch-final --request-id ${request.id} --provider ${provider}\` to download the signed PDF.`);
+    steps.push(`Run \`sign audit verify --request-id ${request.id}\` to confirm the audit chain.`);
+    return steps;
+  }
+
+  // status is "sent" / "partially_approved" / etc.
+  if (provider === "local") {
+    const pending = approvals.filter((approval) => !approval.signed);
+    if (pending.length === 0) {
+      steps.push(`All signers have signed; status will flip to completed on the next \`request status\` poll.`);
+    }
+    for (const approval of pending) {
+      const expiryNote = approval.expired ? "EXPIRED" : `expires ${approval.expiresAt}`;
+      steps.push(
+        `Signer ${approval.signer_email} still needs to sign — token tokenHint=${approval.tokenHint} (${expiryNote}). ` +
+        `Run \`sign sign --request-id ${request.id} --token <signer-token>\`.`,
+      );
+    }
+    if (signingState?.declinedBy) {
+      steps.push(`A signer declined (${signingState.declinedBy}); the request will not auto-recover.`);
+    }
+  } else {
+    steps.push(`Use the provider's email or embedded sign URL to sign — signer-side commands are local-only.`);
+    steps.push(`Run \`sign request watch --request-id ${request.id} --provider ${provider}\` to wait for completion.`);
+  }
+  return steps;
+}
+
+export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?: Date } = {}): RequestSnapshot {
+  const requestRow = getRequestRow(db, requestId);
+  const request = serializeRequestRow(requestRow);
+  const rawApprovals = listApprovalRows(db, requestId);
+  const now = opts.now ?? new Date();
+  const nowMs = now.getTime();
+
+  let signingState: LocalDocumentSigningState | null = null;
+  if (request.normalizedProvider === "local" && request.provider_request_id) {
+    try {
+      signingState = getLocalDocumentSigningState(request.provider_request_id);
+    } catch {
+      signingState = null;
+    }
+  }
+
+  const signedEmails = new Set(
+    (signingState?.signedBy ?? []).map((entry) => entry.email.trim().toLowerCase()),
+  );
+
+  const approvals: EnrichedApproval[] = rawApprovals.map((approval) => ({
+    ...approval,
+    tokenHint: approval.token_hint,
+    expiresAt: approval.expires_at,
+    approvedAt: approval.approved_at,
+    usedAt: approval.used_at,
+    expired: new Date(approval.expires_at).getTime() < nowMs,
+    signed: signedEmails.has(approval.signer_email.trim().toLowerCase()),
+  }));
+
+  const nextSteps = buildNextSteps({ request, approvals, signingState });
+
   return {
-    request: serializeRequestRow(getRequestRow(db, requestId)),
-    approvals: listApprovalRows(db, requestId),
+    request,
+    approvals,
+    signedBy: signingState?.signedBy ?? null,
+    declinedBy: signingState?.declinedBy ?? null,
+    declineReason: signingState?.declineReason ?? null,
+    nextSteps,
   };
 }
 

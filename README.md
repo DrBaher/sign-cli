@@ -62,7 +62,7 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `request cancel` (Dropbox cancel / DocuSign void / SignWell delete; requires `--yes true`)
 - `request bulk --csv` (one request per CSV row; `--document` repeatable)
 - `request list` (local SQLite; filterable by `--provider` and `--status`)
-- `request show`
+- `request show` (enriched: `signedBy`, per-approval `tokenHint`/`expiresAt`/`expired`/`signed`, and a `nextSteps[]` array telling humans/agents what to do next)
 - `init` (interactive `.env` wizard)
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
 - `doctor`
