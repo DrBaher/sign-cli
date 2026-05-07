@@ -169,7 +169,7 @@ sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
-sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>]   (HTTP REST surface mirroring the MCP tools for non-MCP clients)
+sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
@@ -1098,13 +1098,18 @@ async function main(): Promise<void> {
     const port = Number(flagValue(parsed, "port") ?? "4000");
     const bind = flagValue(parsed, "bind") ?? "127.0.0.1";
     const authToken = flagValue(parsed, "auth-token") ?? process.env.SIGN_HTTP_AUTH_TOKEN ?? undefined;
-    const server = startHttpApiServer({ db, port, bind, authToken });
+    const certPath = flagValue(parsed, "tls-cert");
+    const keyPath = flagValue(parsed, "tls-key");
+    const caPath = flagValue(parsed, "tls-ca");
+    const tls = certPath && keyPath ? { certPath, keyPath, ...(caPath ? { caPath } : {}) } : undefined;
+    const server = startHttpApiServer({ db, port, bind, authToken, tls });
     const shutdown = () => server.close(() => process.exit(0));
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
     console.log(JSON.stringify({
       listening: true,
-      url: `http://${bind}:${port}`,
+      url: `${tls ? "https" : "http"}://${bind}:${port}`,
+      tls: Boolean(tls),
       authRequired: Boolean(authToken),
       routes: [
         "GET /v1/health",

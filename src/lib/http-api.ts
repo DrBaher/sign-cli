@@ -1,4 +1,6 @@
 import http from "node:http";
+import https from "node:https";
+import { readFileSync } from "node:fs";
 import type { SqliteDb } from "./db.js";
 import { formatCliError } from "./sign-error.js";
 import {
@@ -117,15 +119,16 @@ export type HttpServerOptions = {
   port: number;
   bind?: string;
   authToken?: string;
+  tls?: { certPath: string; keyPath: string; caPath?: string };
 };
 
 export function listMockHttpRoutes(): string[] {
   return Object.keys(ROUTES);
 }
 
-export function startHttpApiServer(opts: HttpServerOptions): http.Server {
+export function startHttpApiServer(opts: HttpServerOptions): http.Server | https.Server {
   const requireAuth = Boolean(opts.authToken);
-  const server = http.createServer(async (req, res) => {
+  const handler: http.RequestListener = async (req, res) => {
     const route = `${req.method ?? "GET"} ${(req.url ?? "/").split("?")[0]}`;
     const handler = ROUTES[route];
 
@@ -158,7 +161,21 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server {
       res.setHeader("content-type", "application/json; charset=utf-8");
       res.end(JSON.stringify(envelope));
     }
-  });
+  };
+
+  let server: http.Server | https.Server;
+  if (opts.tls) {
+    server = https.createServer(
+      {
+        cert: readFileSync(opts.tls.certPath),
+        key: readFileSync(opts.tls.keyPath),
+        ...(opts.tls.caPath ? { ca: readFileSync(opts.tls.caPath) } : {}),
+      },
+      handler,
+    );
+  } else {
+    server = http.createServer(handler);
+  }
   server.listen(opts.port, opts.bind ?? "127.0.0.1");
   return server;
 }
