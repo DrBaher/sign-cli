@@ -393,6 +393,36 @@ npm run start -- request watch \
 npm run start -- audit show --request-id <request_id>
 ```
 
+## Signer-side flow (agent-friendly)
+
+For `--provider local`, an automated agent can act as a signer end-to-end without an email link. The hosted providers (Dropbox Sign / DocuSign / SignWell) still require their own email/embedded UI; these signer commands will refuse non-local providers with a clear error.
+
+Set `SIGN_LOCAL_AUTOCOMPLETE=false` so the local provider holds at `sent` until each signer explicitly runs `sign sign` (otherwise the local simulator auto-completes after the first poll, which is convenient for demos but not for agent-as-signer testing).
+
+```bash
+# As the requester
+node dist/cli.js request create \
+  --title "Mutual NDA" --document ./nda.pdf \
+  --signer name:Alice,email:alice@example.com,order:1 \
+  --signer name:Bob,email:bob@example.com,order:2 \
+  --provider local --auto-approve true
+node dist/cli.js request send --request-id <id> --provider local
+
+# As the signer (agent)
+node dist/cli.js signer list --signer-email alice@example.com
+node dist/cli.js signer fetch-document --request-id <id> --signer-email alice@example.com --out ./nda-to-review.pdf
+node dist/cli.js sign --request-id <id> --signer-email alice@example.com \
+  --require-hash <expected sha256> --require-title "^Mutual NDA$" --require-signer-email alice@example.com
+# or, instead of signing:
+node dist/cli.js signer decline --request-id <id> --signer-email alice@example.com --reason "Terms changed"
+```
+
+Behavior the requester can rely on:
+
+- Multi-signer: the request status only flips to `completed` when every signer is in `signedBy[]`.
+- Pre-sign safety checks (`--require-hash`, `--require-title`, `--require-signer-email`) throw before any state mutation if the request doesn't match what the agent was told to expect — protecting a misbehaving requester from silently swapping the document or title.
+- Each signer-side action appends an audit event to the chain: `request.signed_by_signer`, `request.signer_declined`, `request.signer_fetched_document`. Run `audit verify --request-id <id>` to confirm the chain after signing.
+
 ## Seamless mode (recommended)
 
 1. `npm run start -- doctor`

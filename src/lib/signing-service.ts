@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { appendAuditEvent, verifyAuditChain } from "./audit.js";
 import type { AuditVerificationResult } from "./audit.js";
@@ -54,12 +54,17 @@ import {
 import {
   cancelLocalDocument,
   checkLocalAccount,
+  declineLocalDocument,
   downloadLocalCompletedPdf,
   fetchLocalDocumentStatus,
   fetchLocalEmbeddedSignUrl,
+  listLocalSignerInbox,
   normalizeLocalStatus,
+  readLocalDocument,
   remindLocalDocument,
   sendLocalDocument,
+  signLocalDocument,
+  type LocalSignerInboxEntry,
 } from "./local-provider.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
@@ -2489,5 +2494,287 @@ export async function runSignWellSmokeTest(
     finalPdf: watch.finalPdf,
     attempts: watch.attempts,
     elapsedMs: watch.elapsedMs,
+  };
+}
+
+function ensureLocalProvider(request: RequestRow, provider: SignProvider): void {
+  if (provider !== "local") {
+    throw new Error(
+      `Signer-side flow only supports --provider local; this request uses ${providerDisplayName(provider)}. ` +
+      `Use the provider's email link to sign.`,
+    );
+  }
+  if (!getProviderRequestId(request)) {
+    throw new Error(
+      `Request ${request.id} has not been sent to the local provider yet; nothing to sign.`,
+    );
+  }
+}
+
+function resolveLocalSigner(
+  request: RequestRow,
+  signerEmail?: string,
+): SignerInput {
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
+  if (signerEmail) {
+    const normalized = signerEmail.trim().toLowerCase();
+    const match = signers.find((signer) => signer.email.trim().toLowerCase() === normalized);
+    if (!match) {
+      throw new Error(`Signer ${signerEmail} is not a recipient on request ${request.id}.`);
+    }
+    return match;
+  }
+  if (signers.length === 1) return signers[0];
+  throw new Error(
+    `Request ${request.id} has multiple signers; pass --signer-email to pick one of: ` +
+    signers.map((signer) => signer.email).join(", "),
+  );
+}
+
+export type SignerSafetyChecks = {
+  requireHash?: string;
+  requireTitle?: string;
+  requireSignerEmail?: string;
+};
+
+function applySignerSafetyChecks(
+  request: RequestRow,
+  signer: SignerInput,
+  checks: SignerSafetyChecks,
+): void {
+  if (checks.requireHash) {
+    const expected = checks.requireHash.trim().toLowerCase();
+    const actual = (request.document_hash ?? "").trim().toLowerCase();
+    if (expected !== actual) {
+      throw new Error(
+        `Pre-sign safety check failed: --require-hash ${expected} does not match request document hash ${actual}.`,
+      );
+    }
+  }
+  if (checks.requireTitle) {
+    let pattern: RegExp;
+    try {
+      pattern = new RegExp(checks.requireTitle);
+    } catch (error) {
+      throw new Error(`--require-title is not a valid regular expression: ${(error as Error).message}`);
+    }
+    if (!pattern.test(request.title)) {
+      throw new Error(
+        `Pre-sign safety check failed: title ${JSON.stringify(request.title)} does not match --require-title /${checks.requireTitle}/.`,
+      );
+    }
+  }
+  if (checks.requireSignerEmail) {
+    const expected = checks.requireSignerEmail.trim().toLowerCase();
+    const actual = signer.email.trim().toLowerCase();
+    if (expected !== actual) {
+      throw new Error(
+        `Pre-sign safety check failed: --require-signer-email ${expected} does not match resolved signer ${actual}.`,
+      );
+    }
+  }
+}
+
+export type SignerSignResult = {
+  requestId: string;
+  providerRequestId: string;
+  signerEmail: string;
+  signerName: string;
+  requestStatus: string;
+  signedBy: Array<{ email: string; name: string; signedAt: string }>;
+  totalSigners: number;
+  remainingSigners: number;
+  signedAt: string;
+};
+
+export function signSigningRequest(
+  db: SqliteDb,
+  input: {
+    requestId: string;
+    signerEmail?: string;
+    signerName?: string;
+    now?: Date;
+  } & SignerSafetyChecks,
+): SignerSignResult {
+  const request = getRequestRow(db, input.requestId);
+  const provider = getPersistedProvider(request);
+  ensureLocalProvider(request, provider);
+  const signer = resolveLocalSigner(request, input.signerEmail);
+  applySignerSafetyChecks(request, signer, {
+    requireHash: input.requireHash,
+    requireTitle: input.requireTitle,
+    requireSignerEmail: input.requireSignerEmail,
+  });
+
+  const providerRequestId = getProviderRequestId(request)!;
+  const now = input.now ?? new Date();
+  const result = signLocalDocument(providerRequestId, {
+    signerEmail: signer.email,
+    signerName: input.signerName ?? signer.name,
+    now,
+  });
+
+  const requestStatus = result.status === "completed" ? "completed" : "sent";
+  persistRequestProviderMetadata(db, {
+    requestId: request.id,
+    provider,
+    providerRequestId,
+    providerStatus: result.status,
+    now,
+  });
+  updateRequestStatus(db, request.id, requestStatus, now);
+
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.signed_by_signer",
+    payload: {
+      provider,
+      providerRequestId,
+      signerEmail: signer.email,
+      signerName: input.signerName ?? signer.name,
+      signedBy: result.signedBy,
+      totalSigners: result.totalSigners,
+      remainingSigners: result.remainingSigners,
+      requestStatus,
+    },
+    now,
+  });
+
+  return {
+    requestId: request.id,
+    providerRequestId,
+    signerEmail: signer.email,
+    signerName: input.signerName ?? signer.name,
+    requestStatus,
+    signedBy: result.signedBy,
+    totalSigners: result.totalSigners,
+    remainingSigners: result.remainingSigners,
+    signedAt: result.signedAt,
+  };
+}
+
+export type SignerDeclineResult = {
+  requestId: string;
+  providerRequestId: string;
+  signerEmail: string;
+  reason: string | null;
+  declinedAt: string;
+};
+
+export function declineSigningRequestAsSigner(
+  db: SqliteDb,
+  input: { requestId: string; signerEmail?: string; reason?: string; now?: Date },
+): SignerDeclineResult {
+  const request = getRequestRow(db, input.requestId);
+  const provider = getPersistedProvider(request);
+  ensureLocalProvider(request, provider);
+  const signer = resolveLocalSigner(request, input.signerEmail);
+  const providerRequestId = getProviderRequestId(request)!;
+  const now = input.now ?? new Date();
+  const result = declineLocalDocument(providerRequestId, {
+    signerEmail: signer.email,
+    reason: input.reason,
+    now,
+  });
+
+  persistRequestProviderMetadata(db, {
+    requestId: request.id,
+    provider,
+    providerRequestId,
+    providerStatus: result.status,
+    now,
+  });
+  updateRequestStatus(db, request.id, "declined", now);
+
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.signer_declined",
+    payload: {
+      provider,
+      providerRequestId,
+      signerEmail: signer.email,
+      reason: result.declineReason,
+    },
+    now,
+  });
+
+  return {
+    requestId: request.id,
+    providerRequestId,
+    signerEmail: signer.email,
+    reason: result.declineReason,
+    declinedAt: result.declinedAt,
+  };
+}
+
+export type SignerInboxItem = LocalSignerInboxEntry;
+
+export function listSignerInbox(
+  db: SqliteDb,
+  input: { signerEmail?: string } = {},
+): SignerInboxItem[] {
+  const inbox = listLocalSignerInbox(input.signerEmail);
+  // Hydrate requestId from DB when local record doesn't have it (defensive — sendLocalDocument already stores it).
+  return inbox.map((entry) => {
+    if (entry.requestId) return entry;
+    const row = db.prepare(
+      "SELECT id FROM requests WHERE provider = 'local' AND provider_request_id = ?",
+    ).get(entry.documentId) as { id: string } | undefined;
+    return row ? { ...entry, requestId: row.id } : entry;
+  });
+}
+
+export type FetchUnsignedDocumentResult = {
+  requestId: string;
+  providerRequestId: string;
+  signerEmail: string;
+  title: string;
+  bytes: number;
+  sha256: string;
+  outPath: string | null;
+};
+
+export function fetchUnsignedDocumentForSigner(
+  db: SqliteDb,
+  input: { requestId: string; signerEmail?: string; outPath?: string; now?: Date },
+): FetchUnsignedDocumentResult {
+  const request = getRequestRow(db, input.requestId);
+  const provider = getPersistedProvider(request);
+  ensureLocalProvider(request, provider);
+  const signer = resolveLocalSigner(request, input.signerEmail);
+  const providerRequestId = getProviderRequestId(request)!;
+  const document = readLocalDocument(providerRequestId);
+
+  let outPath: string | null = null;
+  if (input.outPath) {
+    const resolved = path.resolve(input.outPath);
+    mkdirSync(path.dirname(resolved), { recursive: true });
+    writeFileSync(resolved, document.pdf);
+    outPath = resolved;
+  }
+
+  const now = input.now ?? new Date();
+  appendAuditEvent(db, {
+    requestId: request.id,
+    eventType: "request.signer_fetched_document",
+    payload: {
+      provider,
+      providerRequestId,
+      signerEmail: signer.email,
+      bytes: document.bytes,
+      sha256: document.sha256,
+      outPath,
+    },
+    now,
+  });
+
+  return {
+    requestId: request.id,
+    providerRequestId,
+    signerEmail: signer.email,
+    title: document.title,
+    bytes: document.bytes,
+    sha256: document.sha256,
+    outPath,
   };
 }

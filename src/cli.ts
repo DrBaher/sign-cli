@@ -17,9 +17,11 @@ import {
   buildProviderMatrix,
   bulkSendFromCsv,
   cancelSigningRequest,
+  declineSigningRequestAsSigner,
   runLocalDemo,
   createSigningRequest,
   exportAuditBundle,
+  fetchUnsignedDocumentForSigner,
   getRequestSnapshot,
   fetchFinalSignedPdf,
   getEmbeddedSignUrl,
@@ -28,6 +30,7 @@ import {
   ingestWebhookPayload,
   inspectRequestSignedPdf,
   listAuditEvents,
+  listSignerInbox,
   listSigningRequests,
   REQUEST_WATCH_EXIT_CODES,
   remindSigningRequest,
@@ -36,6 +39,7 @@ import {
   runSignWellSmokeTest,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
+  signSigningRequest,
   timestampRequestAuditChain,
   verifyRequestAuditChain,
   watchSigningRequestStatus,
@@ -102,6 +106,10 @@ function printUsage(): void {
 sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
 sign approve --request-id <id> --token <token>
+sign sign --request-id <id> [--signer-email <e>] [--signer-name <n>] [--require-hash <sha256>] [--require-title <regex>] [--require-signer-email <e>]
+sign signer list [--signer-email <e>]
+sign signer fetch-document --request-id <id> [--out ./doc.pdf] [--signer-email <e>]
+sign signer decline --request-id <id> [--signer-email <e>] [--reason "..."]
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -361,6 +369,49 @@ async function main(): Promise<void> {
     const requestId = flagValue(parsed, "request-id", true)!;
     const token = flagValue(parsed, "token", true)!;
     const result = approveSigningRequest(db, { requestId, token });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "sign" && sub === undefined) {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const result = signSigningRequest(db, {
+      requestId,
+      signerEmail: flagValue(parsed, "signer-email"),
+      signerName: flagValue(parsed, "signer-name"),
+      requireHash: flagValue(parsed, "require-hash"),
+      requireTitle: flagValue(parsed, "require-title"),
+      requireSignerEmail: flagValue(parsed, "require-signer-email"),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "list") {
+    const inbox = listSignerInbox(db, { signerEmail: flagValue(parsed, "signer-email") });
+    console.log(JSON.stringify(inbox, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "fetch-document") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const out = flagValue(parsed, "out");
+    const result = fetchUnsignedDocumentForSigner(db, {
+      requestId,
+      signerEmail: flagValue(parsed, "signer-email"),
+      outPath: out,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "decline") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const result = declineSigningRequestAsSigner(db, {
+      requestId,
+      signerEmail: flagValue(parsed, "signer-email"),
+      reason: flagValue(parsed, "reason"),
+    });
     console.log(JSON.stringify(result, null, 2));
     return;
   }
