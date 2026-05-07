@@ -40,6 +40,14 @@
 | `Timestamp request failed (...)` | TSA URL unreachable or rejected the request. | Override with `--tsa-url` or `SIGN_TSA_URL` (default is `http://timestamp.digicert.com`). |
 | `DocuSign embedded signing requires --return-url.` | DocuSign embedded recipient view requires a return URL. | Pass `--return-url https://your-app/return`. |
 | Provider call appears to hang on flaky network | The CLI now retries 5xx/408/425/429 with exponential backoff (max 3 retries, base 1s). Tunable via `SIGN_HTTP_MAX_RETRIES` and `SIGN_HTTP_BASE_DELAY_MS`. | Set `SIGN_HTTP_MAX_RETRIES=0` to disable. |
+| `Pre-sign safety check failed: --require-hash ...` / `... does not match --require-title ...` / `... does not match resolved signer ...` | The agent's `sign sign` call asserted an expected hash/title/signer that doesn't match the actual request. No state was mutated. | Re-fetch with `signer fetch-document` to inspect the document and metadata, then re-run with the corrected expectation — or treat this as evidence the requester swapped something behind your back. |
+| `Signer-side flow only supports --provider local; this request uses ...` | Tried to run `sign sign`, `signer fetch-document`, or `signer decline` against a hosted provider request (Dropbox Sign / DocuSign / SignWell). | Use the provider's email link or embedded sign URL for those providers. Signer-side commands are for `--provider local` only. |
+| `Request <id> has not been sent to the local provider yet; nothing to sign.` | Tried to sign before `request send`. | Run `request send --provider local --request-id <id>` first. |
+| `<email> is not a recipient on request <id>.` | The `--signer-email` you passed isn't on the signer list. | Run `signer list --signer-email <e>` to confirm; check the requester's `--signer` flags. |
+| `Request <id> has multiple signers; pass --signer-email to pick one of: ...` | Multi-signer request needs the agent to pick which signer it's acting as. | Pass `--signer-email <e>`. |
+| `Local provider: document <id> is declined; cannot sign.` / `... is canceled; cannot sign.` | A signer already declined or the requester canceled. | The request is terminal — start a new one. |
+| `Local provider: document <id> is already completed; cannot decline.` | All signers already signed. | Decline isn't applicable; the document is final. |
+| Local request keeps auto-completing after one poll | Default `SIGN_LOCAL_AUTOCOMPLETE=true` is convenient for demos but races signer-side commands. | Export `SIGN_LOCAL_AUTOCOMPLETE=false` (or set it in `.env`) so the local provider holds at `sent` until each signer runs `sign sign`. |
 
 ## Live smoke test
 SignWell only:
