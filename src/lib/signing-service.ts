@@ -1782,6 +1782,18 @@ export function listAuditEvents(db: SqliteDb, requestId: string): Array<{
   }>;
 }
 
+function tryClaimWebhookEvent(
+  db: SqliteDb,
+  input: { provider: "dropbox" | "signwell" | "docusign"; eventKey: string; requestId: string | null; now: Date },
+): boolean {
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO webhook_dedupe (provider, event_key, request_id, first_seen_at)
+     VALUES (?, ?, ?, ?)`,
+  );
+  const result = stmt.run(input.provider, input.eventKey, input.requestId, nowIso(input.now));
+  return result.changes === 1;
+}
+
 export function ingestDocuSignWebhookPayload(
   db: SqliteDb,
   input: {
@@ -1794,6 +1806,7 @@ export function ingestDocuSignWebhookPayload(
   },
 ): {
   verified: boolean;
+  replayed: boolean;
   requestId: string | null;
   eventType: string | null;
   normalizedEventType: string;
@@ -1807,12 +1820,29 @@ export function ingestDocuSignWebhookPayload(
   const providerStatus = summary.status ? summary.status.toLowerCase() : normalizedEventType;
 
   if (!requestId) {
-    return { verified, requestId: null, eventType, normalizedEventType, providerStatus };
+    return { verified, replayed: false, requestId: null, eventType, normalizedEventType, providerStatus };
   }
 
   getRequestRow(db, requestId);
 
   const now = input.now ?? new Date();
+  // Dedupe key: hash of the raw body. DocuSign Connect doesn't expose a stable event id in the body;
+  // identical bodies are necessarily replays.
+  const bodyHash = sha256(typeof input.rawBody === "string" ? Buffer.from(input.rawBody, "utf8") : input.rawBody);
+
+  if (verified) {
+    const claimed = tryClaimWebhookEvent(db, { provider: "docusign", eventKey: bodyHash, requestId, now });
+    if (!claimed) {
+      appendAuditEvent(db, {
+        requestId,
+        eventType: `docusign.webhook.${eventType ?? "unknown"}.replay`,
+        payload: { verified, normalizedEventType, providerStatus, eventKey: bodyHash },
+        now,
+      });
+      return { verified, replayed: true, requestId, eventType, normalizedEventType, providerStatus };
+    }
+  }
+
   appendAuditEvent(db, {
     requestId,
     eventType: `docusign.webhook.${eventType ?? "unknown"}`,
@@ -1849,7 +1879,7 @@ export function ingestDocuSignWebhookPayload(
     }
   }
 
-  return { verified, requestId, eventType, normalizedEventType, providerStatus };
+  return { verified, replayed: false, requestId, eventType, normalizedEventType, providerStatus };
 }
 
 export function ingestSignWellWebhookPayload(
@@ -1861,7 +1891,7 @@ export function ingestSignWellWebhookPayload(
     requestId?: string;
     now?: Date;
   },
-): { verified: boolean; requestId: string | null; eventType: string | null; normalizedEventType: string; providerStatus: string | null } {
+): { verified: boolean; replayed: boolean; requestId: string | null; eventType: string | null; normalizedEventType: string; providerStatus: string | null } {
   const verified = verifySignWellCallback(input.secret, input.payload, input.signatureHeader ?? null);
   const eventType = input.payload?.event?.type ?? null;
   const normalizedEventType = normalizeSignWellEventType(eventType);
@@ -1873,6 +1903,7 @@ export function ingestSignWellWebhookPayload(
   if (!requestId) {
     return {
       verified,
+      replayed: false,
       requestId: null,
       eventType,
       normalizedEventType,
@@ -1886,6 +1917,25 @@ export function ingestSignWellWebhookPayload(
   const providerStatus = typeof document?.status === "string"
     ? document.status.trim().toLowerCase().replace(/[\s-]+/gu, "_")
     : normalizedEventType;
+
+  // Dedupe via event.hash (SignWell's per-delivery HMAC). Falls back to a stableStringify hash of
+  // (event + document.id + status) when the field is absent.
+  const providedHash = (input.payload as { event?: { hash?: unknown } })?.event?.hash;
+  const eventKey = typeof providedHash === "string" && providedHash.length > 0
+    ? providedHash
+    : sha256(stableStringify({ eventType, documentId, providerStatus }));
+  if (verified) {
+    const claimed = tryClaimWebhookEvent(db, { provider: "signwell", eventKey, requestId, now });
+    if (!claimed) {
+      appendAuditEvent(db, {
+        requestId,
+        eventType: `signwell.webhook.${eventType ?? "unknown"}.replay`,
+        payload: { verified, normalizedEventType, providerStatus, eventKey },
+        now,
+      });
+      return { verified, replayed: true, requestId, eventType, normalizedEventType, providerStatus };
+    }
+  }
 
   appendAuditEvent(db, {
     requestId,
@@ -1940,6 +1990,7 @@ export function ingestSignWellWebhookPayload(
 
   return {
     verified,
+    replayed: false,
     requestId,
     eventType,
     normalizedEventType,
@@ -1955,7 +2006,7 @@ export function ingestWebhookPayload(
     requestId?: string;
     now?: Date;
   },
-): { verified: boolean; requestId: string | null; eventType: string | null } {
+): { verified: boolean; replayed: boolean; requestId: string | null; eventType: string | null } {
   const verified = verifyDropboxCallback(input.apiKey, input.payload);
   const requestId =
     input.requestId ??
@@ -1964,12 +2015,35 @@ export function ingestWebhookPayload(
   const eventType = input.payload.event?.event_type ?? null;
 
   if (!requestId) {
-    return { verified, requestId: null, eventType };
+    return { verified, replayed: false, requestId: null, eventType };
   }
 
   getRequestRow(db, requestId);
 
   const now = input.now ?? new Date();
+  // Dedupe via Dropbox's event_hash (per-delivery HMAC of event_time+event_type with the API key).
+  // Falls back to a (eventType, signatureRequestId, eventTime) hash when absent.
+  const providedHash = input.payload.event?.event_hash;
+  const eventKey = typeof providedHash === "string" && providedHash.length > 0
+    ? providedHash
+    : sha256(stableStringify({
+        eventType,
+        signatureRequestId: input.payload.signature_request?.signature_request_id ?? null,
+        eventTime: input.payload.event?.event_time ?? null,
+      }));
+  if (verified) {
+    const claimed = tryClaimWebhookEvent(db, { provider: "dropbox", eventKey, requestId, now });
+    if (!claimed) {
+      appendAuditEvent(db, {
+        requestId,
+        eventType: `dropbox.webhook.${eventType ?? "unknown"}.replay`,
+        payload: { verified, eventKey },
+        now,
+      });
+      return { verified, replayed: true, requestId, eventType };
+    }
+  }
+
   appendAuditEvent(db, {
     requestId,
     eventType: `dropbox.webhook.${eventType ?? "unknown"}`,
@@ -2015,7 +2089,7 @@ export function ingestWebhookPayload(
     }
   }
 
-  return { verified, requestId, eventType };
+  return { verified, replayed: false, requestId, eventType };
 }
 
 export type EnrichedApproval = ApprovalRow & {

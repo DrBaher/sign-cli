@@ -78,6 +78,14 @@ export function openDatabase(dbPath: string): SqliteDb {
       FOREIGN KEY (request_id) REFERENCES requests(id)
     );
 
+    CREATE TABLE IF NOT EXISTS webhook_dedupe (
+      provider TEXT NOT NULL,
+      event_key TEXT NOT NULL,
+      request_id TEXT,
+      first_seen_at TEXT NOT NULL,
+      PRIMARY KEY (provider, event_key)
+    );
+
     CREATE TABLE IF NOT EXISTS signer_signing_states (
       request_id TEXT NOT NULL,
       signer_email TEXT NOT NULL,
