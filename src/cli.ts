@@ -10,6 +10,7 @@ import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
 import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
+import { runAuditWatch } from "./lib/audit-watch.js";
 import { startHttpApiServer } from "./lib/http-api.js";
 import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
@@ -180,6 +181,7 @@ sign doctor providers
 sign audit show --request-id <id>
 sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
+sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
@@ -818,6 +820,24 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.invalid === 0 ? 0 : 3;
+    return;
+  }
+
+  if (root === "audit" && sub === "watch") {
+    const requestId = flagValue(parsed, "request-id");
+    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000 })!;
+    const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
+    process.stderr.write(`[audit watch] re-verifying audit chain${requestId ? ` for ${requestId}` : ""} every ${pollIntervalMs}ms (Ctrl+C to stop)\n`);
+    const outcome = await runAuditWatch(db, {
+      requestId,
+      pollIntervalMs,
+      timeoutMs,
+      onScan: (report, trigger) => {
+        process.stderr.write(`[audit watch] ${trigger}: total=${report.total} valid=${report.valid} invalid=${report.invalid}\n`);
+      },
+    });
+    console.log(JSON.stringify(outcome, null, 2));
+    process.exitCode = outcome.exitReason === "break_detected" ? 3 : outcome.exitReason === "timeout" ? 4 : 0;
     return;
   }
 

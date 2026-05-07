@@ -256,6 +256,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "audit watch",
+    summary: "Long-running tamper alarm: re-verifies the chain on every audit-event notification (or every --interval-seconds). Exits 3 on first break, 4 on timeout.",
+    flags: [
+      { name: "--request-id", description: "Watch a single request_id (default: scan all requests)." },
+      { name: "--interval-seconds", description: "Belt-and-suspenders poll interval (default 5s)." },
+      { name: "--timeout-seconds", description: "Stop after N seconds with no break detected." },
+    ],
+  },
+  {
     command: "audit timestamp",
     summary: "Append an RFC 3161 timestamp to the chain head.",
   },
