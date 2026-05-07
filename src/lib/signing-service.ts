@@ -3257,3 +3257,60 @@ export async function exportRequestReceipt(
     chain: bundle.chain,
   };
 }
+
+export type SignerPolicyAllOutcome = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    requestId: string;
+    ok: boolean;
+    decision: PolicyDecision | null;
+    applied: boolean;
+    error: { code: string; message: string } | null;
+  }>;
+};
+
+export function runSignerPolicyAll(
+  db: SqliteDb,
+  input: {
+    signerEmail?: string;
+    tokens: Record<string, string>;
+    spec: PolicySpec;
+    dryRun?: boolean;
+    now?: Date;
+  },
+): SignerPolicyAllOutcome {
+  const inbox = listSignerInbox(db, { signerEmail: input.signerEmail, now: input.now });
+  const candidates = inbox.filter((entry) => entry.requestId && input.tokens[entry.requestId]);
+  let succeeded = 0;
+  let failed = 0;
+  const results: SignerPolicyAllOutcome["results"] = [];
+  for (const entry of candidates) {
+    const requestId = entry.requestId!;
+    const token = input.tokens[requestId];
+    try {
+      const outcome = runSignerPolicy(db, {
+        requestId,
+        token,
+        spec: input.spec,
+        dryRun: input.dryRun,
+        now: input.now,
+      });
+      results.push({
+        requestId,
+        ok: true,
+        decision: outcome.decision,
+        applied: outcome.applied,
+        error: null,
+      });
+      succeeded += 1;
+    } catch (error) {
+      const code = error instanceof SignCliError ? error.code : "INTERNAL";
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({ requestId, ok: false, decision: null, applied: false, error: { code, message } });
+      failed += 1;
+    }
+  }
+  return { total: candidates.length, succeeded, failed, results };
+}

@@ -1,4 +1,5 @@
 import type { SqliteDb } from "./db.js";
+import { maybeNotifySignerEvent } from "./notify.js";
 import { nowIso, sha256, stableStringify } from "./util.js";
 
 export type AuditChainBreak =
@@ -107,6 +108,14 @@ export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
     `INSERT INTO audit_events (request_id, event_type, payload_json, hash_prev, hash_self, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(input.requestId, input.eventType, payloadJson, hashPrev, hashSelf, createdAt);
+
+  void maybeNotifySignerEvent({
+    requestId: input.requestId,
+    eventType: input.eventType,
+    payload: input.payload,
+    hashSelf,
+    createdAt,
+  });
 
   return { hashPrev, hashSelf, createdAt };
 }
