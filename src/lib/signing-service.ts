@@ -2137,6 +2137,20 @@ export type SnapshotSignedByEntry = {
   source?: string;
 };
 
+export type RequestSnapshotMetrics = {
+  totalSigners: number;
+  signedCount: number;
+  pendingCount: number;
+  declined: boolean;
+  eventsTotal: number;
+  eventsLastHour: number;
+  fetchesLastHour: number;
+  webhookReplaysLastHour: number;
+  ageSeconds: number;
+  timeToFirstSignSeconds: number | null;
+  timeToCompleteSeconds: number | null;
+};
+
 export type RequestSnapshot = {
   request: RequestRow & {
     signatureIds: string[];
@@ -2150,6 +2164,7 @@ export type RequestSnapshot = {
   declinedBy: string | null;
   declineReason: string | null;
   nextSteps: string[];
+  metrics?: RequestSnapshotMetrics;
 };
 
 function buildNextSteps(input: {
@@ -2279,7 +2294,11 @@ export function listSignerSigningStates(db: SqliteDb, requestId: string): Signer
   }));
 }
 
-export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?: Date } = {}): RequestSnapshot {
+export function getRequestSnapshot(
+  db: SqliteDb,
+  requestId: string,
+  opts: { now?: Date; includeMetrics?: boolean } = {},
+): RequestSnapshot {
   const requestRow = getRequestRow(db, requestId);
   const request = serializeRequestRow(requestRow);
   const rawApprovals = listApprovalRows(db, requestId);
@@ -2337,6 +2356,52 @@ export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?
   const declinedBy = mergedDeclinedState?.email ?? signingState?.declinedBy ?? null;
   const declineReason = mergedDeclinedState?.declineReason ?? signingState?.declineReason ?? null;
 
+  let metrics: RequestSnapshotMetrics | undefined;
+  if (opts.includeMetrics) {
+    const oneHourAgo = new Date(nowMs - 60 * 60 * 1000).toISOString();
+    const totalEventsRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ?",
+    ).get(requestId) as { n: number };
+    const eventsLastHourRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ? AND created_at >= ?",
+    ).get(requestId, oneHourAgo) as { n: number };
+    const fetchesLastHourRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ? AND event_type = ? AND created_at >= ?",
+    ).get(requestId, "request.signer_fetched_document", oneHourAgo) as { n: number };
+    const replaysLastHourRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE request_id = ? AND event_type LIKE '%.replay' AND created_at >= ?",
+    ).get(requestId, oneHourAgo) as { n: number };
+    const totalSigners = JSON.parse(requestRow.signers_json).length as number;
+    const signedCount = mergedSignedBy.length;
+    const earliestSign = mergedSignedBy.reduce<string | null>(
+      (acc, entry) => (acc === null || entry.signedAt < acc ? entry.signedAt : acc),
+      null,
+    );
+    const latestSign = mergedSignedBy.reduce<string | null>(
+      (acc, entry) => (acc === null || entry.signedAt > acc ? entry.signedAt : acc),
+      null,
+    );
+    const createdMs = new Date(requestRow.created_at).getTime();
+    metrics = {
+      totalSigners,
+      signedCount,
+      pendingCount: Math.max(0, totalSigners - signedCount),
+      declined: declinedBy !== null,
+      eventsTotal: totalEventsRow.n,
+      eventsLastHour: eventsLastHourRow.n,
+      fetchesLastHour: fetchesLastHourRow.n,
+      webhookReplaysLastHour: replaysLastHourRow.n,
+      ageSeconds: Math.max(0, Math.floor((nowMs - createdMs) / 1000)),
+      timeToFirstSignSeconds: earliestSign
+        ? Math.max(0, Math.floor((new Date(earliestSign).getTime() - createdMs) / 1000))
+        : null,
+      timeToCompleteSeconds:
+        signedCount === totalSigners && totalSigners > 0 && latestSign
+          ? Math.max(0, Math.floor((new Date(latestSign).getTime() - createdMs) / 1000))
+          : null,
+    };
+  }
+
   return {
     request,
     approvals,
@@ -2344,6 +2409,7 @@ export function getRequestSnapshot(db: SqliteDb, requestId: string, opts: { now?
     declinedBy,
     declineReason,
     nextSteps,
+    ...(metrics ? { metrics } : {}),
   };
 }
 
