@@ -18,6 +18,10 @@
 | `request cancel is destructive at the provider. Re-run with --yes true to confirm.` | Safety guard. | Re-run with `--yes true`. |
 | `DocuSign cancel requires --reason "..."` | DocuSign requires a void reason. | Pass `--reason "Reason"`. |
 | `audit verify` exits 3 | Audit chain hash mismatch — tamper or deleted event. | Inspect the `break` field in the JSON output to see which event broke the chain. |
+| `request verify-signed-pdf` exits 3 | One or more signatures' `messageDigest` did not match the recomputed digest of the byte range. | Inspect the `signatures[].parseWarnings` field; the PDF may have been modified after signing. |
+| `Timestamp request failed (...)` | TSA URL unreachable or rejected the request. | Override with `--tsa-url` or `SIGN_TSA_URL` (default is `http://timestamp.digicert.com`). |
+| `DocuSign embedded signing requires --return-url.` | DocuSign embedded recipient view requires a return URL. | Pass `--return-url https://your-app/return`. |
+| Provider call appears to hang on flaky network | The CLI now retries 5xx/408/425/429 with exponential backoff (max 3 retries, base 1s). Tunable via `SIGN_HTTP_MAX_RETRIES` and `SIGN_HTTP_BASE_DELAY_MS`. | Set `SIGN_HTTP_MAX_RETRIES=0` to disable. |
 
 ## Live smoke test
 SignWell only:

@@ -6,6 +6,7 @@ import {
   checkDocuSignAccountAccess,
   downloadDocuSignCombinedPdf,
   fetchDocuSignEnvelopeStatus,
+  getDocuSignRecipientView,
   normalizeDocuSignStatus,
   sendDocuSignEnvelope,
   voidDocuSignEnvelope,
@@ -37,6 +38,8 @@ import {
   verifySignWellCallback,
   type SignWellWebhookPayload,
 } from "./signwell-webhook.js";
+import { inspectPdfSignatures, type PdfSignatureReport } from "./pdf-signature.js";
+import { digestForChainHead, inspectTimestampResponse, issueRfc3161Timestamp, type TimestampInspection } from "./timestamp.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
   createId,
@@ -132,6 +135,8 @@ type ProviderApi = {
     signatureId: string;
     providerRequestId?: string | null;
     apiKey?: string;
+    returnUrl?: string;
+    signers?: SignerInput[];
   }) => Promise<{ signUrl: string; expiresAt: number | null }>;
   getStatus(input: {
     providerRequestId: string;
@@ -315,6 +320,50 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           providerStatus: "sent",
           responseBody: result.responseBody,
         };
+      },
+      async sendEmbedded(input) {
+        const result = await sendDocuSignEnvelope({
+          documentPath: input.request.document_path,
+          title: input.request.title,
+          signers: input.signers,
+          metadata: {
+            request_id: input.request.id,
+            document_hash: input.request.document_hash,
+          },
+          embeddedSigning: true,
+        });
+        return {
+          providerRequestId: result.envelopeId,
+          signatureIds: result.recipientIds,
+          providerStatus: "sent",
+          responseBody: result.responseBody,
+        };
+      },
+      async getEmbeddedSignUrl(input) {
+        if (!input.providerRequestId) {
+          throw new Error("DocuSign embedded sign URL requires the envelope id.");
+        }
+        if (!input.returnUrl) {
+          throw new Error("DocuSign embedded signing requires --return-url.");
+        }
+        const signers = input.signers ?? [];
+        const sortedSigners = signers.slice().sort((left, right) => left.order - right.order);
+        const recipientIndex = sortedSigners.findIndex((_, index) => String(index + 1) === input.signatureId);
+        const matchedByEmail = recipientIndex === -1 ? sortedSigners.findIndex((signer) => signer.email === input.signatureId) : -1;
+        const resolvedIndex = recipientIndex !== -1 ? recipientIndex : matchedByEmail;
+        const signer = resolvedIndex !== -1 ? sortedSigners[resolvedIndex] : null;
+        if (!signer) {
+          throw new Error(`DocuSign embedded signing could not resolve signer for signature-id=${input.signatureId}.`);
+        }
+        const recipientId = String(resolvedIndex + 1);
+        const result = await getDocuSignRecipientView({
+          envelopeId: input.providerRequestId,
+          signerEmail: signer.email,
+          signerName: signer.name,
+          recipientId,
+          returnUrl: input.returnUrl,
+        });
+        return { signUrl: result.url, expiresAt: null };
       },
       async getStatus(input) {
         const remoteStatus = await fetchDocuSignEnvelopeStatus(input.providerRequestId);
@@ -972,9 +1021,6 @@ export async function sendEmbeddedSigningRequest(
 }> {
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
-  if (provider === "docusign") {
-    throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
-  }
   const providerApi = getProviderApi(provider);
   if (!providerApi.sendEmbedded) {
     throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
@@ -1045,7 +1091,7 @@ export async function sendEmbeddedSigningRequest(
 
 export async function getEmbeddedSignUrl(
   db: SqliteDb,
-  input: { requestId: string; provider?: SignProvider; signatureId: string; apiKey?: string; now?: Date },
+  input: { requestId: string; provider?: SignProvider; signatureId: string; apiKey?: string; returnUrl?: string; now?: Date },
 ): Promise<{ signUrl: string; expiresAt: number | null; signatureId: string }> {
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
@@ -1054,10 +1100,13 @@ export async function getEmbeddedSignUrl(
     throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
   }
 
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
   const result = await providerApi.getEmbeddedSignUrl({
     signatureId: input.signatureId,
     providerRequestId: getProviderRequestId(request),
     apiKey: input.apiKey,
+    returnUrl: input.returnUrl,
+    signers,
   });
   const now = input.now ?? new Date();
   appendAuditEvent(db, {
@@ -1496,6 +1545,179 @@ export function listSigningRequests(
 export function verifyRequestAuditChain(db: SqliteDb, requestId: string): AuditVerificationResult {
   getRequestRow(db, requestId);
   return verifyAuditChain(db, requestId);
+}
+
+function findSignedPdfArtifact(db: SqliteDb, requestId: string): { id: string; path: string; created_at: string; metadata_json: string } | null {
+  const row = db.prepare(
+    `SELECT id, path, created_at, metadata_json
+     FROM artifacts
+     WHERE request_id = ? AND kind = 'signed_pdf'
+     ORDER BY datetime(created_at) DESC
+     LIMIT 1`,
+  ).get(requestId) as { id: string; path: string; created_at: string; metadata_json: string } | undefined;
+  return row ?? null;
+}
+
+export async function inspectRequestSignedPdf(
+  db: SqliteDb,
+  input: { requestId: string; path?: string; now?: Date },
+): Promise<{ source: "request" | "path"; report: PdfSignatureReport }> {
+  let pdfPath = input.path;
+  let source: "request" | "path" = "path";
+  if (!pdfPath) {
+    getRequestRow(db, input.requestId);
+    const artifact = findSignedPdfArtifact(db, input.requestId);
+    if (!artifact) {
+      throw new Error("No signed PDF artifact found for this request. Run `request fetch-final` first or pass --path.");
+    }
+    pdfPath = artifact.path;
+    source = "request";
+  }
+  const report = await inspectPdfSignatures(pdfPath);
+  const now = input.now ?? new Date();
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "request.signed_pdf_inspected",
+    payload: {
+      path: pdfPath,
+      hasSignature: report.hasSignature,
+      signatureCount: report.signatureCount,
+      digestMatchAll: report.signatures.every((sig) => sig.messageDigestMatches === true),
+    },
+    now,
+  });
+  return { source, report };
+}
+
+export async function timestampRequestAuditChain(
+  db: SqliteDb,
+  input: { requestId: string; tsaUrl?: string; outPath?: string; now?: Date },
+): Promise<{
+  tsaUrl: string;
+  hashSelf: string;
+  digestHex: string;
+  responseBytes: number;
+  artifactPath: string;
+  inspection: TimestampInspection;
+}> {
+  getRequestRow(db, input.requestId);
+  const lastEvent = db.prepare(
+    `SELECT hash_self FROM audit_events WHERE request_id = ? ORDER BY id DESC LIMIT 1`,
+  ).get(input.requestId) as { hash_self: string } | undefined;
+  if (!lastEvent) {
+    throw new Error("No audit events to timestamp.");
+  }
+  const digest = digestForChainHead(lastEvent.hash_self);
+  const result = await issueRfc3161Timestamp({ digest, tsaUrl: input.tsaUrl });
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+  const outPath = input.outPath ?? path.resolve("artifacts", `${input.requestId}-audit.tsr`);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, result.responseBuffer);
+
+  const now = input.now ?? new Date();
+  db.prepare(
+    `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    createId("art"),
+    input.requestId,
+    "audit_timestamp",
+    outPath,
+    sha256(result.responseBuffer),
+    stableStringify({ tsaUrl: result.tsaUrl, bytes: result.responseBuffer.length, hashSelf: lastEvent.hash_self }),
+    nowIso(now),
+  );
+
+  const inspection = inspectTimestampResponse(result.responseBuffer, digest);
+
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "audit.timestamped",
+    payload: {
+      tsaUrl: result.tsaUrl,
+      bytes: result.responseBuffer.length,
+      hashSelf: lastEvent.hash_self,
+      granted: inspection.granted,
+    },
+    now,
+  });
+
+  return {
+    tsaUrl: result.tsaUrl,
+    hashSelf: lastEvent.hash_self,
+    digestHex: digest.toString("hex"),
+    responseBytes: result.responseBuffer.length,
+    artifactPath: outPath,
+    inspection,
+  };
+}
+
+export async function exportAuditBundle(
+  db: SqliteDb,
+  input: { requestId: string; outDir: string; now?: Date },
+): Promise<{
+  outDir: string;
+  files: Array<{ name: string; sha256: string; bytes: number }>;
+  manifestPath: string;
+  chain: AuditVerificationResult;
+}> {
+  const request = getRequestRow(db, input.requestId);
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+  const outDir = path.resolve(input.outDir);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const chain = verifyAuditChain(db, input.requestId);
+  const audit = listAuditEvents(db, input.requestId);
+  const auditPayload = {
+    request: serializeRequestRow(request),
+    chain,
+    events: audit,
+  };
+  const auditFile = path.join(outDir, "audit.json");
+  fs.writeFileSync(auditFile, JSON.stringify(auditPayload, null, 2));
+
+  const files: Array<{ name: string; sha256: string; bytes: number }> = [];
+  function recordFile(filePath: string, name: string): void {
+    const data = fs.readFileSync(filePath);
+    files.push({ name, sha256: sha256(data), bytes: data.length });
+  }
+  recordFile(auditFile, "audit.json");
+
+  const signedPdf = findSignedPdfArtifact(db, input.requestId);
+  if (signedPdf && fs.existsSync(signedPdf.path)) {
+    const dest = path.join(outDir, "signed.pdf");
+    fs.copyFileSync(signedPdf.path, dest);
+    recordFile(dest, "signed.pdf");
+  }
+
+  const tsrRow = db.prepare(
+    `SELECT path FROM artifacts WHERE request_id = ? AND kind = 'audit_timestamp' ORDER BY datetime(created_at) DESC LIMIT 1`,
+  ).get(input.requestId) as { path: string } | undefined;
+  if (tsrRow && fs.existsSync(tsrRow.path)) {
+    const dest = path.join(outDir, "audit.tsr");
+    fs.copyFileSync(tsrRow.path, dest);
+    recordFile(dest, "audit.tsr");
+  }
+
+  const manifest = {
+    requestId: input.requestId,
+    generatedAt: nowIso(input.now ?? new Date()),
+    chainValid: chain.valid,
+    files,
+  };
+  const manifestPath = path.join(outDir, "manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  appendAuditEvent(db, {
+    requestId: input.requestId,
+    eventType: "audit.exported",
+    payload: { outDir, files: files.map((file) => file.name), chainValid: chain.valid },
+    now: input.now ?? new Date(),
+  });
+
+  return { outDir, files, manifestPath, chain };
 }
 
 export async function runSignWellSmokeTest(

@@ -1,6 +1,8 @@
 import { createSign, createPrivateKey } from "node:crypto";
-import { readFile, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { retryFetch } from "./http.js";
 import type { SignerInput } from "./util.js";
 
 export type DocuSignSendInput = {
@@ -8,6 +10,7 @@ export type DocuSignSendInput = {
   title: string;
   signers: SignerInput[];
   metadata: Record<string, string>;
+  embeddedSigning?: boolean;
 };
 
 type DocuSignConfig = {
@@ -108,7 +111,7 @@ async function getAccessToken(config: DocuSignConfig): Promise<string> {
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
     assertion,
   });
-  const response = await fetch(`https://${authHost}/oauth/token`, {
+  const response = await retryFetch(`https://${authHost}/oauth/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: form.toString(),
@@ -130,7 +133,7 @@ async function docusignJsonRequest(
   init: { method: string; endpoint: string; body?: unknown; accept?: string },
 ): Promise<any> {
   const accessToken = await getAccessToken(config);
-  const response = await fetch(`${config.basePath}/v2.1/accounts/${config.accountId}${init.endpoint}`, {
+  const response = await retryFetch(`${config.basePath}/v2.1/accounts/${config.accountId}${init.endpoint}`, {
     method: init.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -197,6 +200,7 @@ export async function sendDocuSignEnvelope(input: DocuSignSendInput): Promise<{
             recipientId: String(index + 1),
             routingOrder: String(signer.order),
             tabs: buildSignerTabs(index),
+            ...(input.embeddedSigning ? { clientUserId: signer.email } : {}),
           })),
       },
       customFields: {
@@ -239,7 +243,7 @@ export function normalizeDocuSignStatus(remoteStatus: unknown): string {
 export async function downloadDocuSignCombinedPdf(envelopeId: string): Promise<Buffer> {
   const config = requireDocuSignConfig();
   const accessToken = await getAccessToken(config);
-  const response = await fetch(`${config.basePath}/v2.1/accounts/${config.accountId}/envelopes/${envelopeId}/documents/combined`, {
+  const response = await retryFetch(`${config.basePath}/v2.1/accounts/${config.accountId}/envelopes/${envelopeId}/documents/combined`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -255,6 +259,33 @@ export async function downloadDocuSignCombinedPdf(envelopeId: string): Promise<B
   return Buffer.from(buffer);
 }
 
+
+export async function getDocuSignRecipientView(input: {
+  envelopeId: string;
+  signerEmail: string;
+  signerName: string;
+  recipientId: string;
+  returnUrl: string;
+  authenticationMethod?: string;
+}): Promise<{ url: string; responseBody: unknown }> {
+  const config = requireDocuSignConfig();
+  const body = await docusignJsonRequest(config, {
+    method: "POST",
+    endpoint: `/envelopes/${input.envelopeId}/views/recipient`,
+    body: {
+      returnUrl: input.returnUrl,
+      authenticationMethod: input.authenticationMethod ?? "none",
+      email: input.signerEmail,
+      userName: input.signerName,
+      clientUserId: input.signerEmail,
+      recipientId: input.recipientId,
+    },
+  });
+  if (typeof body?.url !== "string" || body.url.length === 0) {
+    throw new Error("DocuSign recipient view did not return a url.");
+  }
+  return { url: body.url, responseBody: body };
+}
 
 export async function voidDocuSignEnvelope(envelopeId: string, reason: string): Promise<unknown> {
   const config = requireDocuSignConfig();

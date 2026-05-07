@@ -1,0 +1,10 @@
+.env
+.env.*
+data/
+artifacts/
+src/
+scripts/build.mjs
+.github/
+*.log
+*.db
+.git/

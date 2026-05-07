@@ -3,6 +3,7 @@ import process from "node:process";
 import { openDatabase } from "./lib/db.js";
 import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
 import { loadEnv } from "./lib/env.js";
+import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
 import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySignWellCallback } from "./lib/signwell-webhook.js";
@@ -11,12 +12,14 @@ import {
   buildProviderMatrix,
   cancelSigningRequest,
   createSigningRequest,
+  exportAuditBundle,
   getRequestSnapshot,
   fetchFinalSignedPdf,
   getEmbeddedSignUrl,
   getSigningRequestStatus,
   ingestSignWellWebhookPayload,
   ingestWebhookPayload,
+  inspectRequestSignedPdf,
   listAuditEvents,
   listSigningRequests,
   REQUEST_WATCH_EXIT_CODES,
@@ -25,6 +28,7 @@ import {
   runSignWellSmokeTest,
   sendEmbeddedSigningRequest,
   sendSigningRequest,
+  timestampRequestAuditChain,
   verifyRequestAuditChain,
   watchSigningRequestStatus,
 } from "./lib/signing-service.js";
@@ -89,9 +93,9 @@ function printUsage(): void {
 sign request run-email --title "Doc" --document ./file.pdf --signer name:Alice,email:alice@example.com,order:1 [--provider dropbox|docusign|signwell] [--test-mode true]
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
-sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|signwell] [--test-mode true]
-sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|signwell]
-sign request launch-embedded --request-id <id> --signature-id <signatureId> [--client-id <clientId>] [--provider dropbox|signwell]
+sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
+sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
+sign request launch-embedded --request-id <id> --signature-id <signatureId> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--return-url https://...]
 sign request fetch-final --request-id <id> [--provider dropbox|docusign|signwell] [--out ./artifacts/signed.pdf]
 sign request status --request-id <id> [--provider dropbox|docusign|signwell]
 sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf]
@@ -104,6 +108,9 @@ sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
 sign audit show --request-id <id>
 sign audit verify --request-id <id>
+sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
+sign audit export --request-id <id> --out ./bundle/
+sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json
 sign webhook ingest [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
 sign webhook listen [--provider dropbox|signwell] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
@@ -306,6 +313,7 @@ async function main(): Promise<void> {
       provider: selectedProvider,
       signatureId,
       apiKey: resolveProviderApiKey(selectedProvider),
+      returnUrl: flagValue(parsed, "return-url"),
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -315,19 +323,18 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "launch-embedded") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const signatureId = flagValue(parsed, "signature-id", true)!;
-    if (selectedProvider === "docusign") {
-      throw new Error("Embedded signing is not yet supported for DocuSign.");
-    }
     const result = await getEmbeddedSignUrl(db, {
       requestId,
       provider: selectedProvider,
       signatureId,
       apiKey: resolveProviderApiKey(selectedProvider),
+      returnUrl: flagValue(parsed, "return-url"),
     });
     const file = flagValue(parsed, "out") ?? `./embedded-launch-${signatureId}.html`;
     const fs = await import("node:fs/promises");
-    if (selectedProvider === "signwell") {
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>SignWell Embedded Sign</title><style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;}</style></head><body><iframe src=${JSON.stringify(result.signUrl)} allow="camera *; microphone *" allowfullscreen></iframe></body></html>`;
+    if (selectedProvider === "signwell" || selectedProvider === "docusign") {
+      const title = selectedProvider === "docusign" ? "DocuSign Embedded Sign" : "SignWell Embedded Sign";
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;}</style></head><body><iframe src=${JSON.stringify(result.signUrl)} allow="camera *; microphone *" allowfullscreen></iframe></body></html>`;
       await fs.writeFile(file, html, "utf8");
       console.log(JSON.stringify({ ...result, launcherFile: file, mode: "iframe" }, null, 2));
       return;
@@ -369,6 +376,7 @@ async function main(): Promise<void> {
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
     const fetchFinalPdf = (flagValue(parsed, "fetch-final") ?? "false") === "true";
     const outPath = flagValue(parsed, "out");
+    const logger = createLogger({ mode: resolveLogMode(flagValue(parsed, "log")) });
     let lastPrintedStatus: string | null = null;
     const result = await watchSigningRequestStatus(db, {
       requestId,
@@ -384,10 +392,13 @@ async function main(): Promise<void> {
           return;
         }
         lastPrintedStatus = update.status;
-        const elapsedSeconds = (update.elapsedMs / 1000).toFixed(1);
-        console.error(
-          `[watch] provider=${update.provider} +${elapsedSeconds}s poll=${update.attempt} status=${update.status}${update.terminal ? ` terminal=${update.terminal}` : ""}`,
-        );
+        logger.info("watch poll", {
+          provider: update.provider,
+          attempt: update.attempt,
+          status: update.status,
+          terminal: update.terminal,
+          elapsedSeconds: Number((update.elapsedMs / 1000).toFixed(1)),
+        });
       },
     });
     console.log(JSON.stringify(result, null, 2));
@@ -407,6 +418,35 @@ async function main(): Promise<void> {
     const result = verifyRequestAuditChain(db, requestId);
     console.log(JSON.stringify({ requestId, ...result }, null, 2));
     process.exitCode = result.valid ? 0 : 3;
+    return;
+  }
+
+  if (root === "audit" && sub === "timestamp") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const result = await timestampRequestAuditChain(db, {
+      requestId,
+      tsaUrl: flagValue(parsed, "tsa-url"),
+      outPath: flagValue(parsed, "out"),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "export") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const out = flagValue(parsed, "out", true)!;
+    const result = await exportAuditBundle(db, { requestId, outDir: out });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "verify-signed-pdf") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const result = await inspectRequestSignedPdf(db, { requestId, path: flagValue(parsed, "path") });
+    console.log(JSON.stringify(result, null, 2));
+    const allDigestsValid = result.report.signatures.length > 0
+      && result.report.signatures.every((sig) => sig.messageDigestMatches === true);
+    process.exitCode = allDigestsValid ? 0 : 3;
     return;
   }
 

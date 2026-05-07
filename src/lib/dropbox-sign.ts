@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { retryFetch } from "./http.js";
 import { parseBooleanFlag } from "./util.js";
 import type { SignerInput } from "./util.js";
 
@@ -51,7 +52,7 @@ function addCommonFormFields(form: FormData, input: DropboxSendInput): void {
 }
 
 async function postSignatureRequest(endpoint: string, apiKey: string, form: FormData): Promise<any> {
-  const response = await fetch(`https://api.hellosign.com/v3/${endpoint}`, {
+  const response = await retryFetch(`https://api.hellosign.com/v3/${endpoint}`, {
     method: "POST",
     headers: { Authorization: authHeader(apiKey) },
     body: form,
@@ -97,7 +98,7 @@ export async function createEmbeddedSignatureRequest(input: DropboxSendInput & {
 }
 
 export async function fetchEmbeddedSignUrl(apiKey: string, signatureId: string): Promise<{ signUrl: string; expiresAt: number | null; responseBody: unknown }> {
-  const response = await fetch(`https://api.hellosign.com/v3/embedded/sign_url/${signatureId}`, {
+  const response = await retryFetch(`https://api.hellosign.com/v3/embedded/sign_url/${signatureId}`, {
     method: "GET",
     headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
   });
@@ -112,7 +113,7 @@ export async function fetchEmbeddedSignUrl(apiKey: string, signatureId: string):
 }
 
 export async function fetchSignatureRequestStatus(apiKey: string, signatureRequestId: string): Promise<unknown> {
-  const response = await fetch(`https://api.hellosign.com/v3/signature_request/${signatureRequestId}`, {
+  const response = await retryFetch(`https://api.hellosign.com/v3/signature_request/${signatureRequestId}`, {
     method: "GET",
     headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
   });
@@ -126,7 +127,7 @@ export async function fetchSignatureRequestStatus(apiKey: string, signatureReque
 
 
 export async function downloadSignedPdf(apiKey: string, signatureRequestId: string): Promise<Buffer> {
-  const response = await fetch(`https://api.hellosign.com/v3/signature_request/files/${signatureRequestId}?file_type=pdf`, {
+  const response = await retryFetch(`https://api.hellosign.com/v3/signature_request/files/${signatureRequestId}?file_type=pdf`, {
     method: "GET",
     headers: { Authorization: authHeader(apiKey) },
   });
@@ -140,7 +141,7 @@ export async function downloadSignedPdf(apiKey: string, signatureRequestId: stri
 }
 
 export async function cancelDropboxSignatureRequest(apiKey: string, signatureRequestId: string): Promise<unknown> {
-  const response = await fetch(`https://api.hellosign.com/v3/signature_request/cancel/${signatureRequestId}`, {
+  const response = await retryFetch(`https://api.hellosign.com/v3/signature_request/cancel/${signatureRequestId}`, {
     method: "POST",
     headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
   });
@@ -154,7 +155,7 @@ export async function cancelDropboxSignatureRequest(apiKey: string, signatureReq
 }
 
 export async function checkDropboxAccount(apiKey: string): Promise<{ email: string | null; apiSignatureRequestsLeft: number | null }> {
-  const response = await fetch("https://api.hellosign.com/v3/account", {
+  const response = await retryFetch("https://api.hellosign.com/v3/account", {
     method: "GET",
     headers: { Authorization: authHeader(apiKey), Accept: "application/json" },
   });
