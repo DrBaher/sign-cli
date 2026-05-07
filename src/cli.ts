@@ -168,6 +168,7 @@ sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
+sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
 sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
@@ -288,6 +289,20 @@ async function main(): Promise<void> {
     const result = verifyDatabase(db);
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.ok ? 0 : 3;
+    return;
+  }
+
+  if (root === "db" && sub === "migrate") {
+    const dryRun = (flagValue(parsed, "dry-run") ?? "false") === "true";
+    const { applyPendingMigrations, listAppliedMigrations, MIGRATIONS } = await import("./lib/migrations.js");
+    if (dryRun) {
+      const applied = new Set(listAppliedMigrations(db).map((row) => row.id));
+      const pending = MIGRATIONS.filter((m) => !applied.has(m.id)).map((m) => ({ id: m.id, name: m.name }));
+      console.log(JSON.stringify({ pending, dryRun: true }, null, 2));
+      return;
+    }
+    const outcome = applyPendingMigrations(db);
+    console.log(JSON.stringify(outcome, null, 2));
     return;
   }
 

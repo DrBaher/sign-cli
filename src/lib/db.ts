@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { applyPendingMigrations } from "./migrations.js";
 
 export type SqliteDb = DatabaseSync;
 
@@ -136,8 +137,13 @@ export function openDatabase(dbPath: string): SqliteDb {
 
   installAuditAppendOnlyTriggers(db);
 
+  // Apply versioned migrations after the baseline + ad-hoc ALTERs above so
+  // any new index/column additions can rely on the full table set.
+  applyPendingMigrations(db);
+
   return db;
 }
+
 
 const AUDIT_NO_UPDATE_TRIGGER = `
 CREATE TRIGGER IF NOT EXISTS audit_events_no_update
