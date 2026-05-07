@@ -258,7 +258,13 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "webhook listen",
-    summary: "Run an HTTP receiver that ingests provider callbacks.",
+    summary: "Run an HTTP receiver that ingests provider callbacks. Pass --pretty true to also tail audit events as human-readable lines on stderr.",
+    flags: [
+      { name: "--provider", description: "dropbox | signwell | docusign." },
+      { name: "--port", description: "HTTP port (default 3000)." },
+      { name: "--path", description: "URL path the provider POSTs to." },
+      { name: "--pretty", description: "Tail audit events as human-readable lines on stderr." },
+    ],
   },
   // Infra
   {
