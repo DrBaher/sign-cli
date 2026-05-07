@@ -151,7 +151,7 @@ sign request status --request-id <id> [--provider dropbox|docusign|signwell] [--
 sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf] [--log human|json]
 sign request remind --request-id <id> [--provider dropbox|docusign|signwell] [--email signer@example.com]
 sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
-sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell] [--title "Bulk for {{email}}"] [--test-mode true]
+sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json]
 sign request list [--provider dropbox|docusign|signwell] [--status created|sent|approved|completed|canceled] [--limit 100]
 sign request show --request-id <id>
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
@@ -848,6 +848,25 @@ async function main(): Promise<void> {
         logger.info("bulk", event);
       },
     });
+    const emitTokensPath = flagValue(parsed, "emit-tokens");
+    if (emitTokensPath) {
+      const fs = await import("node:fs");
+      const pathMod = await import("node:path");
+      const roster = result.results
+        .filter((r) => r.ok && r.token)
+        .map((r) => ({
+          row: r.row,
+          requestId: r.requestId,
+          signerEmail: r.signerEmail,
+          token: r.token,
+          tokenExpiresAt: r.tokenExpiresAt,
+        }));
+      const resolved = pathMod.resolve(emitTokensPath);
+      fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+      fs.writeFileSync(resolved, JSON.stringify(roster, null, 2));
+      // Strip raw tokens from the public stdout output — the file is the canonical artifact.
+      result.results = result.results.map((r) => ({ ...r, token: r.token ? "<written-to-file>" : null }));
+    }
     console.log(JSON.stringify(result, null, 2));
     if (result.failed > 0) process.exitCode = 3;
     return;
