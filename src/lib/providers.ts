@@ -1,4 +1,4 @@
-export const SIGN_PROVIDERS = ["dropbox", "docusign", "signwell"] as const;
+export const SIGN_PROVIDERS = ["dropbox", "docusign", "signwell", "local"] as const;
 
 export type SignProvider = typeof SIGN_PROVIDERS[number];
 

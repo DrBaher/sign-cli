@@ -14,6 +14,7 @@ import {
   buildProviderMatrix,
   bulkSendFromCsv,
   cancelSigningRequest,
+  runLocalDemo,
   createSigningRequest,
   exportAuditBundle,
   getRequestSnapshot,
@@ -111,6 +112,7 @@ sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.
 sign request list [--provider dropbox|docusign|signwell] [--status created|sent|approved|completed|canceled] [--limit 100]
 sign request show --request-id <id>
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
+sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign init [--out ./.env]
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
@@ -184,6 +186,18 @@ async function main(): Promise<void> {
     } finally {
       close();
     }
+    return;
+  }
+
+  if (root === "demo") {
+    const out = flagValue(parsed, "out");
+    const document = flagValue(parsed, "document");
+    const result = await runLocalDemo(db, {
+      documentPath: document,
+      outDir: out,
+      onProgress: (line) => console.error(line),
+    });
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 

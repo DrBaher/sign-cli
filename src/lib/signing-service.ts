@@ -51,6 +51,16 @@ import {
   parseFieldSpec,
   type SignatureField,
 } from "./field-placement.js";
+import {
+  cancelLocalDocument,
+  checkLocalAccount,
+  downloadLocalCompletedPdf,
+  fetchLocalDocumentStatus,
+  fetchLocalEmbeddedSignUrl,
+  normalizeLocalStatus,
+  remindLocalDocument,
+  sendLocalDocument,
+} from "./local-provider.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
   createId,
@@ -384,6 +394,9 @@ export function normalizeProviderStatus(provider: SignProvider, remoteStatus: un
   if (provider === "signwell") {
     return normalizeSignWellStatus(remoteStatus);
   }
+  if (provider === "local") {
+    return normalizeLocalStatus(remoteStatus);
+  }
   return normalizeDropboxStatus(remoteStatus);
 }
 
@@ -641,6 +654,83 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           providerStatus: result.status || "sent",
           responseBody: result.responseBody,
         };
+      },
+    };
+  }
+
+  if (provider === "local") {
+    function localSendCommon(input: { request: RequestRow; signers: SignerInput[]; documents: RequestDocument[]; embedded: boolean; templateId?: string; prefills?: PrefillInput[] }) {
+      const result = sendLocalDocument({
+        documentPath: input.documents[0]?.path,
+        documentPaths: input.documents.map((doc) => doc.path),
+        templateId: input.templateId,
+        title: input.request.title,
+        signers: input.signers,
+        prefills: input.prefills,
+        metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+        embeddedSigning: input.embedded,
+      });
+      return {
+        providerRequestId: result.documentId,
+        signatureIds: result.recipientIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    }
+    return {
+      async send(input) {
+        return localSendCommon({ request: input.request, signers: input.signers, documents: input.documents, embedded: false });
+      },
+      async sendEmbedded(input) {
+        return localSendCommon({ request: input.request, signers: input.signers, documents: input.documents, embedded: true });
+      },
+      async getEmbeddedSignUrl(input) {
+        if (!input.providerRequestId) throw new Error("Local embedded sign URL requires the document id.");
+        const result = fetchLocalEmbeddedSignUrl(input.providerRequestId, input.signatureId);
+        return result;
+      },
+      async getStatus(input) {
+        const remoteStatus = fetchLocalDocumentStatus(input.providerRequestId);
+        return {
+          providerStatus: normalizeLocalStatus(remoteStatus),
+          signatureIds: Array.isArray((remoteStatus as any)?.recipients)
+            ? (remoteStatus as any).recipients
+              .map((recipient: any) => recipient?.id)
+              .filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+            : [],
+          remoteStatus,
+        };
+      },
+      async downloadFinalPdf(input) {
+        return downloadLocalCompletedPdf(input.providerRequestId);
+      },
+      async cancel(input) {
+        const remoteResponse = cancelLocalDocument(input.providerRequestId);
+        return { remoteResponse };
+      },
+      async remind(input) {
+        const remoteResponse = remindLocalDocument(input.providerRequestId);
+        return { remoteResponse };
+      },
+      async sendFromTemplate(input) {
+        return localSendCommon({
+          request: input.request,
+          signers: input.signers,
+          documents: [],
+          embedded: false,
+          templateId: input.templateId,
+          prefills: input.prefills,
+        });
+      },
+      async sendFromTemplateEmbedded(input) {
+        return localSendCommon({
+          request: input.request,
+          signers: input.signers,
+          documents: [],
+          embedded: true,
+          templateId: input.templateId,
+          prefills: input.prefills,
+        });
       },
     };
   }
@@ -1121,6 +1211,17 @@ export async function runProviderAccountCheck(input: { provider: SignProvider; a
     };
   }
 
+  if (input.provider === "local") {
+    return {
+      provider: "local",
+      account: checkLocalAccount(),
+      interpretation: {
+        apiLikelyEnabled: true,
+        note: "Local provider always available; no remote API call. Demo / test only.",
+      },
+    };
+  }
+
   const account = await checkDocuSignAccountAccess();
   return {
     provider: "docusign",
@@ -1231,6 +1332,27 @@ export function buildProviderMatrix(): ProviderCapability[] {
           SIGNWELL_BASE_URL: process.env.SIGNWELL_BASE_URL ?? resolveSignWellBaseUrl(),
           SIGNWELL_TEST_MODE: process.env.SIGNWELL_TEST_MODE ?? null,
           SIGNWELL_WEBHOOK_SECRET: signwellWebhookSecret,
+        },
+      },
+    },
+    {
+      provider: "local",
+      displayName: "Local simulator (demo / tests)",
+      capabilities: {
+        emailSend: true,
+        embeddedSigning: true,
+        webhooks: false,
+        finalPdfDownload: true,
+        testMode: true,
+        accountCheck: true,
+      },
+      config: {
+        configured: true,
+        missing: [],
+        detected: {
+          SIGN_LOCAL_STORE_DIR: process.env.SIGN_LOCAL_STORE_DIR ?? "./data/local-provider",
+          SIGN_LOCAL_KEY_DIR: process.env.SIGN_LOCAL_KEY_DIR ?? "./data/local-keys",
+          SIGN_LOCAL_COMPLETE_AFTER: process.env.SIGN_LOCAL_COMPLETE_AFTER ?? null,
         },
       },
     },
@@ -1493,6 +1615,9 @@ function providerDisplayName(provider: SignProvider): string {
   }
   if (provider === "signwell") {
     return "SignWell";
+  }
+  if (provider === "local") {
+    return "Local simulator";
   }
   return "Dropbox Sign";
 }
@@ -2161,6 +2286,110 @@ export async function bulkSendFromCsv(
     }
   }
   return { total: input.rows.length, succeeded, failed, results };
+}
+
+export async function runLocalDemo(
+  db: SqliteDb,
+  input: {
+    documentPath?: string;
+    outDir?: string;
+    onProgress?: (line: string) => void;
+    now?: Date;
+  } = {},
+): Promise<{
+  requestId: string;
+  documentId: string;
+  signedPdfPath: string;
+  auditChainValid: boolean;
+  signatureCount: number;
+  messageDigestVerified: boolean;
+  bundleDir: string;
+  attempts: number;
+  elapsedMs: number;
+}> {
+  const onProgress = input.onProgress ?? (() => {});
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+  const outDir = path.resolve(input.outDir ?? "./demo-bundle");
+  fs.mkdirSync(outDir, { recursive: true });
+
+  let documentPath = input.documentPath;
+  if (!documentPath) {
+    const generatedPath = path.join(outDir, "demo-input.pdf");
+    fs.writeFileSync(generatedPath, Buffer.from(`%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj
+4 0 obj << /Length 74 >> stream
+BT /F1 14 Tf 60 720 Td (Sign CLI demo input. Sign locally to verify the flow.) Tj ET
+endstream
+endobj
+trailer << /Root 1 0 R /Size 5 >>
+%%EOF`, "latin1"));
+    documentPath = generatedPath;
+  }
+
+  onProgress(`[demo] creating local request from ${documentPath}`);
+  const created = createSigningRequest(db, {
+    title: "Sign CLI demo",
+    documentPath,
+    signers: [{ name: "Demo Signer", email: "demo-signer@example.com", order: 1 }],
+    tokenTtlMinutes: 30,
+    provider: "local",
+    autoApprove: true,
+    now: input.now,
+  });
+
+  onProgress("[demo] sending via local provider");
+  const sent = await sendSigningRequest(db, {
+    requestId: created.requestId,
+    provider: "local",
+    testMode: true,
+    now: input.now,
+  });
+
+  onProgress("[demo] watching status (local provider auto-completes after first poll)");
+  const watch = await watchSigningRequestStatus(db, {
+    requestId: created.requestId,
+    provider: "local",
+    intervalMs: 25,
+    timeoutMs: 5000,
+    fetchFinalPdf: true,
+    outPath: path.join(outDir, "signed.pdf"),
+    now: input.now,
+    onPoll: (update) => onProgress(`[demo] poll attempt=${update.attempt} status=${update.status}${update.terminal ? ` terminal=${update.terminal}` : ""}`),
+  });
+
+  if (!watch.finalPdf) {
+    throw new Error("Local demo: watch completed without a signed PDF.");
+  }
+
+  onProgress("[demo] inspecting embedded PKCS#7 signature");
+  const inspection = await inspectRequestSignedPdf(db, {
+    requestId: created.requestId,
+    path: watch.finalPdf.path,
+    now: input.now,
+  });
+  const messageDigestVerified = inspection.report.signatures.length > 0
+    && inspection.report.signatures.every((sig) => sig.messageDigestMatches === true);
+
+  onProgress("[demo] verifying audit chain");
+  const audit = verifyRequestAuditChain(db, created.requestId);
+
+  onProgress(`[demo] exporting bundle to ${outDir}`);
+  await exportAuditBundle(db, { requestId: created.requestId, outDir, now: input.now });
+
+  return {
+    requestId: created.requestId,
+    documentId: sent.signatureRequestId,
+    signedPdfPath: watch.finalPdf.path,
+    auditChainValid: audit.valid,
+    signatureCount: inspection.report.signatureCount,
+    messageDigestVerified,
+    bundleDir: outDir,
+    attempts: watch.attempts,
+    elapsedMs: watch.elapsedMs,
+  };
 }
 
 export async function runSignWellSmokeTest(
