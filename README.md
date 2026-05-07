@@ -395,9 +395,11 @@ npm run start -- audit show --request-id <request_id>
 
 ## Signer-side flow (agent-friendly)
 
-For `--provider local`, an automated agent can act as a signer end-to-end without an email link. The hosted providers (Dropbox Sign / DocuSign / SignWell) still require their own email/embedded UI; these signer commands will refuse non-local providers with a clear error.
+For `--provider local`, an automated agent can act as a signer end-to-end without an email link. The hosted providers (Dropbox Sign / DocuSign / SignWell) still require their own email/embedded UI; these signer commands refuse non-local providers with a clear error.
 
 Set `SIGN_LOCAL_AUTOCOMPLETE=false` so the local provider holds at `sent` until each signer explicitly runs `sign sign` (otherwise the local simulator auto-completes after the first poll, which is convenient for demos but not for agent-as-signer testing).
+
+**Per-signer token auth.** `request create` already mints one token per signer (`tokens[]` in the response). For `sign`, `signer fetch-document`, and `signer decline`, the agent must present the matching token via `--token`. The token resolves the signer; `--signer-email`, if also passed, must agree with the token's signer (a friendly typo catch). `signer list` does not require a token.
 
 ```bash
 # As the requester
@@ -406,20 +408,27 @@ node dist/cli.js request create \
   --signer name:Alice,email:alice@example.com,order:1 \
   --signer name:Bob,email:bob@example.com,order:2 \
   --provider local --auto-approve true
+# response includes:
+# "tokens": [
+#   { "signer": { "email": "alice@example.com" }, "token": "alice-tok-abc...", "expiresAt": "..." },
+#   { "signer": { "email": "bob@example.com"   }, "token": "bob-tok-123...",   "expiresAt": "..." }
+# ]
 node dist/cli.js request send --request-id <id> --provider local
+# requester DMs each signer their token + the request ID
 
-# As the signer (agent)
+# As the signer (agent), with their token
 node dist/cli.js signer list --signer-email alice@example.com
-node dist/cli.js signer fetch-document --request-id <id> --signer-email alice@example.com --out ./nda-to-review.pdf
-node dist/cli.js sign --request-id <id> --signer-email alice@example.com \
+node dist/cli.js signer fetch-document --request-id <id> --token alice-tok-abc... --out ./nda-to-review.pdf
+node dist/cli.js sign --request-id <id> --token alice-tok-abc... \
   --require-hash <expected sha256> --require-title "^Mutual NDA$" --require-signer-email alice@example.com
 # or, instead of signing:
-node dist/cli.js signer decline --request-id <id> --signer-email alice@example.com --reason "Terms changed"
+node dist/cli.js signer decline --request-id <id> --token alice-tok-abc... --reason "Terms changed"
 ```
 
 Behavior the requester can rely on:
 
 - Multi-signer: the request status only flips to `completed` when every signer is in `signedBy[]`.
+- Token auth: `sign`, `signer decline`, and `signer fetch-document` require the per-signer token. Wrong, missing, or expired tokens are rejected before any state mutation. Each token can sign its slot at most once.
 - Pre-sign safety checks (`--require-hash`, `--require-title`, `--require-signer-email`) throw before any state mutation if the request doesn't match what the agent was told to expect — protecting a misbehaving requester from silently swapping the document or title.
 - Each signer-side action appends an audit event to the chain: `request.signed_by_signer`, `request.signer_declined`, `request.signer_fetched_document`. Run `audit verify --request-id <id>` to confirm the chain after signing.
 

@@ -2511,24 +2511,48 @@ function ensureLocalProvider(request: RequestRow, provider: SignProvider): void 
   }
 }
 
-function resolveLocalSigner(
+function resolveSignerFromToken(
+  db: SqliteDb,
   request: RequestRow,
-  signerEmail?: string,
-): SignerInput {
-  const signers = JSON.parse(request.signers_json) as SignerInput[];
-  if (signerEmail) {
-    const normalized = signerEmail.trim().toLowerCase();
-    const match = signers.find((signer) => signer.email.trim().toLowerCase() === normalized);
-    if (!match) {
-      throw new Error(`Signer ${signerEmail} is not a recipient on request ${request.id}.`);
-    }
-    return match;
+  token: string,
+  now: Date,
+): { signer: SignerInput; approval: ApprovalRow } {
+  const trimmed = (token ?? "").trim();
+  if (!trimmed) {
+    throw new Error("--token is required for signer-side commands.");
   }
-  if (signers.length === 1) return signers[0];
-  throw new Error(
-    `Request ${request.id} has multiple signers; pass --signer-email to pick one of: ` +
-    signers.map((signer) => signer.email).join(", "),
-  );
+  const tokenHash = sha256(trimmed);
+  const approval = db.prepare(
+    "SELECT * FROM approvals WHERE request_id = ? AND token_hash = ?",
+  ).get(request.id, tokenHash) as ApprovalRow | undefined;
+  if (!approval) {
+    throw new Error(`Token does not match any signer on request ${request.id}.`);
+  }
+  if (new Date(approval.expires_at).getTime() < now.getTime()) {
+    throw new Error(`Token has expired (expiresAt=${approval.expires_at}).`);
+  }
+  return {
+    signer: {
+      name: approval.signer_name,
+      email: approval.signer_email,
+      order: approval.signer_order,
+    },
+    approval,
+  };
+}
+
+function assertSignerEmailMatchesToken(
+  signer: SignerInput,
+  signerEmailFlag: string | undefined,
+): void {
+  if (!signerEmailFlag) return;
+  const expected = signerEmailFlag.trim().toLowerCase();
+  const actual = signer.email.trim().toLowerCase();
+  if (expected !== actual) {
+    throw new Error(
+      `--signer-email ${signerEmailFlag} does not match the signer (${signer.email}) the token authorizes.`,
+    );
+  }
 }
 
 export type SignerSafetyChecks = {
@@ -2591,6 +2615,7 @@ export function signSigningRequest(
   db: SqliteDb,
   input: {
     requestId: string;
+    token: string;
     signerEmail?: string;
     signerName?: string;
     now?: Date;
@@ -2599,7 +2624,9 @@ export function signSigningRequest(
   const request = getRequestRow(db, input.requestId);
   const provider = getPersistedProvider(request);
   ensureLocalProvider(request, provider);
-  const signer = resolveLocalSigner(request, input.signerEmail);
+  const now = input.now ?? new Date();
+  const { signer } = resolveSignerFromToken(db, request, input.token, now);
+  assertSignerEmailMatchesToken(signer, input.signerEmail);
   applySignerSafetyChecks(request, signer, {
     requireHash: input.requireHash,
     requireTitle: input.requireTitle,
@@ -2607,7 +2634,14 @@ export function signSigningRequest(
   });
 
   const providerRequestId = getProviderRequestId(request)!;
-  const now = input.now ?? new Date();
+  const beforeRecord = readLocalDocument(providerRequestId);
+  const normalizedSigner = signer.email.trim().toLowerCase();
+  const alreadySigned = beforeRecord.signedBy.some(
+    (entry) => entry.email.trim().toLowerCase() === normalizedSigner,
+  );
+  if (alreadySigned) {
+    throw new Error(`Signer ${signer.email} has already signed request ${request.id}.`);
+  }
   const result = signLocalDocument(providerRequestId, {
     signerEmail: signer.email,
     signerName: input.signerName ?? signer.name,
@@ -2663,14 +2697,15 @@ export type SignerDeclineResult = {
 
 export function declineSigningRequestAsSigner(
   db: SqliteDb,
-  input: { requestId: string; signerEmail?: string; reason?: string; now?: Date },
+  input: { requestId: string; token: string; signerEmail?: string; reason?: string; now?: Date },
 ): SignerDeclineResult {
   const request = getRequestRow(db, input.requestId);
   const provider = getPersistedProvider(request);
   ensureLocalProvider(request, provider);
-  const signer = resolveLocalSigner(request, input.signerEmail);
-  const providerRequestId = getProviderRequestId(request)!;
   const now = input.now ?? new Date();
+  const { signer } = resolveSignerFromToken(db, request, input.token, now);
+  assertSignerEmailMatchesToken(signer, input.signerEmail);
+  const providerRequestId = getProviderRequestId(request)!;
   const result = declineLocalDocument(providerRequestId, {
     signerEmail: signer.email,
     reason: input.reason,
@@ -2736,12 +2771,14 @@ export type FetchUnsignedDocumentResult = {
 
 export function fetchUnsignedDocumentForSigner(
   db: SqliteDb,
-  input: { requestId: string; signerEmail?: string; outPath?: string; now?: Date },
+  input: { requestId: string; token: string; signerEmail?: string; outPath?: string; now?: Date },
 ): FetchUnsignedDocumentResult {
   const request = getRequestRow(db, input.requestId);
   const provider = getPersistedProvider(request);
   ensureLocalProvider(request, provider);
-  const signer = resolveLocalSigner(request, input.signerEmail);
+  const now = input.now ?? new Date();
+  const { signer } = resolveSignerFromToken(db, request, input.token, now);
+  assertSignerEmailMatchesToken(signer, input.signerEmail);
   const providerRequestId = getProviderRequestId(request)!;
   const document = readLocalDocument(providerRequestId);
 
@@ -2753,7 +2790,6 @@ export function fetchUnsignedDocumentForSigner(
     outPath = resolved;
   }
 
-  const now = input.now ?? new Date();
   appendAuditEvent(db, {
     requestId: request.id,
     eventType: "request.signer_fetched_document",

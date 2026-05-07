@@ -51,15 +51,19 @@ function makeFixturePdf(dir: string): string {
   return documentPath;
 }
 
+type SignerSpec = { name: string; email: string; order: number };
+
 async function bootstrapLocalRequest(input: {
-  signers: Array<{ name: string; email: string; order: number }>;
+  signers: SignerSpec[];
   title?: string;
+  tokenTtlMinutes?: number;
 }): Promise<{
   db: ReturnType<typeof createDb>;
   cleanup: () => void;
   documentPath: string;
   requestId: string;
   documentHash: string;
+  tokens: Map<string, string>;
 }> {
   const { dbPath, cleanup: dbCleanup } = makeTempDb();
   const db = createDb(dbPath);
@@ -69,7 +73,7 @@ async function bootstrapLocalRequest(input: {
     title: input.title ?? "Signer-flow test",
     documentPath,
     signers: input.signers,
-    tokenTtlMinutes: 30,
+    tokenTtlMinutes: input.tokenTtlMinutes ?? 30,
     provider: "local",
     autoApprove: true,
   });
@@ -78,6 +82,10 @@ async function bootstrapLocalRequest(input: {
     provider: "local",
     testMode: true,
   });
+  const tokens = new Map<string, string>();
+  for (const issued of created.tokens) {
+    tokens.set(issued.signer.email, issued.token);
+  }
   return {
     db,
     cleanup: () => {
@@ -88,6 +96,7 @@ async function bootstrapLocalRequest(input: {
     documentPath,
     requestId: created.requestId,
     documentHash: created.documentHash,
+    tokens,
   };
 }
 
@@ -102,7 +111,7 @@ test("multi-signer request stays sent after one signs and flips to completed whe
     try {
       const first = signSigningRequest(ctx.db, {
         requestId: ctx.requestId,
-        signerEmail: "alice@example.com",
+        token: ctx.tokens.get("alice@example.com")!,
       });
       assert.equal(first.requestStatus, "sent");
       assert.equal(first.remainingSigners, 1);
@@ -116,7 +125,7 @@ test("multi-signer request stays sent after one signs and flips to completed whe
 
       const second = signSigningRequest(ctx.db, {
         requestId: ctx.requestId,
-        signerEmail: "bob@example.com",
+        token: ctx.tokens.get("bob@example.com")!,
       });
       assert.equal(second.requestStatus, "completed");
       assert.equal(second.remainingSigners, 0);
@@ -144,7 +153,7 @@ test("sign sign --require-hash mismatch throws before any state mutation", { con
         () =>
           signSigningRequest(ctx.db, {
             requestId: ctx.requestId,
-            signerEmail: "alice@example.com",
+            token: ctx.tokens.get("alice@example.com")!,
             requireHash: "0".repeat(64),
           }),
         /Pre-sign safety check failed: --require-hash/u,
@@ -162,7 +171,7 @@ test("sign sign --require-hash mismatch throws before any state mutation", { con
   });
 });
 
-test("sign sign rejects an unknown signer-email", { concurrency: false }, async () => {
+test("sign sign rejects an unknown signer-email passed alongside a valid token", { concurrency: false }, async () => {
   await withScopedLocalStorage(async () => {
     const ctx = await bootstrapLocalRequest({
       signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
@@ -172,9 +181,10 @@ test("sign sign rejects an unknown signer-email", { concurrency: false }, async 
         () =>
           signSigningRequest(ctx.db, {
             requestId: ctx.requestId,
+            token: ctx.tokens.get("alice@example.com")!,
             signerEmail: "intruder@example.com",
           }),
-        /is not a recipient on request/u,
+        /does not match the signer .* the token authorizes/u,
       );
     } finally {
       ctx.cleanup();
@@ -190,7 +200,7 @@ test("signer decline records audit event and flips request to declined", { concu
     try {
       const result = declineSigningRequestAsSigner(ctx.db, {
         requestId: ctx.requestId,
-        signerEmail: "alice@example.com",
+        token: ctx.tokens.get("alice@example.com")!,
         reason: "Terms changed since I last reviewed",
       });
       assert.equal(result.signerEmail, "alice@example.com");
@@ -224,7 +234,6 @@ test("signer list filters by signer-email and only shows pending entries", { con
       title: "Inbox-1",
     });
     try {
-      // Second request, Bob-only, with no overlap with Alice.
       const dir = mkdtempSync(path.join(os.tmpdir(), "sign-inbox-other-"));
       const otherDoc = makeFixturePdf(dir);
       const other = createSigningRequest(ctx.db, {
@@ -235,6 +244,7 @@ test("signer list filters by signer-email and only shows pending entries", { con
         provider: "local",
         autoApprove: true,
       });
+      const otherBobToken = other.tokens.find((t) => t.signer.email === "bob@example.com")!.token;
       await sendSigningRequest(ctx.db, { requestId: other.requestId, provider: "local", testMode: true });
 
       const aliceInbox = listSignerInbox(ctx.db, { signerEmail: "alice@example.com" });
@@ -248,8 +258,7 @@ test("signer list filters by signer-email and only shows pending entries", { con
         [ctx.requestId, other.requestId].sort(),
       );
 
-      // After Bob signs Inbox-2 (single signer → completed), it drops out of his inbox.
-      signSigningRequest(ctx.db, { requestId: other.requestId, signerEmail: "bob@example.com" });
+      signSigningRequest(ctx.db, { requestId: other.requestId, token: otherBobToken });
       const bobInboxAfter = listSignerInbox(ctx.db, { signerEmail: "bob@example.com" });
       assert.equal(bobInboxAfter.length, 1);
       assert.equal(bobInboxAfter[0].requestId, ctx.requestId);
@@ -271,7 +280,7 @@ test("signer fetch-document writes the unsigned PDF and records request.signer_f
     try {
       const result = fetchUnsignedDocumentForSigner(ctx.db, {
         requestId: ctx.requestId,
-        signerEmail: "alice@example.com",
+        token: ctx.tokens.get("alice@example.com")!,
         outPath,
       });
       assert.equal(result.outPath, outPath);
@@ -301,7 +310,6 @@ test("signer-side commands refuse non-local providers with a clear message", { c
     const dir = mkdtempSync(path.join(os.tmpdir(), "sign-signer-nonlocal-"));
     const documentPath = makeFixturePdf(dir);
     try {
-      // Create a Dropbox request directly so we never hit the network.
       const created = createSigningRequest(db, {
         title: "Non-local refusal",
         documentPath,
@@ -310,17 +318,18 @@ test("signer-side commands refuse non-local providers with a clear message", { c
         provider: "dropbox",
         autoApprove: true,
       });
+      const token = created.tokens.find((t) => t.signer.email === "alice@example.com")!.token;
 
       assert.throws(
-        () => signSigningRequest(db, { requestId: created.requestId, signerEmail: "alice@example.com" }),
+        () => signSigningRequest(db, { requestId: created.requestId, token }),
         /only supports --provider local/u,
       );
       assert.throws(
-        () => declineSigningRequestAsSigner(db, { requestId: created.requestId, signerEmail: "alice@example.com" }),
+        () => declineSigningRequestAsSigner(db, { requestId: created.requestId, token }),
         /only supports --provider local/u,
       );
       assert.throws(
-        () => fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, signerEmail: "alice@example.com" }),
+        () => fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token }),
         /only supports --provider local/u,
       );
     } finally {
@@ -337,7 +346,6 @@ test("SIGN_LOCAL_AUTOCOMPLETE=false keeps a polled local request at sent until a
       signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
     });
     try {
-      // Multiple status polls must NOT auto-complete while the env var is "false".
       for (let i = 0; i < 4; i += 1) {
         const status = await getSigningRequestStatus(ctx.db, {
           requestId: ctx.requestId,
@@ -346,12 +354,136 @@ test("SIGN_LOCAL_AUTOCOMPLETE=false keeps a polled local request at sent until a
         assert.equal(status.request.status, "sent", `poll #${i + 1} unexpectedly auto-completed`);
       }
 
-      // A real signer-side sign call still flips it to completed.
       const result = signSigningRequest(ctx.db, {
         requestId: ctx.requestId,
-        signerEmail: "alice@example.com",
+        token: ctx.tokens.get("alice@example.com")!,
       });
       assert.equal(result.requestStatus, "completed");
+    } finally {
+      ctx.cleanup();
+    }
+  });
+});
+
+// --- Token-auth specific scenarios ---
+
+test("sign sign rejects when the token is missing", { concurrency: false }, async () => {
+  await withScopedLocalStorage(async () => {
+    const ctx = await bootstrapLocalRequest({
+      signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
+    });
+    try {
+      assert.throws(
+        () => signSigningRequest(ctx.db, { requestId: ctx.requestId, token: "" }),
+        /--token is required for signer-side commands/u,
+      );
+    } finally {
+      ctx.cleanup();
+    }
+  });
+});
+
+test("sign sign rejects when the token is wrong", { concurrency: false }, async () => {
+  await withScopedLocalStorage(async () => {
+    const ctx = await bootstrapLocalRequest({
+      signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
+    });
+    try {
+      assert.throws(
+        () => signSigningRequest(ctx.db, { requestId: ctx.requestId, token: "not-a-real-token" }),
+        /Token does not match any signer/u,
+      );
+    } finally {
+      ctx.cleanup();
+    }
+  });
+});
+
+test("sign sign rejects when the token belongs to another signer's slot but signer-email is asserted otherwise", { concurrency: false }, async () => {
+  await withScopedLocalStorage(async () => {
+    const ctx = await bootstrapLocalRequest({
+      signers: [
+        { name: "Alice", email: "alice@example.com", order: 1 },
+        { name: "Bob", email: "bob@example.com", order: 2 },
+      ],
+    });
+    try {
+      // Pass Bob's token but assert --signer-email is alice — must fail.
+      assert.throws(
+        () =>
+          signSigningRequest(ctx.db, {
+            requestId: ctx.requestId,
+            token: ctx.tokens.get("bob@example.com")!,
+            signerEmail: "alice@example.com",
+          }),
+        /does not match the signer .* the token authorizes/u,
+      );
+
+      // Sanity check: the same wrong-slot scenario where the agent doesn't override is allowed
+      // (Bob simply signs his own slot), so the failure above is purely from the cross-check.
+      const ok = signSigningRequest(ctx.db, {
+        requestId: ctx.requestId,
+        token: ctx.tokens.get("bob@example.com")!,
+      });
+      assert.equal(ok.signerEmail, "bob@example.com");
+    } finally {
+      ctx.cleanup();
+    }
+  });
+});
+
+test("sign sign rejects an expired token", { concurrency: false }, async () => {
+  await withScopedLocalStorage(async () => {
+    const { dbPath, cleanup } = makeTempDb();
+    const db = createDb(dbPath);
+    const dir = mkdtempSync(path.join(os.tmpdir(), "sign-token-expired-"));
+    const documentPath = makeFixturePdf(dir);
+    try {
+      // Mint with a 1-minute TTL, then pass `now` 2 minutes in the future.
+      const created = createSigningRequest(db, {
+        title: "Token expiry",
+        documentPath,
+        signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
+        tokenTtlMinutes: 1,
+        provider: "local",
+        autoApprove: true,
+      });
+      await sendSigningRequest(db, { requestId: created.requestId, provider: "local", testMode: true });
+      const token = created.tokens[0].token;
+
+      const future = new Date(Date.now() + 2 * 60_000);
+      assert.throws(
+        () => signSigningRequest(db, { requestId: created.requestId, token, now: future }),
+        /Token has expired/u,
+      );
+
+      // The fresh path still works inside TTL.
+      const ok = signSigningRequest(db, { requestId: created.requestId, token });
+      assert.equal(ok.signerEmail, "alice@example.com");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      db.close();
+      cleanup();
+    }
+  });
+});
+
+test("sign sign refuses to sign twice with the same token", { concurrency: false }, async () => {
+  await withScopedLocalStorage(async () => {
+    const ctx = await bootstrapLocalRequest({
+      signers: [
+        { name: "Alice", email: "alice@example.com", order: 1 },
+        { name: "Bob", email: "bob@example.com", order: 2 },
+      ],
+    });
+    try {
+      const aliceToken = ctx.tokens.get("alice@example.com")!;
+      const first = signSigningRequest(ctx.db, { requestId: ctx.requestId, token: aliceToken });
+      assert.equal(first.requestStatus, "sent");
+      assert.throws(
+        () => signSigningRequest(ctx.db, { requestId: ctx.requestId, token: aliceToken }),
+        /has already signed request/u,
+      );
     } finally {
       ctx.cleanup();
     }
