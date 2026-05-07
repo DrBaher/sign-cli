@@ -32,9 +32,12 @@ The stub serves three purposes:
 
 ### Postgres-readiness checklist (future PR)
 
-- [ ] Define `StorageBackend` interface with `prepare(sql) → { get, all, run }` shape.
-- [ ] Wrap `DatabaseSync` in `SqliteBackend` implementing that interface.
-- [ ] Implement `PostgresBackend` (probably via the `pg` driver).
+- [x] Define `DbBackend` interface with `prepare(sql) → { get, all, run }` shape. (`src/lib/db-backend.ts`)
+- [x] Wrap `DatabaseSync` in `SqliteBackend` implementing that interface. (`src/lib/db-backend.ts`)
+- [x] Stub `PostgresBackend` returning the adapter — every method throws `INTERNAL` pointing here. (`src/lib/db-backend.ts`)
+- [x] Add `openStorageBackend()` in `src/lib/storage.ts` so new code can target the abstract `DbBackend` instead of the concrete `SqliteDb`.
+- [ ] Migrate the ~30 `SqliteDb`-typed call sites to `DbBackend` one at a time (start with read-only audit/show paths, leave the lifecycle writes for last).
+- [ ] Implement real `PostgresBackend` (via the `pg` driver) — replace the throwing methods with real prepared-statement execution.
 - [ ] Replace baseline `CREATE TABLE IF NOT EXISTS` with backend-aware DDL (datatypes diverge: `INTEGER` ↔ `BIGINT`, `TEXT` is portable).
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.
 - [ ] Re-implement the audit-events append-only triggers as Postgres `BEFORE UPDATE/DELETE` triggers + `RAISE EXCEPTION`.
