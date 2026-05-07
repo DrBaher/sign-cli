@@ -264,6 +264,20 @@ export const HELP_CATALOG: CommandSpec[] = [
       `sign signer policy try --spec ./policy.json \\\n` +
       `  --title "Mutual NDA" --document-sha256 abc... --signer-email alice@example.com`,
   },
+  {
+    command: "signer policy diff",
+    summary: "Compare two policy specs against the same context(s) and report which rows would flip action. Pure preview — never touches request state.",
+    flags: [
+      { name: "--before", required: true, description: "Path to the current/baseline policy.json." },
+      { name: "--after", required: true, description: "Path to the proposed policy.json." },
+      { name: "--snapshot", description: "Diff a single context loaded from a request show JSON file." },
+      { name: "--inbox", description: "true to diff against every pending inbox row (filtered by --signer-email)." },
+      { name: "--signer-email", description: "Inbox filter / fallback signer for the synthetic context." },
+    ],
+    example:
+      `sign signer policy diff --before ./policy.v1.json --after ./policy.v2.json \\\n` +
+      `  --inbox true --signer-email alice@example.com`,
+  },
   // Audit + bundles
   {
     command: "audit show",
