@@ -21,6 +21,7 @@ export type SignErrorCode =
   | "UNKNOWN_TOOL"
   | "INVALID_ARGS"
   | "UNKNOWN_RESOURCE"
+  | "RATE_LIMITED"
   | "INTERNAL";
 
 export type SignErrorEnvelope = {

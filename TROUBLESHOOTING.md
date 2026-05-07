@@ -71,6 +71,7 @@ Set `SIGN_ERROR_FORMAT=text` to fall back to the legacy plain-string-on-stderr b
 | `Local provider: document <id> is declined; cannot sign.` / `... is canceled; cannot sign.` | A signer already declined or the requester canceled. | The request is terminal — start a new one. |
 | `Local provider: document <id> is already completed; cannot decline.` | All signers already signed. | Decline isn't applicable; the document is final. |
 | Local request keeps auto-completing after one poll | Default `SIGN_LOCAL_AUTOCOMPLETE=true` is convenient for demos but races signer-side commands. | Export `SIGN_LOCAL_AUTOCOMPLETE=false` (or set it in `.env`) so the local provider holds at `sent` until each signer runs `sign sign`. |
+| `Request <id> exceeded SIGN_LOCAL_MAX_FETCHES_PER_HOUR=N (current=M).` | A misbehaving (or runaway) agent is hammering `signer fetch-document` for the same request. | Lower the agent's poll rate, raise the limit, or unset `SIGN_LOCAL_MAX_FETCHES_PER_HOUR`. The window is a sliding hour anchored to `audit_events.created_at`. |
 
 ## Live smoke test
 SignWell only:
