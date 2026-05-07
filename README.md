@@ -42,6 +42,7 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `request status`
 - `request watch`
 - `request launch-embedded` (Dropbox Sign / SignWell)
+- `request from-template` (provider templates: Dropbox/DocuSign/SignWell)
 - `request fetch-final`
 - `request remind` (Dropbox / DocuSign / SignWell)
 - `request cancel` (Dropbox cancel / DocuSign void / SignWell delete; requires `--yes true`)
@@ -387,6 +388,28 @@ npm run start -- audit show --request-id <request_id>
 5. `webhook listen`
 6. `request watch`
 
+
+## Templates
+
+Reuse a template you defined in your provider's dashboard, no PDF upload required:
+
+```bash
+node dist/cli.js request from-template \
+  --template-id tmpl_abc \
+  --provider dropbox \
+  --signer role:Buyer,name:Alice,email:alice@example.com,order:1 \
+  --signer role:Seller,name:Bob,email:bob@example.com,order:2 \
+  --prefill name:purchase_price,value:1000 \
+  --auto-approve true
+
+node dist/cli.js request send --request-id <id> --provider dropbox --test-mode true
+```
+
+- `--template-id` is the template identifier from the provider dashboard.
+- Each `--signer` must include `role:<roleName>` matching a template role/placeholder.
+- `--prefill name:K,value:V[,signer:N]` populates template fields. DocuSign maps prefills to per-signer text tabs (use `signer:N` to scope); Dropbox uses `custom_fields`; SignWell uses `placeholders`.
+- The request stores `template_id` + `prefills_json`. `request send` and `request send-embedded` automatically route to the provider's template send endpoint instead of uploading a document.
+- `--template-id` and `--document` cannot be combined on the same request.
 
 ## Field placement
 

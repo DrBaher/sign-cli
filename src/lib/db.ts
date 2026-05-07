@@ -90,6 +90,12 @@ export function openDatabase(dbPath: string): SqliteDb {
   if (!hasColumn(db, "requests", "fields_json")) {
     db.exec("ALTER TABLE requests ADD COLUMN fields_json TEXT");
   }
+  if (!hasColumn(db, "requests", "template_id")) {
+    db.exec("ALTER TABLE requests ADD COLUMN template_id TEXT");
+  }
+  if (!hasColumn(db, "requests", "prefills_json")) {
+    db.exec("ALTER TABLE requests ADD COLUMN prefills_json TEXT");
+  }
 
   return db;
 }

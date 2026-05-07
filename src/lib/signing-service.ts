@@ -10,6 +10,7 @@ import {
   normalizeDocuSignStatus,
   remindDocuSignEnvelope,
   sendDocuSignEnvelope,
+  sendDocuSignEnvelopeFromTemplate,
   voidDocuSignEnvelope,
 } from "./docusign.js";
 import type { SqliteDb } from "./db.js";
@@ -17,11 +18,13 @@ import {
   cancelDropboxSignatureRequest,
   checkDropboxAccount,
   createEmbeddedSignatureRequest,
+  createEmbeddedSignatureRequestWithTemplate,
   downloadSignedPdf,
   fetchEmbeddedSignUrl,
   fetchSignatureRequestStatus,
   remindDropboxSignatureRequest,
   sendSignatureRequest,
+  sendSignatureRequestWithTemplate,
 } from "./dropbox-sign.js";
 import {
   cancelSignWellDocument,
@@ -33,6 +36,7 @@ import {
   remindSignWellDocument,
   resolveSignWellBaseUrl,
   sendSignWellDocument,
+  sendSignWellTemplateDocument,
 } from "./signwell.js";
 import {
   extractSignWellRecipientIds as extractSignWellWebhookRecipientIds,
@@ -56,7 +60,7 @@ import {
   stableStringify,
   tokenHint,
 } from "./util.js";
-import type { SignerInput } from "./util.js";
+import type { PrefillInput, SignerInput } from "./util.js";
 import { verifyDropboxCallback } from "./webhook.js";
 import type { DropboxCallbackPayload } from "./webhook.js";
 
@@ -75,6 +79,8 @@ export type CreateRequestInput = {
   documentPaths?: string[];
   signers: SignerInput[];
   fields?: SignatureField[];
+  templateId?: string;
+  prefills?: PrefillInput[];
   tokenTtlMinutes: number;
   autoApprove?: boolean;
   provider?: SignProvider;
@@ -96,6 +102,8 @@ type RequestRow = {
   signers_json: string;
   documents_json: string | null;
   fields_json: string | null;
+  template_id: string | null;
+  prefills_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -121,7 +129,22 @@ function parseDocumentsJson(raw: string | null): RequestDocument[] {
 export function getRequestDocuments(request: RequestRow): RequestDocument[] {
   const parsed = parseDocumentsJson(request.documents_json);
   if (parsed.length > 0) return parsed;
+  if (request.template_id) return [];
   return [{ path: request.document_path, hash: request.document_hash, name: path.basename(request.document_path) }];
+}
+
+function parsePrefillsJson(raw: string | null): PrefillInput[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as PrefillInput[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function getRequestPrefills(request: RequestRow): PrefillInput[] {
+  return parsePrefillsJson(request.prefills_json);
 }
 
 function parseFieldsJson(raw: string | null): SignatureField[] {
@@ -180,6 +203,23 @@ type ProviderApi = {
     signers: SignerInput[];
     documents: RequestDocument[];
     fields: SignatureField[];
+    apiKey?: string;
+    clientId?: string;
+    testMode: boolean;
+  }) => Promise<ProviderSendResult>;
+  sendFromTemplate?: (input: {
+    request: RequestRow;
+    signers: SignerInput[];
+    prefills: PrefillInput[];
+    templateId: string;
+    apiKey?: string;
+    testMode: boolean;
+  }) => Promise<ProviderSendResult>;
+  sendFromTemplateEmbedded?: (input: {
+    request: RequestRow;
+    signers: SignerInput[];
+    prefills: PrefillInput[];
+    templateId: string;
     apiKey?: string;
     clientId?: string;
     testMode: boolean;
@@ -311,7 +351,7 @@ function persistRequestProviderMetadata(
   );
 }
 
-function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; documents: RequestDocument[]; fields: SignatureField[]; normalizedProvider: SignProvider } {
+function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; documents: RequestDocument[]; fields: SignatureField[]; prefills: PrefillInput[]; normalizedProvider: SignProvider } {
   return {
     ...request,
     provider: request.provider ?? getPersistedProvider(request),
@@ -320,6 +360,7 @@ function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: 
     signatureIds: parseSignatureIdsJson(request.signature_ids_json),
     documents: getRequestDocuments(request),
     fields: getRequestFields(request),
+    prefills: getRequestPrefills(request),
     normalizedProvider: getPersistedProvider(request),
   };
 }
@@ -448,6 +489,37 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         const remoteResponse = await remindDocuSignEnvelope(input.providerRequestId);
         return { remoteResponse };
       },
+      async sendFromTemplate(input) {
+        const result = await sendDocuSignEnvelopeFromTemplate({
+          templateId: input.templateId,
+          title: input.request.title,
+          signers: input.signers,
+          prefills: input.prefills,
+          metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+        });
+        return {
+          providerRequestId: result.envelopeId,
+          signatureIds: result.recipientIds,
+          providerStatus: "sent",
+          responseBody: result.responseBody,
+        };
+      },
+      async sendFromTemplateEmbedded(input) {
+        const result = await sendDocuSignEnvelopeFromTemplate({
+          templateId: input.templateId,
+          title: input.request.title,
+          signers: input.signers,
+          prefills: input.prefills,
+          metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+          embeddedSigning: true,
+        });
+        return {
+          providerRequestId: result.envelopeId,
+          signatureIds: result.recipientIds,
+          providerStatus: "sent",
+          responseBody: result.responseBody,
+        };
+      },
     };
   }
 
@@ -533,6 +605,43 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         const remoteResponse = await remindSignWellDocument(input.apiKey ?? "", input.providerRequestId, resolveSignWellBaseUrl());
         return { remoteResponse };
       },
+      async sendFromTemplate(input) {
+        const result = await sendSignWellTemplateDocument({
+          apiKey: input.apiKey ?? "",
+          baseUrl: resolveSignWellBaseUrl(),
+          templateId: input.templateId,
+          title: input.request.title,
+          signers: input.signers,
+          prefills: input.prefills,
+          metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+          testMode: input.testMode,
+        });
+        return {
+          providerRequestId: result.documentId,
+          signatureIds: result.recipientIds,
+          providerStatus: result.status || "sent",
+          responseBody: result.responseBody,
+        };
+      },
+      async sendFromTemplateEmbedded(input) {
+        const result = await sendSignWellTemplateDocument({
+          apiKey: input.apiKey ?? "",
+          baseUrl: resolveSignWellBaseUrl(),
+          templateId: input.templateId,
+          title: input.request.title,
+          signers: input.signers,
+          prefills: input.prefills,
+          metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+          testMode: input.testMode,
+          embeddedSigning: true,
+        });
+        return {
+          providerRequestId: result.documentId,
+          signatureIds: result.recipientIds,
+          providerStatus: result.status || "sent",
+          responseBody: result.responseBody,
+        };
+      },
     };
   }
 
@@ -606,6 +715,41 @@ function getProviderApi(provider: SignProvider): ProviderApi {
       const remoteResponse = await remindDropboxSignatureRequest(input.apiKey ?? "", input.providerRequestId, input.email);
       return { remoteResponse };
     },
+    async sendFromTemplate(input) {
+      const result = await sendSignatureRequestWithTemplate({
+        apiKey: input.apiKey ?? "",
+        templateId: input.templateId,
+        title: input.request.title,
+        signers: input.signers,
+        prefills: input.prefills,
+        metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+        testMode: input.testMode,
+      });
+      return {
+        providerRequestId: result.signatureRequestId,
+        signatureIds: result.signatureIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    },
+    async sendFromTemplateEmbedded(input) {
+      const result = await createEmbeddedSignatureRequestWithTemplate({
+        apiKey: input.apiKey ?? "",
+        clientId: input.clientId ?? "",
+        templateId: input.templateId,
+        title: input.request.title,
+        signers: input.signers,
+        prefills: input.prefills,
+        metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
+        testMode: input.testMode,
+      });
+      return {
+        providerRequestId: result.signatureRequestId,
+        signatureIds: result.signatureIds,
+        providerStatus: "sent",
+        responseBody: result.responseBody,
+      };
+    },
   };
 }
 
@@ -625,6 +769,7 @@ export function createSigningRequest(
   requestId: string;
   documentHash: string;
   documents: RequestDocument[];
+  templateId: string | null;
   tokens: Array<{ signer: SignerInput; token: string; expiresAt: string }>;
 } {
   if (input.signers.length === 0) {
@@ -650,13 +795,22 @@ export function createSigningRequest(
   const now = input.now ?? new Date();
   const requestId = createId("req");
   const createdAt = nowIso(now);
+  const isTemplate = Boolean(input.templateId);
   const allPaths = (input.documentPaths && input.documentPaths.length > 0
     ? input.documentPaths
     : input.documentPath ? [input.documentPath] : []);
-  if (allPaths.length === 0) {
-    throw new Error("At least one --document is required.");
+  if (!isTemplate && allPaths.length === 0) {
+    throw new Error("At least one --document is required (or pass --template-id for a template request).");
   }
-  const documents: RequestDocument[] = allPaths.map((rawPath) => {
+  if (isTemplate && allPaths.length > 0) {
+    throw new Error("--template-id and --document cannot be combined; pass one or the other.");
+  }
+  for (const signer of sortedSigners) {
+    if (isTemplate && !signer.role) {
+      throw new Error(`Template requests need role:<name> on every --signer (signer "${signer.email}" is missing role).`);
+    }
+  }
+  const documents: RequestDocument[] = isTemplate ? [] : allPaths.map((rawPath) => {
     const resolved = path.resolve(rawPath);
     return {
       path: resolved,
@@ -664,30 +818,39 @@ export function createSigningRequest(
       name: path.basename(resolved),
     };
   });
-  const primary = documents[0];
+  const templateMarker = isTemplate ? `template:${input.templateId!}` : null;
+  const primaryPath = templateMarker ?? documents[0].path;
+  const primaryHash = templateMarker ? sha256(templateMarker) : documents[0].hash;
   const signersJson = stableStringify(sortedSigners);
-  const documentsJson = stableStringify(documents);
+  const documentsJson = documents.length > 0 ? stableStringify(documents) : null;
   const fields = input.fields ?? [];
   const knownOrders = new Set(sortedSigners.map((signer) => signer.order));
   for (const field of fields) {
     if (!knownOrders.has(field.signerOrder)) {
       throw new Error(`Field references signer:${field.signerOrder}, but no --signer with that order was provided.`);
     }
-    if (field.documentIndex >= documents.length) {
+    if (!isTemplate && field.documentIndex >= documents.length) {
       throw new Error(`Field doc:${field.documentIndex} is out of range (only ${documents.length} document(s) attached).`);
     }
   }
   const fieldsJson = fields.length > 0 ? JSON.stringify(fields) : null;
+  const prefills = input.prefills ?? [];
+  for (const prefill of prefills) {
+    if (prefill.signerOrder !== undefined && !knownOrders.has(prefill.signerOrder)) {
+      throw new Error(`Prefill references signer:${prefill.signerOrder}, but no --signer with that order was provided.`);
+    }
+  }
+  const prefillsJson = prefills.length > 0 ? JSON.stringify(prefills) : null;
 
   db.prepare(
     `INSERT INTO requests (
-      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, documents_json, fields_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, title, document_path, document_hash, status, provider, provider_request_id, provider_status, dropbox_signature_request_id, dropbox_status, signature_ids_json, signers_json, documents_json, fields_json, template_id, prefills_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     requestId,
     input.title,
-    primary.path,
-    primary.hash,
+    primaryPath,
+    primaryHash,
     "created",
     input.provider ?? null,
     null,
@@ -698,6 +861,8 @@ export function createSigningRequest(
     signersJson,
     documentsJson,
     fieldsJson,
+    input.templateId ?? null,
+    prefillsJson,
     createdAt,
     createdAt,
   );
@@ -732,7 +897,7 @@ export function createSigningRequest(
       signer.order,
       sha256(token),
       tokenHint(token),
-      primary.hash,
+      primaryHash,
       expiresAt,
       null,
       null,
@@ -751,10 +916,12 @@ export function createSigningRequest(
     eventType: "request.created",
     payload: {
       title: input.title,
-      documentPath: primary.path,
-      documentHash: primary.hash,
+      documentPath: primaryPath,
+      documentHash: primaryHash,
       documents,
       fields,
+      templateId: input.templateId ?? null,
+      prefills,
       provider: input.provider ?? null,
       signers: sortedSigners,
       tokenTtlMinutes: input.tokenTtlMinutes,
@@ -763,7 +930,7 @@ export function createSigningRequest(
     now,
   });
 
-  return { requestId, documentHash: primary.hash, documents, tokens };
+  return { requestId, documentHash: primaryHash, documents, tokens, templateId: input.templateId ?? null };
 }
 
 export function approveSigningRequest(
@@ -846,32 +1013,48 @@ export async function sendSigningRequest(
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const documents = getRequestDocuments(request);
   const fields = getRequestFields(request);
+  const prefills = getRequestPrefills(request);
+  const templateId = request.template_id;
   const providerApi = getProviderApi(provider);
   const send = input.providerSend
     ? input.providerSend
-    : input.sendRequest && provider === "dropbox"
-    ? async () => {
-      const result = await input.sendRequest!({
-        apiKey: input.apiKey ?? "",
-        documentPath: documents[0].path,
-        documentPaths: documents.map((doc) => doc.path),
-        title: request.title,
-        signers,
-        fields,
-        metadata: {
-          request_id: request.id,
-          document_hash: request.document_hash,
-        },
-        testMode: input.testMode,
-      });
-      return {
-        providerRequestId: result.signatureRequestId,
-        signatureIds: result.signatureIds,
-        providerStatus: "sent",
-        responseBody: result.responseBody,
-      };
-    }
-    : () => providerApi.send({ request, signers, documents, fields, apiKey: input.apiKey, testMode: input.testMode });
+    : templateId
+      ? () => {
+        if (!providerApi.sendFromTemplate) {
+          throw new Error(`Template send is not supported for ${providerDisplayName(provider)}.`);
+        }
+        return providerApi.sendFromTemplate({
+          request,
+          signers,
+          prefills,
+          templateId,
+          apiKey: input.apiKey,
+          testMode: input.testMode,
+        });
+      }
+      : input.sendRequest && provider === "dropbox"
+        ? async () => {
+          const result = await input.sendRequest!({
+            apiKey: input.apiKey ?? "",
+            documentPath: documents[0].path,
+            documentPaths: documents.map((doc) => doc.path),
+            title: request.title,
+            signers,
+            fields,
+            metadata: {
+              request_id: request.id,
+              document_hash: request.document_hash,
+            },
+            testMode: input.testMode,
+          });
+          return {
+            providerRequestId: result.signatureRequestId,
+            signatureIds: result.signatureIds,
+            providerStatus: "sent",
+            responseBody: result.responseBody,
+          };
+        }
+        : () => providerApi.send({ request, signers, documents, fields, apiKey: input.apiKey, testMode: input.testMode });
 
   const result = await send();
   const now = input.now ?? new Date();
@@ -1145,45 +1328,60 @@ export async function sendEmbeddedSigningRequest(
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
   const providerApi = getProviderApi(provider);
-  if (!providerApi.sendEmbedded) {
+  const templateId = request.template_id;
+  if (templateId && !providerApi.sendFromTemplateEmbedded) {
+    throw new Error(`Embedded template signing is not yet supported for ${providerDisplayName(provider)}.`);
+  }
+  if (!templateId && !providerApi.sendEmbedded) {
     throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
   }
 
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const documents = getRequestDocuments(request);
   const fields = getRequestFields(request);
-  const sendEmbedded = input.createEmbeddedRequest && provider === "dropbox"
-    ? async () => {
-      const result = await input.createEmbeddedRequest!({
-        apiKey: input.apiKey ?? "",
-        clientId: input.clientId ?? "",
-        documentPath: documents[0].path,
-        documentPaths: documents.map((doc) => doc.path),
-        title: request.title,
-        signers,
-        fields,
-        metadata: {
-          request_id: request.id,
-          document_hash: request.document_hash,
-        },
-        testMode: input.testMode,
-      });
-      return {
-        providerRequestId: result.signatureRequestId,
-        signatureIds: result.signatureIds,
-        providerStatus: "sent",
-        responseBody: result.responseBody,
-      };
-    }
-    : () => providerApi.sendEmbedded!({
+  const prefills = getRequestPrefills(request);
+  const sendEmbedded = templateId
+    ? () => providerApi.sendFromTemplateEmbedded!({
       request,
       signers,
-      documents,
-      fields,
+      prefills,
+      templateId,
       apiKey: input.apiKey,
       clientId: input.clientId,
       testMode: input.testMode,
-    });
+    })
+    : input.createEmbeddedRequest && provider === "dropbox"
+      ? async () => {
+        const result = await input.createEmbeddedRequest!({
+          apiKey: input.apiKey ?? "",
+          clientId: input.clientId ?? "",
+          documentPath: documents[0].path,
+          documentPaths: documents.map((doc) => doc.path),
+          title: request.title,
+          signers,
+          fields,
+          metadata: {
+            request_id: request.id,
+            document_hash: request.document_hash,
+          },
+          testMode: input.testMode,
+        });
+        return {
+          providerRequestId: result.signatureRequestId,
+          signatureIds: result.signatureIds,
+          providerStatus: "sent",
+          responseBody: result.responseBody,
+        };
+      }
+      : () => providerApi.sendEmbedded!({
+        request,
+        signers,
+        documents,
+        fields,
+        apiKey: input.apiKey,
+        clientId: input.clientId,
+        testMode: input.testMode,
+      });
 
   const result = await sendEmbedded();
   const now = input.now ?? new Date();

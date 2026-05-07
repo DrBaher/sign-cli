@@ -37,7 +37,7 @@ import {
   watchSigningRequestStatus,
 } from "./lib/signing-service.js";
 import { parseFieldSpec } from "./lib/field-placement.js";
-import { parseSignerSpec } from "./lib/util.js";
+import { parsePrefillSpec, parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
 
@@ -96,6 +96,7 @@ function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFla
 function printUsage(): void {
   console.log(`sign request create --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell]
 sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
+sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
 sign approve --request-id <id> --token <token>
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
@@ -264,6 +265,25 @@ async function main(): Promise<void> {
       approvals: "auto-approved",
       signatureRequestId: sent.signatureRequestId,
     }, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "from-template") {
+    const templateId = flagValue(parsed, "template-id", true)!;
+    const title = flagValue(parsed, "title") ?? `Template ${templateId}`;
+    const signers = flagValues(parsed, "signer").map(parseSignerSpec);
+    const prefills = flagValues(parsed, "prefill").map(parsePrefillSpec);
+    const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
+    const result = createSigningRequest(db, {
+      title,
+      templateId,
+      signers,
+      prefills,
+      tokenTtlMinutes,
+      provider: selectedProvider,
+      autoApprove: (flagValue(parsed, "auto-approve") ?? "false") === "true",
+    });
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 

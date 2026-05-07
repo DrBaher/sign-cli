@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { docusignTabsForSigner, type SignatureField } from "./field-placement.js";
 import { retryFetch } from "./http.js";
-import type { SignerInput } from "./util.js";
+import type { PrefillInput, SignerInput } from "./util.js";
 
 export type DocuSignSendInput = {
   documentPath: string;
@@ -235,6 +235,74 @@ export async function sendDocuSignEnvelope(input: DocuSignSendInput): Promise<{
     throw new Error("DocuSign send completed without an envelopeId.");
   }
 
+  return {
+    envelopeId,
+    recipientIds: extractRecipientIds(body),
+    responseBody: body,
+  };
+}
+
+export type DocuSignTemplateInput = {
+  templateId: string;
+  title: string;
+  signers: SignerInput[];
+  prefills: PrefillInput[];
+  metadata: Record<string, string>;
+  embeddedSigning?: boolean;
+};
+
+export async function sendDocuSignEnvelopeFromTemplate(input: DocuSignTemplateInput): Promise<{
+  envelopeId: string;
+  recipientIds: string[];
+  responseBody: unknown;
+}> {
+  const config = requireDocuSignConfig();
+  const sortedSigners = input.signers.slice().sort((left, right) => left.order - right.order);
+  const templateRoles = sortedSigners.map((signer, index) => {
+    if (!signer.role) {
+      throw new Error(`DocuSign template send requires role:<roleName> on each signer (signer "${signer.email}" missing role).`);
+    }
+    const matching = input.prefills.filter((prefill) => prefill.signerOrder === undefined || prefill.signerOrder === signer.order);
+    const tabs = matching.length > 0
+      ? {
+        textTabs: matching.map((prefill) => ({
+          tabLabel: prefill.name,
+          value: prefill.value,
+        })),
+      }
+      : undefined;
+    return {
+      roleName: signer.role,
+      name: signer.name,
+      email: signer.email,
+      routingOrder: String(signer.order),
+      ...(input.embeddedSigning ? { clientUserId: signer.email } : {}),
+      ...(tabs ? { tabs } : {}),
+    };
+  });
+
+  const body = await docusignJsonRequest(config, {
+    method: "POST",
+    endpoint: "/envelopes",
+    body: {
+      emailSubject: input.title,
+      status: "sent",
+      templateId: input.templateId,
+      templateRoles,
+      customFields: {
+        textCustomFields: Object.entries(input.metadata).map(([name, value]) => ({
+          name,
+          value,
+          required: "false",
+          show: "false",
+        })),
+      },
+    },
+  });
+  const envelopeId = body?.envelopeId;
+  if (typeof envelopeId !== "string" || envelopeId.length === 0) {
+    throw new Error("DocuSign template send completed without an envelopeId.");
+  }
   return {
     envelopeId,
     recipientIds: extractRecipientIds(body),

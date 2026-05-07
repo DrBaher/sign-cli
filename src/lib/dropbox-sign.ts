@@ -3,7 +3,7 @@ import path from "node:path";
 import { dropboxFormFieldsPerDocument, type SignatureField } from "./field-placement.js";
 import { retryFetch } from "./http.js";
 import { parseBooleanFlag } from "./util.js";
-import type { SignerInput } from "./util.js";
+import type { PrefillInput, SignerInput } from "./util.js";
 
 export type DropboxSendInput = {
   apiKey: string;
@@ -178,6 +178,61 @@ export async function cancelDropboxSignatureRequest(apiKey: string, signatureReq
   const body = await readJsonSafe(response);
   const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
   throw new Error(`Dropbox Sign cancel failed: ${detail}`);
+}
+
+export type DropboxTemplateInput = {
+  apiKey: string;
+  templateId: string;
+  title: string;
+  signers: SignerInput[];
+  prefills: PrefillInput[];
+  metadata: Record<string, string>;
+  testMode: boolean;
+  clientId?: string;
+};
+
+function addTemplateFormFields(form: FormData, input: DropboxTemplateInput): void {
+  form.set("template_id", input.templateId);
+  form.set("title", input.title);
+  form.set("subject", input.title);
+  form.set("message", `Please sign: ${input.title}`);
+  form.set("test_mode", input.testMode ? "1" : "0");
+  const sortedSigners = input.signers.slice().sort((a, b) => a.order - b.order);
+  sortedSigners.forEach((signer, index) => {
+    if (!signer.role) {
+      throw new Error(`Dropbox Sign template send requires role:<name> on each signer (signer "${signer.email}" missing role).`);
+    }
+    form.set(`signers[${index}][role]`, signer.role);
+    form.set(`signers[${index}][name]`, signer.name);
+    form.set(`signers[${index}][email_address]`, signer.email);
+    form.set(`signers[${index}][order]`, String(signer.order));
+  });
+  input.prefills.forEach((prefill, index) => {
+    form.set(`custom_fields[${index}][name]`, prefill.name);
+    form.set(`custom_fields[${index}][value]`, prefill.value);
+  });
+  Object.entries(input.metadata).forEach(([k, v]) => form.set(`metadata[${k}]`, v));
+}
+
+export async function sendSignatureRequestWithTemplate(input: DropboxTemplateInput): Promise<{ signatureRequestId: string; signatureIds: string[]; responseBody: unknown }> {
+  const form = new FormData();
+  addTemplateFormFields(form, input);
+  const body = await postSignatureRequest("signature_request/send_with_template", input.apiKey, form);
+  const signatureRequest = body?.signature_request ?? body?.signatureRequest ?? null;
+  const signatureRequestId = signatureRequest?.signature_request_id ?? signatureRequest?.signatureRequestId;
+  if (!signatureRequestId) throw new Error("Dropbox Sign template send completed without signature_request_id.");
+  return { signatureRequestId, signatureIds: extractSignatureIds(signatureRequest), responseBody: body };
+}
+
+export async function createEmbeddedSignatureRequestWithTemplate(input: DropboxTemplateInput & { clientId: string }): Promise<{ signatureRequestId: string; signatureIds: string[]; responseBody: unknown }> {
+  const form = new FormData();
+  addTemplateFormFields(form, input);
+  form.set("client_id", input.clientId);
+  const body = await postSignatureRequest("signature_request/create_embedded_with_template", input.apiKey, form);
+  const signatureRequest = body?.signature_request ?? null;
+  const signatureRequestId = signatureRequest?.signature_request_id;
+  if (!signatureRequestId) throw new Error("Dropbox embedded template create did not return signature_request_id.");
+  return { signatureRequestId, signatureIds: extractSignatureIds(signatureRequest), responseBody: body };
 }
 
 export async function remindDropboxSignatureRequest(apiKey: string, signatureRequestId: string, email: string): Promise<unknown> {
