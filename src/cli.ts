@@ -10,6 +10,7 @@ import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
 import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
+import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
 import {
   buildCatalogJson,
@@ -806,8 +807,18 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "verify-receipt") {
     const bundleDir = flagValue(parsed, "bundle", true)!;
+    const htmlOut = flagValue(parsed, "html");
     const result = verifyRequestReceiptBundle(bundleDir);
-    console.log(JSON.stringify(result, null, 2));
+    if (htmlOut) {
+      const fs = await import("node:fs");
+      const pathMod = await import("node:path");
+      const resolved = pathMod.resolve(htmlOut);
+      fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+      fs.writeFileSync(resolved, renderReceiptVerificationHtml(result));
+      console.log(JSON.stringify({ ...result, htmlReport: resolved }, null, 2));
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
     process.exitCode = result.ok ? 0 : 3;
     return;
   }

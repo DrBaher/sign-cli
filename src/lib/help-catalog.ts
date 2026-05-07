@@ -171,8 +171,11 @@ export const HELP_CATALOG: CommandSpec[] = [
   {
     command: "request verify-receipt",
     summary: "Standalone verifier for a request receipt bundle (no DB required).",
-    flags: [{ name: "--bundle", required: true, description: "Path to a directory produced by `request receipt`." }],
-    example: "sign request verify-receipt --bundle ./receipt/",
+    flags: [
+      { name: "--bundle", required: true, description: "Path to a directory produced by `request receipt`." },
+      { name: "--html", description: "Also write a static HTML report to this path (printable, openable by non-CLI recipients)." },
+    ],
+    example: "sign request verify-receipt --bundle ./receipt/ --html ./receipt/report.html",
   },
   // Signer-side
   {
