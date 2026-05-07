@@ -11,6 +11,15 @@ export type DropboxCallbackPayload = {
   signature_request?: {
     signature_request_id?: string;
     metadata?: Record<string, string>;
+    signatures?: Array<{
+      signature_id?: string;
+      signer_email_address?: string;
+      signer_email?: string;
+      signer_name?: string;
+      signed_at?: number | string | null;
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
   };
   [key: string]: unknown;
 };

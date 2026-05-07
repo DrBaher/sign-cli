@@ -98,6 +98,7 @@ function parseFieldsSpec(input: unknown): SignatureField[] {
       signerOrder: signerOrder as number,
       documentIndex: documentIndex as number,
       type: type as SignatureField["type"],
+      required: entry.required === undefined ? true : Boolean(entry.required),
     };
     if (anchor !== undefined) out.anchor = anchor;
     if (typeof page === "number") out.page = page;

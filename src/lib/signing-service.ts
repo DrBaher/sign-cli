@@ -2138,7 +2138,13 @@ export type SnapshotSignedByEntry = {
 };
 
 export type RequestSnapshot = {
-  request: RequestRow & { signatureIds: string[]; normalizedProvider: SignProvider };
+  request: RequestRow & {
+    signatureIds: string[];
+    normalizedProvider: SignProvider;
+    documents: RequestDocument[];
+    fields: SignatureField[];
+    prefills: PrefillInput[];
+  };
   approvals: EnrichedApproval[];
   signedBy: SnapshotSignedByEntry[] | null;
   declinedBy: string | null;
@@ -2452,7 +2458,7 @@ export function listSigningRequests(
   updatedAt: string;
 }> {
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: (string | number | null)[] = [];
   if (input.provider) {
     where.push("provider = ?");
     params.push(input.provider);
@@ -2526,7 +2532,7 @@ export function scanAllAuditChains(
   input: { provider?: SignProvider; status?: string; limit?: number } = {},
 ): AuditScanReport {
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: (string | number | null)[] = [];
   if (input.provider) {
     where.push("provider = ?");
     params.push(input.provider);

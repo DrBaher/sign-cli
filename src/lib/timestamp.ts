@@ -57,7 +57,7 @@ export async function issueRfc3161Timestamp(input: {
   const response = await retryFetch(tsaUrl, {
     method: "POST",
     headers: { "content-type": "application/timestamp-query" },
-    body: requestBuffer,
+    body: new Uint8Array(requestBuffer),
   });
   if (!response.ok) {
     const text = await response.text();
