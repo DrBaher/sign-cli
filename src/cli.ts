@@ -47,6 +47,7 @@ import {
   exportAuditBundle,
   exportAuditChainAsJsonLd,
   exportRequestReceipt,
+  issueAuditReceiptsBulk,
   signAuditHead,
   verifyAuditHeadProof,
   fetchUnsignedDocumentForSigner,
@@ -191,6 +192,7 @@ sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 6
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
+sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
 sign request create --spec ./request.json [--param key=value ...]   (variable substitution into the spec JSON)
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
@@ -935,6 +937,24 @@ async function main(): Promise<void> {
     const out = flagValue(parsed, "out");
     const result = await signAuditHead(db, { requestId, outPath: out });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "issue-receipts") {
+    const out = flagValue(parsed, "out", true)!;
+    const provider = flagValue(parsed, "provider") ? selectedProvider : undefined;
+    const status = flagValue(parsed, "status");
+    const limitFlag = flagValue(parsed, "limit");
+    const logger = createLogger({ mode: resolveLogMode(flagValue(parsed, "log")) });
+    const result = await issueAuditReceiptsBulk(db, {
+      outDir: out,
+      provider,
+      status,
+      limit: limitFlag ? Number(limitFlag) : undefined,
+      onProgress: (event) => logger.info("audit issue-receipts", event),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.failed > 0) process.exitCode = 3;
     return;
   }
 
