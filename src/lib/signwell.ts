@@ -3,7 +3,7 @@ import path from "node:path";
 import { signwellFieldsPerFile, type SignatureField } from "./field-placement.js";
 import { retryFetch } from "./http.js";
 import { parseBooleanFlag } from "./util.js";
-import type { SignerInput } from "./util.js";
+import type { PrefillInput, SignerInput } from "./util.js";
 
 export const SIGNWELL_DEFAULT_BASE_URL = "https://www.signwell.com/api/v1";
 
@@ -246,6 +246,64 @@ export async function cancelSignWellDocument(apiKey: string, documentId: string,
     endpoint: `/documents/${documentId}`,
     baseUrl,
   });
+}
+
+export type SignWellTemplateInput = {
+  apiKey: string;
+  baseUrl?: string;
+  templateId: string;
+  title: string;
+  signers: SignerInput[];
+  prefills: PrefillInput[];
+  metadata: Record<string, string>;
+  testMode: boolean;
+  embeddedSigning?: boolean;
+};
+
+export async function sendSignWellTemplateDocument(input: SignWellTemplateInput): Promise<{
+  documentId: string;
+  recipientIds: string[];
+  status: string;
+  responseBody: unknown;
+}> {
+  const signers = sortSigners(input.signers);
+  const recipients: Record<string, { name: string; email: string }> = {};
+  for (const signer of signers) {
+    if (!signer.role) {
+      throw new Error(`SignWell template send requires role:<placeholder> on each signer (signer "${signer.email}" missing role).`);
+    }
+    recipients[signer.role] = { name: signer.name, email: signer.email };
+  }
+  const placeholders: Record<string, string> = {};
+  for (const prefill of input.prefills) {
+    placeholders[prefill.name] = prefill.value;
+  }
+  const body = await signWellJsonRequest<any>(input.apiKey, {
+    method: "POST",
+    endpoint: "/document_templates/documents",
+    baseUrl: input.baseUrl,
+    body: {
+      test_mode: input.testMode,
+      name: input.title,
+      subject: input.title,
+      message: `Please sign: ${input.title}`,
+      embedded_signing: Boolean(input.embeddedSigning),
+      template_ids: [input.templateId],
+      apply_signing_order: signers.length > 1,
+      recipients,
+      placeholders,
+      metadata: input.metadata,
+    },
+  });
+  if (typeof body?.id !== "string" || body.id.length === 0) {
+    throw new Error("SignWell template send completed without a document id.");
+  }
+  return {
+    documentId: body.id,
+    recipientIds: extractRecipientIds(body),
+    status: normalizeSignWellStatus(body),
+    responseBody: body,
+  };
 }
 
 export async function remindSignWellDocument(apiKey: string, documentId: string, baseUrl?: string): Promise<unknown> {

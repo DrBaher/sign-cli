@@ -4,6 +4,13 @@ export type SignerInput = {
   name: string;
   email: string;
   order: number;
+  role?: string;
+};
+
+export type PrefillInput = {
+  name: string;
+  value: string;
+  signerOrder?: number;
 };
 
 export function nowIso(date = new Date()): string {
@@ -68,6 +75,49 @@ export function parseSignerSpec(raw: string): SignerInput {
     name: record.name,
     email: record.email,
     order,
+    ...(record.role ? { role: record.role } : {}),
+  };
+}
+
+export function parsePrefillSpec(raw: string): PrefillInput {
+  const segments: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) segments.push(current);
+
+  const record: Record<string, string> = {};
+  for (const segment of segments.map((s) => s.trim()).filter(Boolean)) {
+    const colon = segment.indexOf(":");
+    if (colon === -1) throw new Error(`Invalid prefill segment: "${segment}"`);
+    record[segment.slice(0, colon).trim()] = segment.slice(colon + 1).trim();
+  }
+  if (!record.name) {
+    throw new Error(`Prefill must include name:<key>: "${raw}"`);
+  }
+  if (record.value === undefined) {
+    throw new Error(`Prefill must include value:<v>: "${raw}"`);
+  }
+  const signerOrder = record.signer ? Number(record.signer) : undefined;
+  if (signerOrder !== undefined && (!Number.isInteger(signerOrder) || signerOrder < 1)) {
+    throw new Error(`Prefill signer must be a positive integer matching --signer order: "${raw}"`);
+  }
+  return {
+    name: record.name,
+    value: record.value,
+    ...(signerOrder !== undefined ? { signerOrder } : {}),
   };
 }
 

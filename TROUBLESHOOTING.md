@@ -18,6 +18,9 @@
 | `request cancel is destructive at the provider. Re-run with --yes true to confirm.` | Safety guard. | Re-run with `--yes true`. |
 | `DocuSign cancel requires --reason "..."` | DocuSign requires a void reason. | Pass `--reason "Reason"`. |
 | `Dropbox Sign reminders require --email <signer email>.` | Dropbox's remind endpoint needs the signer email. | Pass `--email signer@example.com` to `request remind`. |
+| `Template requests need role:<name> on every --signer` | A `request from-template` signer was missing `role:`. | Add `role:<roleName>` matching the template role/placeholder. |
+| `--template-id and --document cannot be combined` | Both flags were passed to a single request. | Use `request from-template --template-id ...` (no `--document`) or `request create --document ...` (no template). |
+| `Template send is not supported for <provider>.` | The provider's send-from-template helper isn't wired (shouldn't happen for the bundled providers). | Make sure you're on the latest CLI; all three providers support templates. |
 | `Field signer:N does not match any --signer order` / `Field doc:N is out of range` | A `--field` references a signer or document that wasn't passed. | Make the `signer:` order match a `--signer order:N`, and `doc:` indices stay within the number of `--document` flags (0-based). |
 | `Anchor strings are not supported via this CLI` (Dropbox / SignWell) | Those providers don't accept anchor strings via API in this CLI. | Pass coordinates (`page:`, `x:`, `y:`) instead, or use `--provider docusign` for anchors. |
 | `Field needs either anchor:"text" or page+x+y` | A `--field` had neither. | Add either `anchor:"Sign here"` (DocuSign) or `page:`, `x:`, `y:` (any provider). |
