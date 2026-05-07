@@ -315,11 +315,14 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "serve",
-    summary: "HTTP REST surface mirroring the MCP tools for non-MCP clients. Bearer auth via --auth-token or SIGN_HTTP_AUTH_TOKEN.",
+    summary: "HTTP REST surface mirroring the MCP tools for non-MCP clients. Bearer auth via --auth-token or SIGN_HTTP_AUTH_TOKEN. --tls-cert + --tls-key flips to https.",
     flags: [
       { name: "--port", description: "Port to bind (default 4000)." },
       { name: "--bind", description: "Bind address (default 127.0.0.1)." },
       { name: "--auth-token", description: "Required Bearer token; falls back to SIGN_HTTP_AUTH_TOKEN env var." },
+      { name: "--tls-cert", description: "TLS server certificate PEM path (with --tls-key, listens on https)." },
+      { name: "--tls-key", description: "TLS private key PEM path." },
+      { name: "--tls-ca", description: "Optional CA bundle PEM (forwarded to https.createServer)." },
     ],
   },
   {
