@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "expectations": {
+    "signerEmail": "alice@example.com"
+  },
+  "rules": [
+    {
+      "match": { "titlePattern": "(?i)\\baddendum\\b" },
+      "action": "decline",
+      "reason": "Addenda require human review."
+    },
+    {
+      "match": { "titlePattern": "^Mutual NDA" },
+      "action": "sign"
+    },
+    {
+      "match": "any",
+      "action": "decline",
+      "reason": "No matching policy rule; defaulting to decline."
+    }
+  ]
+}
