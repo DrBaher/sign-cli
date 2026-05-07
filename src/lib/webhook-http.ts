@@ -1,7 +1,15 @@
 import { openDatabase } from "./db.js";
-import { ingestSignWellWebhookPayload, ingestWebhookPayload } from "./signing-service.js";
+import {
+  ingestDocuSignWebhookPayload,
+  ingestSignWellWebhookPayload,
+  ingestWebhookPayload,
+} from "./signing-service.js";
 import { parseWebhookRequestBody, verifyDropboxCallback } from "./webhook.js";
 import { parseSignWellWebhookBody, verifySignWellCallback } from "./signwell-webhook.js";
+import {
+  parseDocuSignWebhookBody,
+  verifyDocuSignCallback,
+} from "./docusign-webhook.js";
 
 type WebhookLikeRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -51,6 +59,51 @@ export async function handleWebhookHttpRequest(
       response.end(JSON.stringify({
         ok: verified,
         message: verified ? "Hello API Event Received" : "Invalid Dropbox callback signature.",
+        ...result,
+      }));
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    response.statusCode = 400;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+}
+
+export async function handleDocuSignWebhookHttpRequest(
+  request: WebhookLikeRequest,
+  response: WebhookLikeResponse,
+  options: { dbPath: string; secret: string; requestId?: string },
+): Promise<void> {
+  try {
+    const rawBody = await readRequestBody(request);
+    const payload = parseDocuSignWebhookBody(rawBody, headerString(request.headers["content-type"]));
+    // DocuSign Connect supports up to three active HMAC keys; headers are X-DocuSign-Signature-1/-2/-3.
+    const signatureHeaders: string[] = [];
+    for (const slot of ["x-docusign-signature-1", "x-docusign-signature-2", "x-docusign-signature-3"]) {
+      const value = request.headers[slot];
+      if (typeof value === "string") signatureHeaders.push(value);
+      else if (Array.isArray(value)) signatureHeaders.push(...value);
+    }
+    const verified = verifyDocuSignCallback(options.secret, rawBody, signatureHeaders);
+    const db = openDatabase(options.dbPath);
+    try {
+      const result = ingestDocuSignWebhookPayload(db, {
+        payload,
+        secret: options.secret,
+        rawBody,
+        signatureHeader: signatureHeaders,
+        requestId: options.requestId,
+      });
+      response.statusCode = verified ? 200 : 401;
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.end(JSON.stringify({
+        ok: verified,
+        message: verified ? "DocuSign event received" : "Invalid DocuSign callback signature.",
         ...result,
       }));
     } finally {

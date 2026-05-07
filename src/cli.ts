@@ -175,7 +175,7 @@ sign request create --spec ./request.json [--param key=value ...]   (variable su
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
 sign webhook ingest [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>] [--request-id <id>]
-sign webhook listen [--provider dropbox|signwell] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
+sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
 }
 
 function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>): string | undefined {
@@ -940,9 +940,15 @@ async function main(): Promise<void> {
     const webhookProvider = resolveWebhookProvider(selectedProvider);
     const apiKey = webhookProvider === "signwell"
       ? requireSignWellWebhookSecret()
-      : requireDropboxApiKey();
+      : webhookProvider === "docusign"
+        ? requireDocuSignWebhookSecret()
+        : requireDropboxApiKey();
     const port = Number(flagValue(parsed, "port") ?? "3000");
-    const defaultPath = webhookProvider === "signwell" ? "/signwell/callback" : "/dropbox/callback";
+    const defaultPath = webhookProvider === "signwell"
+      ? "/signwell/callback"
+      : webhookProvider === "docusign"
+        ? "/docusign/callback"
+        : "/dropbox/callback";
     const webhookPath = flagValue(parsed, "path") ?? defaultPath;
     const requestId = flagValue(parsed, "request-id");
     const server = startWebhookServer({
@@ -964,7 +970,9 @@ async function main(): Promise<void> {
       callbackUrl: `http://127.0.0.1:${port}${webhookPath}`,
       signatureVerification: webhookProvider === "signwell"
         ? "event.hash via SIGNWELL_WEBHOOK_SECRET HMAC (or X-SignWell-Webhook-Signature header)"
-        : "event_hash via API key HMAC",
+        : webhookProvider === "docusign"
+          ? "X-DocuSign-Signature-1/-2/-3 HMAC (base64 or hex) using DOCUSIGN_WEBHOOK_SECRET"
+          : "event_hash via API key HMAC",
       expectedSuccessExitCode: REQUEST_WATCH_EXIT_CODES.completed,
     }, null, 2));
     return;
