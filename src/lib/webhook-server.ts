@@ -1,11 +1,15 @@
 import http from "node:http";
-import { handleSignWellWebhookHttpRequest, handleWebhookHttpRequest } from "./webhook-http.js";
+import {
+  handleDocuSignWebhookHttpRequest,
+  handleSignWellWebhookHttpRequest,
+  handleWebhookHttpRequest,
+} from "./webhook-http.js";
 
-export type WebhookProvider = "dropbox" | "signwell";
+export type WebhookProvider = "dropbox" | "signwell" | "docusign";
 
 export type WebhookServerOptions = {
   dbPath: string;
-  apiKey: string;
+  apiKey: string;       // dropbox API key, signwell webhook secret, or docusign HMAC secret
   port: number;
   path: string;
   requestId?: string;
@@ -26,6 +30,14 @@ export function startWebhookServer(options: WebhookServerOptions): http.Server {
 
     if (provider === "signwell") {
       await handleSignWellWebhookHttpRequest(request, response, options);
+      return;
+    }
+    if (provider === "docusign") {
+      await handleDocuSignWebhookHttpRequest(request, response, {
+        dbPath: options.dbPath,
+        secret: options.apiKey,
+        requestId: options.requestId,
+      });
       return;
     }
     await handleWebhookHttpRequest(request, response, options);
