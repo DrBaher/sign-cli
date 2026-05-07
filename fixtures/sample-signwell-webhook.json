@@ -1,0 +1,20 @@
+{
+  "event": {
+    "type": "document_completed",
+    "time": 1730000000,
+    "hash": "REPLACE_WITH_HMAC_SHA256_OF_TIME_PLUS_TYPE_USING_WEBHOOK_SECRET",
+    "related_signer_id": null
+  },
+  "data": {
+    "object": {
+      "id": "doc_sample_id",
+      "status": "Completed",
+      "recipients": [
+        { "id": "recipient_1", "status": "completed" }
+      ],
+      "metadata": {
+        "request_id": "req_replace_me"
+      }
+    }
+  }
+}

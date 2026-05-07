@@ -1,6 +1,7 @@
 import { openDatabase } from "./db.js";
-import { ingestWebhookPayload } from "./signing-service.js";
+import { ingestSignWellWebhookPayload, ingestWebhookPayload } from "./signing-service.js";
 import { parseWebhookRequestBody, verifyDropboxCallback } from "./webhook.js";
+import { parseSignWellWebhookBody, verifySignWellCallback } from "./signwell-webhook.js";
 
 type WebhookLikeRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -21,6 +22,13 @@ async function readRequestBody(request: WebhookLikeRequest): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+function headerString(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
 export async function handleWebhookHttpRequest(
   request: WebhookLikeRequest,
   response: WebhookLikeResponse,
@@ -28,7 +36,7 @@ export async function handleWebhookHttpRequest(
 ): Promise<void> {
   try {
     const rawBody = await readRequestBody(request);
-    const payload = parseWebhookRequestBody(rawBody, request.headers["content-type"]);
+    const payload = parseWebhookRequestBody(rawBody, headerString(request.headers["content-type"]));
     const verified = verifyDropboxCallback(options.apiKey, payload);
     const db = openDatabase(options.dbPath);
     try {
@@ -43,6 +51,46 @@ export async function handleWebhookHttpRequest(
       response.end(JSON.stringify({
         ok: verified,
         message: verified ? "Hello API Event Received" : "Invalid Dropbox callback signature.",
+        ...result,
+      }));
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    response.statusCode = 400;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+}
+
+export async function handleSignWellWebhookHttpRequest(
+  request: WebhookLikeRequest,
+  response: WebhookLikeResponse,
+  options: { dbPath: string; apiKey: string; requestId?: string },
+): Promise<void> {
+  try {
+    const rawBody = await readRequestBody(request);
+    const payload = parseSignWellWebhookBody(rawBody, headerString(request.headers["content-type"]));
+    const signatureHeader = headerString(request.headers["x-signwell-webhook-signature"])
+      ?? headerString(request.headers["x-signwell-signature"])
+      ?? null;
+    const verified = verifySignWellCallback(options.apiKey, payload, signatureHeader);
+    const db = openDatabase(options.dbPath);
+    try {
+      const result = ingestSignWellWebhookPayload(db, {
+        payload,
+        secret: options.apiKey,
+        signatureHeader,
+        requestId: options.requestId,
+      });
+      response.statusCode = verified ? 200 : 401;
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.end(JSON.stringify({
+        ok: verified,
+        message: verified ? "SignWell event received" : "Invalid SignWell callback signature.",
         ...result,
       }));
     } finally {

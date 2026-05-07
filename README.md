@@ -7,28 +7,34 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, a
 - Local append-only audit chain (`hash_prev`, `hash_self`)
 - Multi-signer support
 - Provider abstraction for send + status + watch + final download
-- Dropbox Sign send + status + embedded signing
-- DocuSign send + status + final PDF download
-- SignWell send + status + final PDF download
+- Dropbox Sign: send + status + embedded signing + webhook ingest
+- DocuSign: send + status + final PDF download (JWT auth)
+- SignWell: send + status + embedded signing + webhook ingest + final PDF download
+- Provider capability matrix via `doctor providers`
+- Live SignWell smoke test (`smoke signwell` / `scripts/smoke-signwell.sh`)
 - Persisted provider, provider request ID, and signer IDs on requests
+
+For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVIDER_SELECTION.md](./PROVIDER_SELECTION.md), [CHECKLIST.md](./CHECKLIST.md), and [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
 ## Commands
 - `request create`
 - `request run-email` (one command: create + auto-approve + send email)
 - `approve`
 - `request send`
-- `request send-embedded`
-- `request sign-url`
+- `request send-embedded` (Dropbox Sign / SignWell)
+- `request sign-url` (Dropbox Sign / SignWell)
 - `request status`
 - `request watch`
-- `request launch-embedded`
+- `request launch-embedded` (Dropbox Sign / SignWell)
 - `request fetch-final`
+- `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
 - `doctor`
 - `doctor account-check`
+- `doctor providers` (capability + config matrix)
 - `audit show`
-- `webhook verify`
-- `webhook ingest`
-- `webhook listen`
+- `webhook verify [--provider dropbox|signwell]`
+- `webhook ingest [--provider dropbox|signwell]`
+- `webhook listen [--provider dropbox|signwell]`
 
 ---
 
@@ -133,7 +139,7 @@ While polling, stderr prints concise progress lines only on the first poll, stat
 
 ## Embedded signing journey (API-driven signing UI)
 
-Embedded signing is currently supported only for Dropbox Sign. Calling embedded commands with `--provider docusign` or `--provider signwell` returns a clear not-supported error.
+Embedded signing is supported for Dropbox Sign (HelloSign Embedded JS) and SignWell (iframe). DocuSign is not wired for embedded signing in this CLI; calling embedded commands with `--provider docusign` returns a clear not-supported error.
 
 ### 1) Send embedded request
 ```bash
@@ -174,8 +180,8 @@ Directly opening `sign_url` can fail with `Missing parameter: client_id`.
   - You opened embedded `sign_url` directly instead of via embedded JS + `clientId`.
 - `Embedded signing is not yet supported for DocuSign.`
   - Use `request send`, `request status`, `request watch`, and `request fetch-final` with `--provider docusign`.
-- `Embedded signing is not yet supported for SignWell.`
-  - Use `request send`, `request status`, `request watch`, and `request fetch-final` with `--provider signwell`.
+- `SignWell document <id> did not return an embedded signing URL for recipient <id>.`
+  - The document was sent via `request send` instead of `request send-embedded` for SignWell. Re-run with `request send-embedded --provider signwell`.
 - `localhost is not a valid domain`
   - Use a public tunnel/domain and register it in API App.
 - `command not found: ngrok`

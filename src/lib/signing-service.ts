@@ -21,10 +21,18 @@ import {
   checkSignWellAccount,
   downloadSignWellCompletedPdf,
   fetchSignWellDocumentStatus,
+  fetchSignWellEmbeddedSignUrl,
   normalizeSignWellStatus,
   resolveSignWellBaseUrl,
   sendSignWellDocument,
 } from "./signwell.js";
+import {
+  extractSignWellRecipientIds as extractSignWellWebhookRecipientIds,
+  getSignWellWebhookDocument,
+  normalizeSignWellEventType,
+  verifySignWellCallback,
+  type SignWellWebhookPayload,
+} from "./signwell-webhook.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import {
   createId,
@@ -118,6 +126,7 @@ type ProviderApi = {
   }) => Promise<ProviderSendResult>;
   getEmbeddedSignUrl?: (input: {
     signatureId: string;
+    providerRequestId?: string | null;
     apiKey?: string;
   }) => Promise<{ signUrl: string; expiresAt: number | null }>;
   getStatus(input: {
@@ -333,6 +342,39 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           providerStatus: result.status || "sent",
           responseBody: result.responseBody,
         };
+      },
+      async sendEmbedded(input) {
+        const result = await sendSignWellDocument({
+          apiKey: input.apiKey ?? "",
+          baseUrl: resolveSignWellBaseUrl(),
+          documentPath: input.request.document_path,
+          title: input.request.title,
+          signers: input.signers,
+          metadata: {
+            request_id: input.request.id,
+            document_hash: input.request.document_hash,
+          },
+          testMode: input.testMode,
+          embeddedSigning: true,
+        });
+        return {
+          providerRequestId: result.documentId,
+          signatureIds: result.recipientIds,
+          providerStatus: result.status || "sent",
+          responseBody: result.responseBody,
+        };
+      },
+      async getEmbeddedSignUrl(input) {
+        if (!input.providerRequestId) {
+          throw new Error("SignWell embedded sign URL requires a provider request id (document id).");
+        }
+        const result = await fetchSignWellEmbeddedSignUrl(
+          input.apiKey ?? "",
+          input.providerRequestId,
+          input.signatureId,
+          resolveSignWellBaseUrl(),
+        );
+        return { signUrl: result.signUrl, expiresAt: result.expiresAt };
       },
       async getStatus(input) {
         const remoteStatus = await fetchSignWellDocumentStatus(
@@ -714,6 +756,111 @@ export async function runProviderAccountCheck(input: { provider: SignProvider; a
   };
 }
 
+export type ProviderCapability = {
+  provider: SignProvider;
+  displayName: string;
+  capabilities: {
+    emailSend: boolean;
+    embeddedSigning: boolean;
+    webhooks: boolean;
+    finalPdfDownload: boolean;
+    testMode: boolean;
+    accountCheck: boolean;
+  };
+  config: {
+    configured: boolean;
+    missing: string[];
+    detected: Record<string, boolean | string | null>;
+  };
+};
+
+export function buildProviderMatrix(): ProviderCapability[] {
+  const dropboxKey = Boolean(process.env.DROPBOX_SIGN_API_KEY);
+  const dropboxClient = Boolean(process.env.DROPBOX_SIGN_CLIENT_ID);
+  const signwellKey = Boolean(process.env.SIGNWELL_API_KEY);
+  const signwellWebhookSecret = Boolean(process.env.SIGNWELL_WEBHOOK_SECRET || process.env.SIGNWELL_API_KEY);
+  const docusignKeys = {
+    DOCUSIGN_INTEGRATION_KEY: Boolean(process.env.DOCUSIGN_INTEGRATION_KEY),
+    DOCUSIGN_USER_ID: Boolean(process.env.DOCUSIGN_USER_ID),
+    DOCUSIGN_ACCOUNT_ID: Boolean(process.env.DOCUSIGN_ACCOUNT_ID),
+    DOCUSIGN_BASE_PATH: Boolean(process.env.DOCUSIGN_BASE_PATH),
+    DOCUSIGN_PRIVATE_KEY_PATH: Boolean(process.env.DOCUSIGN_PRIVATE_KEY_PATH),
+  };
+
+  const dropboxMissing: string[] = [];
+  if (!dropboxKey) dropboxMissing.push("DROPBOX_SIGN_API_KEY");
+
+  const signwellMissing: string[] = [];
+  if (!signwellKey) signwellMissing.push("SIGNWELL_API_KEY");
+
+  const docusignMissing = Object.entries(docusignKeys)
+    .filter(([, present]) => !present)
+    .map(([name]) => name);
+
+  return [
+    {
+      provider: "dropbox",
+      displayName: "Dropbox Sign",
+      capabilities: {
+        emailSend: true,
+        embeddedSigning: true,
+        webhooks: true,
+        finalPdfDownload: true,
+        testMode: true,
+        accountCheck: true,
+      },
+      config: {
+        configured: dropboxKey,
+        missing: dropboxMissing,
+        detected: {
+          DROPBOX_SIGN_API_KEY: dropboxKey,
+          DROPBOX_SIGN_CLIENT_ID: dropboxClient,
+          DROPBOX_SIGN_TEST_MODE: process.env.DROPBOX_SIGN_TEST_MODE ?? null,
+        },
+      },
+    },
+    {
+      provider: "docusign",
+      displayName: "DocuSign",
+      capabilities: {
+        emailSend: true,
+        embeddedSigning: false,
+        webhooks: false,
+        finalPdfDownload: true,
+        testMode: false,
+        accountCheck: true,
+      },
+      config: {
+        configured: docusignMissing.length === 0,
+        missing: docusignMissing,
+        detected: docusignKeys,
+      },
+    },
+    {
+      provider: "signwell",
+      displayName: "SignWell",
+      capabilities: {
+        emailSend: true,
+        embeddedSigning: true,
+        webhooks: true,
+        finalPdfDownload: true,
+        testMode: true,
+        accountCheck: true,
+      },
+      config: {
+        configured: signwellKey,
+        missing: signwellMissing,
+        detected: {
+          SIGNWELL_API_KEY: signwellKey,
+          SIGNWELL_BASE_URL: process.env.SIGNWELL_BASE_URL ?? resolveSignWellBaseUrl(),
+          SIGNWELL_TEST_MODE: process.env.SIGNWELL_TEST_MODE ?? null,
+          SIGNWELL_WEBHOOK_SECRET: signwellWebhookSecret,
+        },
+      },
+    },
+  ];
+}
+
 export async function runDoctor(apiKey?: string): Promise<Record<string, unknown>> {
   const checks: Record<string, unknown> = {
     env: {
@@ -804,12 +951,16 @@ export async function sendEmbeddedSigningRequest(
 }> {
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
-  if (provider !== "dropbox") {
+  if (provider === "docusign") {
+    throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
+  }
+  const providerApi = getProviderApi(provider);
+  if (!providerApi.sendEmbedded) {
     throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
   }
 
   const signers = JSON.parse(request.signers_json) as SignerInput[];
-  const sendEmbedded = input.createEmbeddedRequest
+  const sendEmbedded = input.createEmbeddedRequest && provider === "dropbox"
     ? async () => {
       const result = await input.createEmbeddedRequest!({
         apiKey: input.apiKey ?? "",
@@ -830,7 +981,7 @@ export async function sendEmbeddedSigningRequest(
         responseBody: result.responseBody,
       };
     }
-    : () => getProviderApi(provider).sendEmbedded!({
+    : () => providerApi.sendEmbedded!({
       request,
       signers,
       apiKey: input.apiKey,
@@ -877,12 +1028,14 @@ export async function getEmbeddedSignUrl(
 ): Promise<{ signUrl: string; expiresAt: number | null; signatureId: string }> {
   const request = getRequestRow(db, input.requestId);
   const provider = input.provider ?? getPersistedProvider(request);
-  if (provider !== "dropbox") {
+  const providerApi = getProviderApi(provider);
+  if (!providerApi.getEmbeddedSignUrl) {
     throw new Error(`Embedded signing is not yet supported for ${providerDisplayName(provider)}.`);
   }
 
-  const result = await getProviderApi(provider).getEmbeddedSignUrl!({
+  const result = await providerApi.getEmbeddedSignUrl({
     signatureId: input.signatureId,
+    providerRequestId: getProviderRequestId(request),
     apiKey: input.apiKey,
   });
   const now = input.now ?? new Date();
@@ -1069,6 +1222,73 @@ export function listAuditEvents(db: SqliteDb, requestId: string): Array<{
   }>;
 }
 
+export function ingestSignWellWebhookPayload(
+  db: SqliteDb,
+  input: {
+    payload: SignWellWebhookPayload;
+    secret: string;
+    signatureHeader?: string | null;
+    requestId?: string;
+    now?: Date;
+  },
+): { verified: boolean; requestId: string | null; eventType: string | null; normalizedEventType: string; providerStatus: string | null } {
+  const verified = verifySignWellCallback(input.secret, input.payload, input.signatureHeader ?? null);
+  const eventType = input.payload?.event?.type ?? null;
+  const normalizedEventType = normalizeSignWellEventType(eventType);
+  const document = getSignWellWebhookDocument(input.payload);
+  const documentId = document?.id ?? null;
+  const documentMetadataRequestId = document?.metadata?.request_id ?? null;
+  const requestId = input.requestId ?? documentMetadataRequestId ?? null;
+
+  if (!requestId) {
+    return {
+      verified,
+      requestId: null,
+      eventType,
+      normalizedEventType,
+      providerStatus: typeof document?.status === "string" ? document.status : null,
+    };
+  }
+
+  getRequestRow(db, requestId);
+
+  const now = input.now ?? new Date();
+  const providerStatus = typeof document?.status === "string"
+    ? document.status.trim().toLowerCase().replace(/[\s-]+/gu, "_")
+    : normalizedEventType;
+
+  appendAuditEvent(db, {
+    requestId,
+    eventType: `signwell.webhook.${eventType ?? "unknown"}`,
+    payload: {
+      verified,
+      normalizedEventType,
+      providerStatus,
+      payload: input.payload,
+    },
+    now,
+  });
+
+  if (verified) {
+    persistRequestProviderMetadata(db, {
+      requestId,
+      provider: "signwell",
+      providerRequestId: documentId ?? undefined,
+      providerStatus,
+      signatureIds: extractSignWellWebhookRecipientIds(document),
+      now,
+    });
+  }
+
+  return {
+    verified,
+    requestId,
+    eventType,
+    normalizedEventType,
+    providerStatus,
+  };
+}
+
 export function ingestWebhookPayload(
   db: SqliteDb,
   input: {
@@ -1127,5 +1347,83 @@ export function getRequestSnapshot(db: SqliteDb, requestId: string): {
   return {
     request: serializeRequestRow(getRequestRow(db, requestId)),
     approvals: listApprovalRows(db, requestId),
+  };
+}
+
+export async function runSignWellSmokeTest(
+  db: SqliteDb,
+  input: {
+    apiKey: string;
+    documentPath: string;
+    title?: string;
+    signerName?: string;
+    signerEmail?: string;
+    intervalMs?: number;
+    timeoutMs?: number;
+    fetchFinalPdf?: boolean;
+    outPath?: string;
+    onProgress?: (line: string) => void;
+  },
+): Promise<{
+  account: Record<string, unknown>;
+  requestId: string;
+  documentId: string;
+  status: string;
+  terminal: WatchTerminalStatus;
+  finalPdf: { path: string; bytes: number; sha256: string } | null;
+  attempts: number;
+  elapsedMs: number;
+}> {
+  const onProgress = input.onProgress ?? (() => {});
+  onProgress(`[smoke-signwell] account-check`);
+  const account = await runProviderAccountCheck({ provider: "signwell", apiKey: input.apiKey });
+
+  const title = input.title ?? `SignWell smoke ${new Date().toISOString()}`;
+  const signerName = input.signerName ?? "Smoke Tester";
+  const signerEmail = input.signerEmail
+    ?? process.env.SIGNWELL_SMOKE_SIGNER_EMAIL
+    ?? `smoke+${Date.now()}@example.com`;
+
+  onProgress(`[smoke-signwell] creating request title="${title}" signer=${signerEmail}`);
+  const created = createSigningRequest(db, {
+    title,
+    documentPath: input.documentPath,
+    signers: [{ name: signerName, email: signerEmail, order: 1 }],
+    tokenTtlMinutes: 30,
+    provider: "signwell",
+    autoApprove: true,
+  });
+
+  onProgress(`[smoke-signwell] sending document via SignWell test_mode=true`);
+  const sent = await sendSigningRequest(db, {
+    requestId: created.requestId,
+    provider: "signwell",
+    apiKey: input.apiKey,
+    testMode: true,
+  });
+
+  onProgress(`[smoke-signwell] watching status documentId=${sent.signatureRequestId}`);
+  const watch = await watchSigningRequestStatus(db, {
+    requestId: created.requestId,
+    provider: "signwell",
+    apiKey: input.apiKey,
+    intervalMs: input.intervalMs ?? 5000,
+    timeoutMs: input.timeoutMs ?? 60_000,
+    fetchFinalPdf: Boolean(input.fetchFinalPdf),
+    outPath: input.outPath,
+    onPoll: (update) => {
+      onProgress(`[smoke-signwell] +${(update.elapsedMs / 1000).toFixed(1)}s status=${update.status}${update.terminal ? ` terminal=${update.terminal}` : ""}`);
+    },
+  });
+
+  return {
+    account,
+    requestId: created.requestId,
+    documentId: sent.signatureRequestId,
+    status: watch.status,
+    terminal: watch.terminal,
+    finalPdf: watch.finalPdf,
+    attempts: watch.attempts,
+    elapsedMs: watch.elapsedMs,
   };
 }
