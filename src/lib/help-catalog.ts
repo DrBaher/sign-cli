@@ -153,8 +153,11 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request show",
-    summary: "Enriched snapshot: request, approvals, signedBy[], nextSteps[].",
-    flags: [{ name: "--request-id", required: true, description: "Request id." }],
+    summary: "Enriched snapshot: request, approvals, signedBy[], nextSteps[]. With --metrics true, also returns counters (events, fetches, webhook replays, time-to-first-sign, time-to-complete).",
+    flags: [
+      { name: "--request-id", required: true, description: "Request id." },
+      { name: "--metrics", description: "true to include the metrics rollup." },
+    ],
   },
   {
     command: "request verify-signed-pdf",

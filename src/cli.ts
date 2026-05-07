@@ -1152,7 +1152,8 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "show") {
     const requestId = flagValue(parsed, "request-id", true)!;
-    const snapshot = getRequestSnapshot(db, requestId);
+    const includeMetrics = (flagValue(parsed, "metrics") ?? "false") === "true";
+    const snapshot = getRequestSnapshot(db, requestId, { includeMetrics });
     console.log(JSON.stringify(snapshot, null, 2));
     return;
   }
