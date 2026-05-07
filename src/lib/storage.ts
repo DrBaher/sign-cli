@@ -11,6 +11,7 @@
 //   both backends implement, and migrate the call sites to it.
 
 import { openDatabase, type SqliteDb } from "./db.js";
+import { type DbBackend, PostgresBackend, wrapSqliteDb } from "./db-backend.js";
 import { SignCliError } from "./sign-error.js";
 
 export type SignBackend = "sqlite" | "postgres";
@@ -65,4 +66,18 @@ export function openStorage(opts: StorageOpenOptions = {}): SqliteDb {
   }
   const dbPath = opts.dbPath ?? process.env.SIGN_DB_PATH ?? "./data/sign.db";
   return openDatabase(dbPath);
+}
+
+// Forward-compatible variant that returns the abstract DbBackend instead of the
+// concrete SqliteDb. New code should reach for this; existing call sites can
+// migrate one at a time. The Postgres branch is wired to the stub adapter so
+// callers see a uniform error surface (DbBackend.prepare(...) throws) instead
+// of the storage-level "implementation is a stub" envelope.
+export function openStorageBackend(opts: StorageOpenOptions = {}): DbBackend {
+  const backend = resolveBackend(opts.backend);
+  if (backend === "postgres") {
+    return new PostgresBackend(opts.postgresUrl ?? process.env.SIGN_PG_URL);
+  }
+  const dbPath = opts.dbPath ?? process.env.SIGN_DB_PATH ?? "./data/sign.db";
+  return wrapSqliteDb(openDatabase(dbPath));
 }
