@@ -6,7 +6,30 @@ on:
       - "v*"
 
 jobs:
+  guard-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.read.outputs.tag }}
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify package.json version matches the tag
+        id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF##*/}"
+          want="${tag#v}"
+          have=$(node -p "require('./package.json').version")
+          if [ "$want" != "$have" ]; then
+            echo "::error::Tag $tag (version $want) does not match package.json version $have. Bump package.json before tagging."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$want" >> "$GITHUB_OUTPUT"
+
   publish-npm:
+    needs: [guard-version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,7 +50,36 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
+  package-dist-tarball:
+    needs: [guard-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - name: Tar dist + docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "sign-cli-${{ needs.guard-version.outputs.version }}-dist.tar.gz" \
+            dist README.md CHANGELOG.md ONBOARDING.md PROVIDER_SELECTION.md CHECKLIST.md \
+            TROUBLESHOOTING.md SIGNWELL_SETUP.md EMBEDDED_SETUP.md DISTRIBUTION.md RELEASE.md \
+            LICENSE fixtures package.json scripts/smoke-signwell.sh
+          shasum -a 256 sign-cli-*.tar.gz > sign-cli-${{ needs.guard-version.outputs.version }}-dist.tar.gz.sha256
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sign-cli-dist
+          path: |
+            sign-cli-*.tar.gz
+            sign-cli-*.tar.gz.sha256
+
   build-sea:
+    needs: [guard-version]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -50,17 +102,38 @@ jobs:
           path: dist/sign-*
 
   attach-binaries-to-release:
-    needs: [build-sea]
+    needs: [build-sea, package-dist-tarball, guard-version]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          path: ./binaries
+          path: ./artifacts
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f CHANGELOG.md ]; then
+            node scripts/extract-changelog.mjs "${{ needs.guard-version.outputs.tag }}" > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "release notes empty; falling back to auto-generated"
+            echo "have_notes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_notes=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./binaries/**/sign-*
-          generate_release_notes: true
+          files: |
+            ./artifacts/**/sign-*
+            ./artifacts/sign-cli-dist/sign-cli-*.tar.gz
+            ./artifacts/sign-cli-dist/sign-cli-*.tar.gz.sha256
+          body_path: ${{ steps.notes.outputs.have_notes == 'true' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.have_notes != 'true' }}
           draft: false
