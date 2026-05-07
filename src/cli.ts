@@ -23,6 +23,7 @@ import {
   runLocalDemo,
   createSigningRequest,
   exportAuditBundle,
+  exportRequestReceipt,
   fetchUnsignedDocumentForSigner,
   getRequestSnapshot,
   fetchFinalSignedPdf,
@@ -150,6 +151,8 @@ sign audit show --request-id <id>
 sign audit verify --request-id <id>
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit export --request-id <id> --out ./bundle/
+sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
+sign request create --spec ./request.json [--param key=value ...]   (variable substitution into the spec JSON)
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json
 sign webhook ingest [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
@@ -356,7 +359,18 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "create") {
     const specPath = flagValue(parsed, "spec");
     if (specPath) {
-      const spec = loadRequestSpec(specPath);
+      const params: Record<string, string> = {};
+      for (const raw of flagValues(parsed, "param")) {
+        const eq = raw.indexOf("=");
+        if (eq <= 0) {
+          throw new SignCliError({
+            code: "MISSING_FLAG",
+            message: `--param must be of the form key=value, got "${raw}".`,
+          });
+        }
+        params[raw.slice(0, eq).trim()] = raw.slice(eq + 1);
+      }
+      const spec = loadRequestSpec(specPath, params);
       const docPaths = spec.documentPath ? [spec.documentPath] : (spec.documentPaths ?? []);
       docPaths.forEach((p) => validateDocumentPath(p));
       spec.signers.forEach((signer) => validateEmail(signer.email, "Signer email"));
@@ -661,6 +675,14 @@ async function main(): Promise<void> {
     const requestId = flagValue(parsed, "request-id", true)!;
     const out = flagValue(parsed, "out", true)!;
     const result = await exportAuditBundle(db, { requestId, outDir: out });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "receipt") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const out = flagValue(parsed, "out", true)!;
+    const result = await exportRequestReceipt(db, { requestId, outDir: out });
     console.log(JSON.stringify(result, null, 2));
     return;
   }
