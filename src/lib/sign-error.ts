@@ -1,0 +1,70 @@
+import { redactString, collectKnownSecrets } from "./secret.js";
+
+export type SignErrorCode =
+  | "TOKEN_REQUIRED"
+  | "TOKEN_INVALID"
+  | "TOKEN_EXPIRED"
+  | "TOKEN_SIGNER_MISMATCH"
+  | "SIGNER_ALREADY_SIGNED"
+  | "SIGNER_NOT_RECIPIENT"
+  | "PRE_SIGN_HASH_MISMATCH"
+  | "PRE_SIGN_TITLE_MISMATCH"
+  | "PRE_SIGN_SIGNER_MISMATCH"
+  | "PRE_SIGN_TITLE_BAD_REGEX"
+  | "NON_LOCAL_PROVIDER"
+  | "REQUEST_NOT_SENT"
+  | "REQUEST_NOT_FOUND"
+  | "MISSING_FLAG"
+  | "UNKNOWN_COMMAND"
+  | "INTERNAL";
+
+export type SignErrorEnvelope = {
+  ok: false;
+  error: {
+    code: SignErrorCode;
+    message: string;
+    hint?: string;
+    details?: Record<string, unknown>;
+  };
+};
+
+export class SignCliError extends Error {
+  readonly code: SignErrorCode;
+  readonly hint?: string;
+  readonly details?: Record<string, unknown>;
+  constructor(input: {
+    code: SignErrorCode;
+    message: string;
+    hint?: string;
+    details?: Record<string, unknown>;
+  }) {
+    super(input.message);
+    this.name = "SignCliError";
+    this.code = input.code;
+    this.hint = input.hint;
+    this.details = input.details;
+  }
+}
+
+export function formatCliError(error: unknown): SignErrorEnvelope {
+  const secrets = collectKnownSecrets();
+  if (error instanceof SignCliError) {
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        message: redactString(error.message, secrets),
+        ...(error.hint ? { hint: error.hint } : {}),
+        ...(error.details ? { details: error.details } : {}),
+      },
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    ok: false,
+    error: {
+      code: "INTERNAL",
+      message: redactString(message, secrets),
+    },
+  };
+}

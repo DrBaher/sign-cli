@@ -1,5 +1,23 @@
 # Troubleshooting matrix
 
+## Error envelopes
+
+When a `sign` CLI command fails, it now emits a JSON envelope to stderr with a stable error code and exits 1:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "TOKEN_EXPIRED",
+    "message": "Token has expired (expiresAt=2026-05-07T13:55:00Z).",
+    "hint": "Ask the requester to re-issue with a longer --token-ttl-minutes, or re-run `request create`.",
+    "details": { "requestId": "req_...", "expiresAt": "2026-05-07T13:55:00Z" }
+  }
+}
+```
+
+Set `SIGN_ERROR_FORMAT=text` to fall back to the legacy plain-string-on-stderr behavior. Codes agents can rely on: `TOKEN_REQUIRED`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_SIGNER_MISMATCH`, `SIGNER_ALREADY_SIGNED`, `PRE_SIGN_HASH_MISMATCH`, `PRE_SIGN_TITLE_MISMATCH`, `PRE_SIGN_TITLE_BAD_REGEX`, `PRE_SIGN_SIGNER_MISMATCH`, `NON_LOCAL_PROVIDER`, `REQUEST_NOT_SENT`, `MISSING_FLAG`, `UNKNOWN_COMMAND`, `INTERNAL` (fallback for un-tagged failures).
+
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `DROPBOX_SIGN_API_KEY is not set.` | `.env` not loaded or key missing. | `cp .env.example .env`, fill `DROPBOX_SIGN_API_KEY`. |
