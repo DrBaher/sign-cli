@@ -1,0 +1,38 @@
+{
+  "event": "envelope-completed",
+  "apiVersion": "v2.1",
+  "uri": "/restapi/v2.1/accounts/12345/envelopes/abc-def",
+  "retryCount": 0,
+  "configurationId": 1,
+  "generatedDateTime": "2026-05-07T12:00:00Z",
+  "data": {
+    "envelopeId": "abc-def",
+    "accountId": "12345",
+    "userId": "uid-67890",
+    "envelopeSummary": {
+      "envelopeId": "abc-def",
+      "status": "completed",
+      "envelopeMetadata": {
+        "request_id": "replace_me_with_real_request_id"
+      },
+      "recipients": {
+        "signers": [
+          {
+            "email": "alice@example.com",
+            "name": "Alice Example",
+            "status": "completed",
+            "signedDateTime": "2026-05-07T11:30:00Z",
+            "routingOrder": "1"
+          },
+          {
+            "email": "bob@example.com",
+            "name": "Bob Example",
+            "status": "sent",
+            "signedDateTime": null,
+            "routingOrder": "2"
+          }
+        ]
+      }
+    }
+  }
+}

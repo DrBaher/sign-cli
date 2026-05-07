@@ -28,7 +28,7 @@ Set `SIGN_ERROR_FORMAT=text` to fall back to the legacy plain-string-on-stderr b
 | `SignWell document ... did not return an embedded signing URL` | Document was sent via `request send`, not `request send-embedded`. | Re-send with `request send-embedded --provider signwell`. |
 | `localhost is not a valid domain` | Dropbox embedded API App rejects localhost. | Use a tunnel (`localtunnel`, `cloudflared`, `ngrok`). |
 | Webhook returns 401 | `event_hash` (Dropbox) or `event.hash` (SignWell) didn't match the secret used to verify. | Check that the API key / webhook secret in `.env` matches what's configured at the provider. |
-| `Webhook commands support --provider dropbox or signwell only.` | Tried `--provider docusign` for webhook commands. | DocuSign webhooks are not wired in this CLI. Use Dropbox or SignWell, or poll with `request watch`. |
+| `DOCUSIGN_WEBHOOK_SECRET is not set.` | Ran `webhook verify`/`webhook ingest` with `--provider docusign` but the HMAC secret env var is empty. | Set `DOCUSIGN_WEBHOOK_SECRET` to the value configured in your DocuSign Connect HMAC keys. Pass the request's signature header via `--signature-header <hmac>` (DocuSign sends it as `X-DocuSign-Signature-1`, base64 or hex). |
 | `SignWell PDF download failed: ...` | Document is not yet completed, or completed_pdf is still being generated. | Re-run after `request watch` reports `completed`. |
 | `request watch` exits 4 (timeout) | Polling exceeded `--timeout-ms`/`--timeout-seconds`. | Increase the timeout, or run `request status` manually. |
 | `request watch` exits 3 | Provider returned an error/invalid status. | Inspect `lastRemoteStatus` in the JSON output. |
