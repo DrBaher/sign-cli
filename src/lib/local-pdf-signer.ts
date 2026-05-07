@@ -1,5 +1,9 @@
 import crypto, { createSign } from "node:crypto";
-import { extractCertSerialAndIssuer, loadOrCreateLocalSigner } from "./local-keys.js";
+import {
+  extractCertSerialAndIssuer,
+  loadOrCreateLocalSigner,
+  type LocalSignerKeyPair,
+} from "./local-keys.js";
 import {
   asn1,
   asn1AlgorithmIdentifier,
@@ -83,18 +87,48 @@ function getHeaderLength(buffer: Buffer): number {
 
 const PLACEHOLDER_BYTES = 16384;
 
-function buildPdfWithSigPlaceholder(originalPdf: Buffer): { document: Buffer; byteRangeOffset: number; byteRangeLength: number; contentsOffset: number; contentsHexLength: number } {
+function findNextObjectId(pdf: Buffer): number {
+  const text = pdf.toString("latin1");
+  const regex = /(\d+)\s+0\s+obj/g;
+  let max = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const id = Number(match[1]);
+    if (Number.isFinite(id) && id > max) max = id;
+  }
+  return max + 1;
+}
+
+function findExistingSigWidgetIds(pdf: Buffer): string[] {
+  // Each /Annot widget produced by this signer carries the marker
+  // `/T (Sign CLI Local Signature ...)` so we can find them deterministically.
+  const text = pdf.toString("latin1");
+  const idRegex = /(\d+)\s+0\s+obj\s*<<[^>]*?\/Subtype\s*\/Widget[^>]*?\/T\s*\(Sign CLI Local Signature[^)]*\)/g;
+  const ids: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = idRegex.exec(text)) !== null) ids.push(match[1]);
+  return ids;
+}
+
+function buildPdfWithSigPlaceholder(
+  originalPdf: Buffer,
+  options: { signerLabel: string },
+): { document: Buffer; byteRangeOffset: number; byteRangeLength: number; contentsOffset: number; contentsHexLength: number } {
   const trimmed = originalPdf.subarray(0, originalPdf.length);
   const newline = Buffer.from("\n");
-  const sigObjId = "1000 0";
-  const annotObjId = "1001 0";
-  const acroFormObjId = "1002 0";
+  const baseId = findNextObjectId(trimmed);
+  const sigId = baseId;
+  const annotId = baseId + 1;
+  const acroFormId = baseId + 2;
+
+  const existingFieldIds = findExistingSigWidgetIds(trimmed);
+  const fieldsArray = [...existingFieldIds, String(annotId)].map((id) => `${id} 0 R`).join(" ");
 
   const byteRangePlaceholder = `[0 0000000000 0000000000 0000000000]`;
   const contentsPlaceholder = `<${"00".repeat(PLACEHOLDER_BYTES / 2)}>`;
-  const sigObject = `${sigObjId} obj\n<<\n/Type /Sig\n/Filter /Adobe.PPKLite\n/SubFilter /adbe.pkcs7.detached\n/ByteRange ${byteRangePlaceholder}\n/Contents ${contentsPlaceholder}\n>>\nendobj\n`;
-  const annotObject = `${annotObjId} obj\n<<\n/Type /Annot\n/Subtype /Widget\n/F 4\n/Rect [0 0 0 0]\n/FT /Sig\n/T (Sign CLI Local Signature)\n/V ${sigObjId} R\n>>\nendobj\n`;
-  const acroFormObject = `${acroFormObjId} obj\n<<\n/Fields [${annotObjId} R]\n/SigFlags 3\n>>\nendobj\n`;
+  const sigObject = `${sigId} 0 obj\n<<\n/Type /Sig\n/Filter /Adobe.PPKLite\n/SubFilter /adbe.pkcs7.detached\n/ByteRange ${byteRangePlaceholder}\n/Contents ${contentsPlaceholder}\n>>\nendobj\n`;
+  const annotObject = `${annotId} 0 obj\n<<\n/Type /Annot\n/Subtype /Widget\n/F 4\n/Rect [0 0 0 0]\n/FT /Sig\n/T (Sign CLI Local Signature ${options.signerLabel})\n/V ${sigId} 0 R\n>>\nendobj\n`;
+  const acroFormObject = `${acroFormId} 0 obj\n<<\n/Fields [${fieldsArray}]\n/SigFlags 3\n>>\nendobj\n`;
 
   const incremental = Buffer.concat([
     trimmed,
@@ -129,9 +163,16 @@ export type LocalPdfSignResult = {
   signedAt: string;
 };
 
-export function signPdfLocally(originalPdf: Buffer, options: { signingTime?: Date } = {}): LocalPdfSignResult {
-  const signer = loadOrCreateLocalSigner();
-  const { document, byteRangeOffset, byteRangeLength, contentsOffset, contentsHexLength } = buildPdfWithSigPlaceholder(originalPdf);
+export type LocalPdfSignOptions = {
+  signingTime?: Date;
+  signerKeyPair?: LocalSignerKeyPair;
+  signerLabel?: string;
+};
+
+export function signPdfLocally(originalPdf: Buffer, options: LocalPdfSignOptions = {}): LocalPdfSignResult {
+  const signer = options.signerKeyPair ?? loadOrCreateLocalSigner();
+  const signerLabel = options.signerLabel ?? new Date().getTime().toString();
+  const { document, byteRangeOffset, byteRangeLength, contentsOffset, contentsHexLength } = buildPdfWithSigPlaceholder(originalPdf, { signerLabel });
 
   const beforeStart = 0;
   const beforeLength = contentsOffset;
@@ -164,4 +205,51 @@ export function signPdfLocally(originalPdf: Buffer, options: { signingTime?: Dat
     signerFingerprintSha256: signer.certificate.fingerprint256 ?? "",
     signedAt: (options.signingTime ?? new Date()).toISOString(),
   };
+}
+
+export type MultiSignerInput = {
+  keyPair: LocalSignerKeyPair;
+  signerLabel: string;
+  signingTime?: Date;
+};
+
+export type MultiSignedPdfResult = {
+  signedPdf: Buffer;
+  signers: Array<{
+    signerSubject: string;
+    signerFingerprintSha256: string;
+    signerLabel: string;
+    signedAt: string;
+  }>;
+};
+
+// Sign a PDF once per entry in `signers`. Each call appends a fresh sig +
+// annot widget + AcroForm incremental-update block. Object IDs are allocated
+// from the highest existing /<n> 0 obj/ marker in the document, so successive
+// signs don't collide; the new AcroForm's /Fields array references all
+// previously-added widgets too.
+export function signPdfLocallyMultiSigner(
+  originalPdf: Buffer,
+  signers: MultiSignerInput[],
+): MultiSignedPdfResult {
+  if (signers.length === 0) {
+    throw new Error("signPdfLocallyMultiSigner requires at least one signer.");
+  }
+  let pdf = originalPdf;
+  const summaries: MultiSignedPdfResult["signers"] = [];
+  for (const entry of signers) {
+    const result = signPdfLocally(pdf, {
+      signingTime: entry.signingTime,
+      signerKeyPair: entry.keyPair,
+      signerLabel: entry.signerLabel,
+    });
+    pdf = result.signedPdf;
+    summaries.push({
+      signerSubject: result.signerSubject,
+      signerFingerprintSha256: result.signerFingerprintSha256,
+      signerLabel: entry.signerLabel,
+      signedAt: result.signedAt,
+    });
+  }
+  return { signedPdf: pdf, signers: summaries };
 }
