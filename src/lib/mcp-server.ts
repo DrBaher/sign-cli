@@ -1,6 +1,7 @@
 import readline from "node:readline";
 import type { SqliteDb } from "./db.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
+import { getMcpPrompt, listMcpPrompts } from "./mcp-prompts.js";
 import { formatCliError, SignCliError } from "./sign-error.js";
 import {
   declineSigningRequestAsSigner,
@@ -354,7 +355,11 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
       kind: "result",
       value: {
         protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: { tools: {}, resources: { listChanged: false } },
+        capabilities: {
+          tools: {},
+          resources: { listChanged: false },
+          prompts: { listChanged: false },
+        },
         serverInfo: { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
       },
     };
@@ -364,6 +369,20 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
   }
   if (method === "resources/list") {
     return { kind: "result", value: { resources: listMcpResources(db) } };
+  }
+  if (method === "prompts/list") {
+    return { kind: "result", value: { prompts: listMcpPrompts() } };
+  }
+  if (method === "prompts/get") {
+    const params = (input.params ?? {}) as { name?: unknown; arguments?: unknown };
+    if (typeof params.name !== "string" || params.name.length === 0) {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: "prompts/get requires a string `name` parameter.",
+      });
+    }
+    const promptArgs = (params.arguments ?? {}) as Record<string, string>;
+    return { kind: "result", value: getMcpPrompt({ name: params.name, arguments: promptArgs }) };
   }
   if (method === "resources/read") {
     const readParams = (params ?? {}) as { uri?: unknown };
