@@ -63,6 +63,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--provider", description: "dropbox | docusign | signwell | local." },
       { name: "--spec", description: "Load all of the above from a JSON file." },
       { name: "--param", description: "key=value substituted into spec via {{key}} (repeatable)." },
+      { name: "--idempotency-key", description: "Same key + same args returns the cached result instead of re-running." },
     ],
     example:
       `sign request create --title "Mutual NDA" --document ./nda.pdf \\\n` +
@@ -191,6 +192,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--require-hash", description: "Pre-sign safety: expected document SHA-256." },
       { name: "--require-title", description: "Pre-sign safety: regex the title must match." },
       { name: "--require-signer-email", description: "Pre-sign safety: expected signer email." },
+      { name: "--idempotency-key", description: "Same key returns the cached SignerSignResult instead of double-signing on retry." },
     ],
     example: `sign sign --request-id req_abc --token alice-tok-... \\\n  --require-hash 9c2b... --require-title "^Mutual NDA$"`,
   },
