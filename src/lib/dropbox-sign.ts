@@ -7,11 +7,25 @@ import type { SignerInput } from "./util.js";
 export type DropboxSendInput = {
   apiKey: string;
   documentPath: string;
+  documentPaths?: string[];
   title: string;
   signers: SignerInput[];
   metadata: Record<string, string>;
   testMode: boolean;
 };
+
+function resolveDocumentPaths(input: DropboxSendInput): string[] {
+  if (input.documentPaths && input.documentPaths.length > 0) return input.documentPaths;
+  return [input.documentPath];
+}
+
+async function appendFileFields(form: FormData, paths: string[]): Promise<void> {
+  for (let index = 0; index < paths.length; index += 1) {
+    const filePath = path.resolve(paths[index]);
+    const buffer = await readFile(filePath);
+    form.set(`files[${index}]`, new Blob([buffer], { type: "application/pdf" }), path.basename(filePath));
+  }
+}
 
 export function requireDropboxApiKey(): string {
   const apiKey = process.env.DROPBOX_SIGN_API_KEY?.trim();
@@ -72,10 +86,9 @@ function extractSignatureIds(signatureRequest: any): string[] {
 }
 
 export async function sendSignatureRequest(input: DropboxSendInput): Promise<{ signatureRequestId: string; signatureIds: string[]; statusCode: number | null; responseBody: unknown; }> {
-  const fileBuffer = await readFile(path.resolve(input.documentPath));
   const form = new FormData();
   addCommonFormFields(form, input);
-  form.set("files[0]", new Blob([fileBuffer], { type: "application/pdf" }), path.basename(input.documentPath));
+  await appendFileFields(form, resolveDocumentPaths(input));
   const body = await postSignatureRequest("signature_request/send", input.apiKey, form);
   const signatureRequest = body?.signature_request ?? body?.signatureRequest ?? null;
   const signatureRequestId = signatureRequest?.signature_request_id ?? signatureRequest?.signatureRequestId;
@@ -84,11 +97,10 @@ export async function sendSignatureRequest(input: DropboxSendInput): Promise<{ s
 }
 
 export async function createEmbeddedSignatureRequest(input: DropboxSendInput & { clientId: string }): Promise<{ signatureRequestId: string; signatureIds: string[]; responseBody: unknown; }> {
-  const fileBuffer = await readFile(path.resolve(input.documentPath));
   const form = new FormData();
   addCommonFormFields(form, input);
   form.set("client_id", input.clientId);
-  form.set("files[0]", new Blob([fileBuffer], { type: "application/pdf" }), path.basename(input.documentPath));
+  await appendFileFields(form, resolveDocumentPaths(input));
   const body = await postSignatureRequest("signature_request/create_embedded", input.apiKey, form);
   const signatureRequest = body?.signature_request ?? null;
   const signatureRequestId = signatureRequest?.signature_request_id;
@@ -152,6 +164,22 @@ export async function cancelDropboxSignatureRequest(apiKey: string, signatureReq
   const body = await readJsonSafe(response);
   const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
   throw new Error(`Dropbox Sign cancel failed: ${detail}`);
+}
+
+export async function remindDropboxSignatureRequest(apiKey: string, signatureRequestId: string, email: string): Promise<unknown> {
+  const form = new FormData();
+  form.set("email_address", email);
+  const response = await retryFetch(`https://api.hellosign.com/v3/signature_request/remind/${signatureRequestId}`, {
+    method: "POST",
+    headers: { Authorization: authHeader(apiKey) },
+    body: form,
+  });
+  const body = await readJsonSafe(response);
+  if (!response.ok) {
+    const detail = body?.error?.error_msg ?? body?.error_msg ?? body?.raw ?? response.statusText;
+    throw new Error(`Dropbox Sign remind failed: ${detail}`);
+  }
+  return body;
 }
 
 export async function checkDropboxAccount(apiKey: string): Promise<{ email: string | null; apiSignatureRequestsLeft: number | null }> {

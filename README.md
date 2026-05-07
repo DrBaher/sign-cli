@@ -2,11 +2,24 @@
 
 CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, and SignWell.
 
+## Quick start
+
+New to the project? Run the wizard:
+```bash
+npm install && npm run build
+node dist/cli.js init
+node dist/cli.js doctor providers
+```
+`sign init` walks you through provider selection and writes a `.env`. `doctor providers` confirms it's wired up. See [ONBOARDING.md](./ONBOARDING.md) for the longer path.
+
 ## What this gives you
 - Human approval tokens (single-use, TTL)
 - Local append-only audit chain (`hash_prev`, `hash_self`) with `audit verify`
 - Multi-signer support
-- Provider abstraction for send + status + watch + final download + cancel
+- Provider abstraction for send + status + watch + final download + cancel + remind
+- Multi-document requests (`--document` repeatable on `request create` / `run-email` / `bulk`)
+- CSV-driven bulk send (`request bulk --csv`)
+- Interactive `init` wizard that writes `.env`
 - Dropbox Sign / DocuSign / SignWell — email send, embedded signing, and webhook ingest (DocuSign embedded uses `clientUserId` + recipient view)
 - Provider capability matrix via `doctor providers`
 - PDF signature inspection (`request verify-signed-pdf`) — parses `/ByteRange`, recomputes the digest, extracts X.509 signer cert
@@ -30,9 +43,12 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `request watch`
 - `request launch-embedded` (Dropbox Sign / SignWell)
 - `request fetch-final`
+- `request remind` (Dropbox / DocuSign / SignWell)
 - `request cancel` (Dropbox cancel / DocuSign void / SignWell delete; requires `--yes true`)
+- `request bulk --csv` (one request per CSV row; `--document` repeatable)
 - `request list` (local SQLite; filterable by `--provider` and `--status`)
 - `request show`
+- `init` (interactive `.env` wizard)
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
 - `doctor`
 - `doctor account-check`
@@ -371,6 +387,28 @@ npm run start -- audit show --request-id <request_id>
 5. `webhook listen`
 6. `request watch`
 
+
+## Bulk send
+
+Drive a CSV of `name,email` columns to send one request per row:
+
+```bash
+node dist/cli.js request bulk \
+  --csv ./fixtures/sample-bulk-signers.csv \
+  --document ./contract.pdf \
+  --provider dropbox \
+  --title "Q2 NDA for {{email}}" \
+  --test-mode true
+```
+
+Each row becomes its own request with `autoApprove: true`, and the title template supports `{{email}}`, `{{name}}`, and `{{row}}`. The exit code is `3` if any row failed; the JSON output lists per-row results.
+
+## Reminders
+
+```bash
+# Dropbox Sign requires --email <signer@example.com>; DocuSign and SignWell don't.
+node dist/cli.js request remind --request-id <id> --email signer@example.com
+```
 
 ## Trust beyond the provider
 
