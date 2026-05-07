@@ -393,6 +393,32 @@ npm run start -- request watch \
 npm run start -- audit show --request-id <request_id>
 ```
 
+## MCP server (for LLM agents)
+
+Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server. An MCP-aware agent (Claude Code, Claude Desktop, anything else that speaks MCP) can then drive the signer-side flow without spawning the CLI on each call. The server exposes seven tools, all backed by the same SignCliError envelopes you'd see at the CLI:
+
+- `signer_list` (`{ signer_email? }`) — pending inbox.
+- `signer_fetch_document` (`{ request_id, token, signer_email?, out_path? }`) — read the unsigned PDF + audit it as fetched.
+- `sign` (`{ request_id, token, signer_email?, signer_name?, require_hash?, require_title?, require_signer_email? }`) — sign as the token holder.
+- `signer_decline` (`{ request_id, token, signer_email?, reason? }`) — decline.
+- `request_show` (`{ request_id }`) — enriched snapshot with `signedBy`, `nextSteps[]`, etc.
+- `request_status` (`{ request_id, provider? }`) — poll the provider; reads API keys from env (`DROPBOX_SIGN_API_KEY` / `SIGNWELL_API_KEY`) for hosted providers.
+- `audit_verify` (`{ request_id }`) — verify the audit chain.
+
+Tool errors are returned as `{ isError: true, content: [{ type: "text", text: "<JSON envelope>" }] }` with the same `code` values documented in `TROUBLESHOOTING.md`. Example wiring (Claude Desktop's `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "sign-cli": {
+      "command": "node",
+      "args": ["/path/to/sign-cli/dist/cli.js", "mcp", "serve"],
+      "env": { "SIGN_DB_PATH": "/path/to/sign.db", "SIGN_LOCAL_AUTOCOMPLETE": "false" }
+    }
+  }
+}
+```
+
 ## Signer-side flow (agent-friendly)
 
 For `--provider local`, an automated agent can act as a signer end-to-end without an email link. The hosted providers (Dropbox Sign / DocuSign / SignWell) still require their own email/embedded UI; these signer commands refuse non-local providers with a clear error.

@@ -9,6 +9,7 @@ import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wi
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
+import { serveMcpStdio } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
@@ -132,6 +133,7 @@ sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
+sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
 sign doctor
@@ -757,6 +759,11 @@ async function main(): Promise<void> {
         : "event_hash via API key HMAC",
       expectedSuccessExitCode: REQUEST_WATCH_EXIT_CODES.completed,
     }, null, 2));
+    return;
+  }
+
+  if (root === "mcp" && sub === "serve") {
+    await serveMcpStdio({ input: process.stdin, output: process.stdout, db });
     return;
   }
 
