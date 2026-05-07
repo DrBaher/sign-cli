@@ -45,6 +45,13 @@ import {
   verifySignWellCallback,
   type SignWellWebhookPayload,
 } from "./signwell-webhook.js";
+import {
+  extractDocuSignSigners,
+  getDocuSignEnvelopeSummary,
+  normalizeDocuSignWebhookEventType,
+  verifyDocuSignCallback,
+  type DocuSignWebhookPayload,
+} from "./docusign-webhook.js";
 import { inspectPdfSignatures, type PdfSignatureReport } from "./pdf-signature.js";
 import { digestForChainHead, inspectTimestampResponse, issueRfc3161Timestamp, type TimestampInspection } from "./timestamp.js";
 import {
@@ -1773,6 +1780,76 @@ export function listAuditEvents(db: SqliteDb, requestId: string): Array<{
     hash_self: string;
     created_at: string;
   }>;
+}
+
+export function ingestDocuSignWebhookPayload(
+  db: SqliteDb,
+  input: {
+    payload: DocuSignWebhookPayload;
+    secret: string;
+    rawBody: string | Buffer;
+    signatureHeader?: string | string[] | null;
+    requestId?: string;
+    now?: Date;
+  },
+): {
+  verified: boolean;
+  requestId: string | null;
+  eventType: string | null;
+  normalizedEventType: string;
+  providerStatus: string | null;
+} {
+  const verified = verifyDocuSignCallback(input.secret, input.rawBody, input.signatureHeader ?? null);
+  const eventType = input.payload.event ?? null;
+  const normalizedEventType = normalizeDocuSignWebhookEventType(eventType);
+  const summary = getDocuSignEnvelopeSummary(input.payload);
+  const requestId = input.requestId ?? summary.metadataRequestId ?? null;
+  const providerStatus = summary.status ? summary.status.toLowerCase() : normalizedEventType;
+
+  if (!requestId) {
+    return { verified, requestId: null, eventType, normalizedEventType, providerStatus };
+  }
+
+  getRequestRow(db, requestId);
+
+  const now = input.now ?? new Date();
+  appendAuditEvent(db, {
+    requestId,
+    eventType: `docusign.webhook.${eventType ?? "unknown"}`,
+    payload: {
+      verified,
+      normalizedEventType,
+      providerStatus,
+      payload: input.payload,
+    },
+    now,
+  });
+
+  if (verified) {
+    persistRequestProviderMetadata(db, {
+      requestId,
+      provider: "docusign",
+      providerRequestId: summary.envelopeId ?? undefined,
+      providerStatus,
+      now,
+    });
+
+    for (const signer of extractDocuSignSigners(input.payload)) {
+      const email = (signer.email ?? "").toString().trim();
+      if (!email) continue;
+      if (!signer.signedDateTime) continue;
+      recordSignerSigningState(db, {
+        requestId,
+        signerEmail: email,
+        signerName: typeof signer.name === "string" ? signer.name : undefined,
+        signedAt: new Date(signer.signedDateTime).toISOString(),
+        source: "docusign",
+        now,
+      });
+    }
+  }
+
+  return { verified, requestId, eventType, normalizedEventType, providerStatus };
 }
 
 export function ingestSignWellWebhookPayload(

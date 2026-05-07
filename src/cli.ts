@@ -23,6 +23,11 @@ import { listMcpTools, serveMcpStdio } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
+import {
+  loadDocuSignWebhookPayloadFile,
+  requireDocuSignWebhookSecret,
+  verifyDocuSignCallback,
+} from "./lib/docusign-webhook.js";
 import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySignWellCallback } from "./lib/signwell-webhook.js";
 import {
   approveSigningRequest,
@@ -39,6 +44,7 @@ import {
   fetchFinalSignedPdf,
   getEmbeddedSignUrl,
   getSigningRequestStatus,
+  ingestDocuSignWebhookPayload,
   ingestSignWellWebhookPayload,
   ingestWebhookPayload,
   inspectRequestSignedPdf,
@@ -167,8 +173,8 @@ sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
 sign request create --spec ./request.json [--param key=value ...]   (variable substitution into the spec JSON)
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
-sign webhook verify [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json
-sign webhook ingest [--provider dropbox|signwell] --payload-file ./fixtures/sample-webhook.json [--request-id <id>]
+sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
+sign webhook ingest [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>] [--request-id <id>]
 sign webhook listen [--provider dropbox|signwell] [--port 3000] [--path /dropbox/callback] [--request-id <id>]`);
 }
 
@@ -182,13 +188,9 @@ function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>)
   return undefined;
 }
 
-function resolveWebhookProvider(provider: SignProvider): "dropbox" | "signwell" {
-  if (provider === "signwell") {
-    return "signwell";
-  }
-  if (provider === "docusign") {
-    throw new Error("Webhook commands support --provider dropbox or signwell only.");
-  }
+function resolveWebhookProvider(provider: SignProvider): "dropbox" | "signwell" | "docusign" {
+  if (provider === "signwell") return "signwell";
+  if (provider === "docusign") return "docusign";
   return "dropbox";
 }
 
@@ -876,6 +878,16 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ provider: "signwell", verified, event: payload.event ?? null }, null, 2));
       return;
     }
+    if (webhookProvider === "docusign") {
+      const secret = requireDocuSignWebhookSecret();
+      const fs = await import("node:fs/promises");
+      const rawBody = await fs.readFile(payloadFile, "utf8");
+      const payload = await loadDocuSignWebhookPayloadFile(payloadFile);
+      const signatureHeader = flagValue(parsed, "signature-header") ?? null;
+      const verified = verifyDocuSignCallback(secret, rawBody, signatureHeader);
+      console.log(JSON.stringify({ provider: "docusign", verified, event: payload.event ?? null }, null, 2));
+      return;
+    }
     const apiKey = requireDropboxApiKey();
     const payload = await loadWebhookPayloadFile(payloadFile);
     const verified = verifyDropboxCallback(apiKey, payload);
@@ -895,6 +907,22 @@ async function main(): Promise<void> {
         requestId: flagValue(parsed, "request-id"),
       });
       console.log(JSON.stringify({ provider: "signwell", ...result }, null, 2));
+      return;
+    }
+    if (webhookProvider === "docusign") {
+      const secret = requireDocuSignWebhookSecret();
+      const fs = await import("node:fs/promises");
+      const rawBody = await fs.readFile(payloadFile, "utf8");
+      const payload = await loadDocuSignWebhookPayloadFile(payloadFile);
+      const signatureHeader = flagValue(parsed, "signature-header") ?? null;
+      const result = ingestDocuSignWebhookPayload(db, {
+        payload,
+        secret,
+        rawBody,
+        signatureHeader,
+        requestId: flagValue(parsed, "request-id"),
+      });
+      console.log(JSON.stringify({ provider: "docusign", ...result }, null, 2));
       return;
     }
     const apiKey = requireDropboxApiKey();
