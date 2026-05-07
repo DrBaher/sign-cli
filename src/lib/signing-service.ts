@@ -1088,6 +1088,7 @@ export async function sendSigningRequest(
     provider?: SignProvider;
     apiKey?: string;
     testMode: boolean;
+    force?: boolean;
     now?: Date;
     providerSend?: () => Promise<ProviderSendResult>;
     sendRequest?: typeof sendSignatureRequest;
@@ -1097,8 +1098,28 @@ export async function sendSigningRequest(
   signatureRequestId: string;
   signatureIds: string[];
   responseBody: unknown;
+  idempotent: boolean;
 }> {
   const request = getRequestRow(db, input.requestId);
+  if (request.provider_request_id && !input.force) {
+    appendAuditEvent(db, {
+      requestId: input.requestId,
+      eventType: "request.send_skipped",
+      payload: {
+        reason: "already_sent",
+        provider: request.provider ?? input.provider ?? null,
+        providerRequestId: request.provider_request_id,
+      },
+      now: input.now ?? new Date(),
+    });
+    return {
+      provider: (request.provider as SignProvider | null) ?? (input.provider ?? "dropbox"),
+      signatureRequestId: request.provider_request_id,
+      signatureIds: parseSignatureIdsJson(request.signature_ids_json),
+      responseBody: { idempotent: true, reason: "already_sent" },
+      idempotent: true,
+    };
+  }
   const provider = input.provider ?? getPersistedProvider(request);
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const documents = getRequestDocuments(request);
@@ -1175,6 +1196,7 @@ export async function sendSigningRequest(
     signatureRequestId: result.providerRequestId,
     signatureIds: result.signatureIds,
     responseBody: result.responseBody,
+    idempotent: false,
   };
 }
 
