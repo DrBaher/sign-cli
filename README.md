@@ -1,14 +1,14 @@
-# sign CLI MVP
+# sign-cli
 
-CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, and SignWell.
+CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, SignWell, and a built-in local provider.
 
 ## Quick start
 
 No accounts? No keys? No clone? Just run the demo:
 ```bash
-npx cli-digital-signature-mvp demo
+npx sign-cli demo
 ```
-or download the standalone binary from the [GitHub Releases page](https://github.com/DrBaher/cli-digital-signature-mvp/releases) and run `./sign-linux-x64 demo`. See [DISTRIBUTION.md](./DISTRIBUTION.md) for all the install options.
+or download the standalone binary from the [GitHub Releases page](https://github.com/DrBaher/sign-cli/releases) and run `./sign-linux-x64 demo`. See [DISTRIBUTION.md](./DISTRIBUTION.md) for all the install options.
 
 If you've cloned the repo:
 ```bash
@@ -87,8 +87,8 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 
 ## 2) Install
 ```bash
-git clone https://github.com/DrBaher/cli-digital-signature-mvp.git
-cd cli-digital-signature-mvp
+git clone https://github.com/DrBaher/sign-cli.git
+cd sign-cli
 npm install
 cp .env.example .env
 ```

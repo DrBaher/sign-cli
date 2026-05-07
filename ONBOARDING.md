@@ -9,8 +9,8 @@ gaps.
 
 ## 1. Clone, install, build
 ```bash
-git clone https://github.com/DrBaher/cli-digital-signature-mvp.git
-cd cli-digital-signature-mvp
+git clone https://github.com/DrBaher/sign-cli.git
+cd sign-cli
 npm install
 cp .env.example .env
 npm run build

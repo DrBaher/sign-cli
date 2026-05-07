@@ -5,8 +5,8 @@ Three ways to install and use the CLI.
 ## 1. `npx` (no install)
 
 ```bash
-npx cli-digital-signature-mvp demo
-npx cli-digital-signature-mvp doctor providers
+npx sign-cli demo
+npx sign-cli doctor providers
 ```
 
 Pulls the published tarball, runs the bundled CLI, exits. Good for one-off agent demos.
@@ -14,7 +14,7 @@ Pulls the published tarball, runs the bundled CLI, exits. Good for one-off agent
 ## 2. Global npm install
 
 ```bash
-npm install -g cli-digital-signature-mvp
+npm install -g sign-cli
 sign demo
 sign doctor providers
 ```
