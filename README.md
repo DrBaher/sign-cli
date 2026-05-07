@@ -4,7 +4,13 @@ CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, a
 
 ## Quick start
 
-No accounts? No keys? Run the demo:
+No accounts? No keys? No clone? Just run the demo:
+```bash
+npx cli-digital-signature-mvp demo
+```
+or download the standalone binary from the [GitHub Releases page](https://github.com/DrBaher/cli-digital-signature-mvp/releases) and run `./sign-linux-x64 demo`. See [DISTRIBUTION.md](./DISTRIBUTION.md) for all the install options.
+
+If you've cloned the repo:
 ```bash
 npm install && npm run build
 node dist/cli.js demo

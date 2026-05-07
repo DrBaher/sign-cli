@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stripTypeScriptTypes } from "node:module";
 
@@ -46,3 +46,10 @@ for (const file of files) {
   });
   await writeFile(outputPath, compiled, "utf8");
 }
+
+const cliJs = path.join(distDir, "cli.js");
+const cliRaw = await readFile(cliJs, "utf8");
+if (!cliRaw.startsWith("#!")) {
+  await writeFile(cliJs, `#!/usr/bin/env node\n${cliRaw}`, "utf8");
+}
+await chmod(cliJs, 0o755);

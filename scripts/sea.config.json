@@ -1,0 +1,7 @@
+{
+  "main": "dist/cli.bundled.cjs",
+  "output": "dist/sign.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "useCodeCache": true
+}
