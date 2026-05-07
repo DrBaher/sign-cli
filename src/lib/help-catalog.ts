@@ -48,6 +48,11 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--out", description: "Bundle output directory (defaults to ./demo-bundle)." },
     ],
   },
+  {
+    command: "selftest",
+    summary: "In-process end-to-end smoke against a scratch DB: create → send → sign → fetch-final → verify-signed-pdf → audit verify → request receipt → verify-receipt. Exits 3 on any failure; drop-in for deploy health checks.",
+    flags: [{ name: "--keep-workspace", description: "true to keep the temp directory for inspection (default cleans up)." }],
+  },
   // Request creation
   {
     command: "request create",

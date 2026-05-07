@@ -14,6 +14,7 @@ import { runAuditWatch } from "./lib/audit-watch.js";
 import { startHttpApiServer } from "./lib/http-api.js";
 import { diffRequests } from "./lib/request-diff.js";
 import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
+import { runSelftest } from "./lib/selftest.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
 import { runSignerWatch } from "./lib/signer-watch.js";
 import {
@@ -169,6 +170,7 @@ sign request show --request-id <id>
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign demo [--document ./file.pdf] [--out ./demo-bundle/]
+sign selftest [--keep-workspace true]   (in-process E2E smoke; exits 3 on any failure — drop-in for deploy health checks)
 sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
@@ -340,6 +342,14 @@ async function main(): Promise<void> {
       onProgress: (line) => console.error(line),
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "selftest") {
+    const keep = (flagValue(parsed, "keep-workspace") ?? "false") === "true";
+    const report = await runSelftest({ keepWorkspace: keep });
+    console.log(JSON.stringify(report, null, 2));
+    process.exitCode = report.ok ? 0 : 3;
     return;
   }
 
