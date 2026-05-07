@@ -12,6 +12,7 @@ import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
 import { runAuditWatch } from "./lib/audit-watch.js";
 import { startHttpApiServer } from "./lib/http-api.js";
+import { diffRequests } from "./lib/request-diff.js";
 import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
 import { verifyRequestReceiptBundle } from "./lib/receipt-verify.js";
 import { runSignerWatch } from "./lib/signer-watch.js";
@@ -164,6 +165,7 @@ sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--
 sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json]
 sign request list [--provider dropbox|docusign|signwell] [--status created|sent|approved|completed|canceled] [--limit 100]
 sign request show --request-id <id>
+sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign init [--out ./.env]
@@ -1192,6 +1194,15 @@ async function main(): Promise<void> {
     const includeMetrics = (flagValue(parsed, "metrics") ?? "false") === "true";
     const snapshot = getRequestSnapshot(db, requestId, { includeMetrics });
     console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+
+  if (root === "request" && sub === "diff") {
+    const before = flagValue(parsed, "before", true)!;
+    const after = flagValue(parsed, "after", true)!;
+    const result = diffRequests(db, before, after);
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.identical ? 0 : 1;
     return;
   }
 
