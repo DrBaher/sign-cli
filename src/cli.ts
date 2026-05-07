@@ -8,6 +8,7 @@ import { backupDatabase, verifyDatabase } from "./lib/db-admin.js";
 import { collectInitAnswers, createDefaultIo, writeEnvFile } from "./lib/init-wizard.js";
 import { createLogger, resolveLogMode } from "./lib/logger.js";
 import { redactErrorMessage } from "./lib/secret.js";
+import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
 import { serveMcpStdio } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
@@ -144,6 +145,7 @@ sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
+sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
 sign doctor
@@ -881,6 +883,18 @@ async function main(): Promise<void> {
         : "event_hash via API key HMAC",
       expectedSuccessExitCode: REQUEST_WATCH_EXIT_CODES.completed,
     }, null, 2));
+    return;
+  }
+
+  if (root === "completion") {
+    const shell = (sub ?? "").toLowerCase();
+    if (shell !== "bash" && shell !== "zsh" && shell !== "fish") {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `Unsupported shell "${sub ?? ""}". Use bash, zsh, or fish.`,
+      });
+    }
+    process.stdout.write(generateCompletionScript(shell as CompletionShell));
     return;
   }
 
