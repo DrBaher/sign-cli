@@ -329,10 +329,11 @@ export const HELP_CATALOG: CommandSpec[] = [
   // Audit + bundles
   {
     command: "audit show",
-    summary: "List all audit events for a request. JSON by default; --format csv emits an RFC 4180 CSV (CRLF line endings, quoted payloads) for spreadsheet-driven compliance review.",
+    summary: "List all audit events for a request. JSON by default; --format csv emits an RFC 4180 CSV (CRLF line endings, quoted payloads) for spreadsheet-driven compliance review. --event-type filters to one or more event_type values.",
     flags: [
       { name: "--request-id", required: true, description: "Request to dump." },
       { name: "--format", description: "json (default) or csv." },
+      { name: "--event-type", description: "Repeatable. Restrict the dump to events whose event_type matches one of the given values (e.g. --event-type request.signed --event-type request.declined)." },
     ],
   },
   {
