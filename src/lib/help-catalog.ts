@@ -283,6 +283,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--exit-on-first", description: "true to exit after the first new entry is evaluated." },
       { name: "--interval-seconds", description: "Belt-and-suspenders poll interval (default 1s)." },
       { name: "--timeout-seconds", description: "Exit code 4 after this many seconds with no new entry." },
+      { name: "--report", description: "Append one NDJSON line per evaluated entry to this file (plus a final {summary:true,…} line). Replay/audit-friendly." },
     ],
   },
   {

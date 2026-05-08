@@ -157,7 +157,7 @@ sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minu
 sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
-sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]   (long-running: tail the inbox + apply the policy to every new entry; exits 3 if any row failed, 4 on timeout)
+sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson]   (long-running: tail the inbox + apply the policy to every new entry; --report streams every evaluated entry to a file for offline replay/audit; exits 3 if any row failed, 4 on timeout)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
 sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
 sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
@@ -893,15 +893,38 @@ async function main(): Promise<void> {
       });
     }
     const spec = loadPolicySpec(specPath);
+    const reportPath = flagValue(parsed, "report");
     const { runSignerPolicyWatch } = await import("./lib/policy-run-watch.js");
-    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""} (Ctrl+C to stop)\n`);
+    let reportStream: import("node:fs").WriteStream | null = null;
+    if (reportPath) {
+      const fs = await import("node:fs");
+      const pathMod = await import("node:path");
+      const resolved = pathMod.resolve(reportPath);
+      fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+      reportStream = fs.createWriteStream(resolved, { flags: "a" });
+    }
+    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""}${reportPath ? ` → ${reportPath}` : ""} (Ctrl+C to stop)\n`);
     const outcome = await runSignerPolicyWatch(db, {
       tokens, spec, signerEmail, exitOnFirst, timeoutMs, pollIntervalMs, dryRun,
       onEntry: (entry) => {
         const tag = entry.skipped ? "  SKIP" : entry.ok ? `+ ${entry.decision?.action?.toUpperCase()}` : "× ERROR";
         process.stderr.write(`${tag} ${entry.requestId}${entry.error ? ` ${entry.error.code}: ${entry.error.message}` : ""}\n`);
+        if (reportStream) {
+          reportStream.write(JSON.stringify({ ...entry, observedAt: new Date().toISOString() }) + "\n");
+        }
       },
     });
+    if (reportStream) {
+      reportStream.write(JSON.stringify({
+        summary: true,
+        succeeded: outcome.succeeded,
+        failed: outcome.failed,
+        skipped: outcome.skipped,
+        exitReason: outcome.watch.exitReason,
+        observedAt: new Date().toISOString(),
+      }) + "\n");
+      await new Promise<void>((resolve) => reportStream!.end(resolve));
+    }
     console.log(JSON.stringify(outcome, null, 2));
     if (outcome.watch.exitReason === "timeout") process.exitCode = 4;
     else if (outcome.failed > 0) process.exitCode = 3;
