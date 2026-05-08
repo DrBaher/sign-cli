@@ -17,5 +17,8 @@ test("renderMcpToolsAsMarkdown produces a docs page with one heading per tool + 
   assert.equal(outputCount, tools.length);
   // Code fences should appear in pairs around each schema.
   const fenceCount = (md.match(/```/g) ?? []).length;
-  assert.equal(fenceCount, tools.length * 4); // 2 blocks per tool × 2 fences per block
+  // Two code blocks per tool minimum (Input + Output), plus one extra block
+  // for any tool that emits notifications/progress. Each block = 2 fences.
+  const progressTools = tools.filter((t) => (t as unknown as { progressSchema?: unknown }).progressSchema).length;
+  assert.equal(fenceCount, tools.length * 4 + progressTools * 2);
 });

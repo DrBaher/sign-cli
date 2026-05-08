@@ -41,6 +41,10 @@ type ToolDefinition = {
   // Optional output schema — JSON Schema for the success-case result. Lets
   // generic agent loops validate responses without per-tool special-casing.
   outputSchema?: Record<string, unknown>;
+  // Optional schema for progress notifications when the tool calls
+  // emitProgress. Documents the shape of `notifications/progress` payload —
+  // useful for clients that want to type-check streamed updates.
+  progressSchema?: Record<string, unknown>;
   handler: ToolHandler;
 };
 
@@ -296,6 +300,18 @@ const TOOLS: ToolDefinition[] = [
         finalStatus: { type: "string" },
       },
     },
+    // Progress notifications: one per poll cycle. `progress` is the 1-based
+    // attempt number; `message` is "<status>" or "<status> (terminal=<reason>)"
+    // when the watch hits a terminal state.
+    progressSchema: {
+      type: "object",
+      properties: {
+        progress: { type: "number", description: "1-based poll attempt." },
+        total: { type: "number" },
+        message: { type: "string", description: "<status>[ (terminal=<reason>)]" },
+      },
+      required: ["progress", "message"],
+    },
     handler: async (db, args, ctx) => {
       const provider = resolveProviderArg(args);
       const intervalMs = typeof args.interval_ms === "number" ? args.interval_ms : 1000;
@@ -353,12 +369,13 @@ function validateToolArgs(
   return { ok: true };
 }
 
-export function listMcpTools(): Array<Pick<ToolDefinition, "name" | "description" | "inputSchema" | "outputSchema">> {
-  return TOOLS.map(({ name, description, inputSchema, outputSchema }) => ({
+export function listMcpTools(): Array<Pick<ToolDefinition, "name" | "description" | "inputSchema" | "outputSchema" | "progressSchema">> {
+  return TOOLS.map(({ name, description, inputSchema, outputSchema, progressSchema }) => ({
     name,
     description,
     inputSchema,
     ...(outputSchema ? { outputSchema } : {}),
+    ...(progressSchema ? { progressSchema } : {}),
   }));
 }
 
@@ -383,6 +400,14 @@ export function renderMcpToolsAsMarkdown(): string {
       lines.push("");
       lines.push("```json");
       lines.push(JSON.stringify(tool.outputSchema, null, 2));
+      lines.push("```");
+      lines.push("");
+    }
+    if (tool.progressSchema) {
+      lines.push("### Progress notifications");
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(tool.progressSchema, null, 2));
       lines.push("```");
       lines.push("");
     }
