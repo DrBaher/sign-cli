@@ -1,0 +1,20 @@
+# Railway deploy config for the sign-cli hosted demo.
+#   railway login
+#   railway init
+#   railway up
+#
+# Railway auto-discovers railway.toml at the repo root. The Dockerfile
+# stays under deploy/ — dockerfilePath is relative to the build context
+# (the repo root, where this file lives). PORT is provided by Railway
+# and honoured inside entrypoint.sh; defaults still apply when running
+# locally via docker-compose.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/Dockerfile"
+
+[deploy]
+healthcheckPath = "/web-demo/"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
