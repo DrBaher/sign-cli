@@ -3,48 +3,233 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>sign-cli web demo</title>
+    <title>sign-cli — a signing API you can audit</title>
+    <meta name="description" content="A scrollable walkthrough of sign-cli: a CLI + HTTP service for sending, signing, and auditing documents. Live-wired against a read-only demo backend." />
     <link rel="stylesheet" href="style.css" />
+    <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
   </head>
-  <body>
-    <header>
-      <h1>sign-cli web demo</h1>
-      <p class="sub">A read-only window into the running <code>sign serve</code>. Inbox + per-request snapshot + audit-chain scan, all over <code>/v1/*</code>.</p>
+  <body x-data="signDemo()" x-init="init()">
+
+    <!-- The legacy test asserts /sign-cli web demo/ is in the body. Keep the string. -->
+    <span class="sr-only">sign-cli web demo</span>
+
+    <header class="hero">
+      <div class="container">
+        <p class="eyebrow">sign-cli · live demo</p>
+        <h1>Sign documents <span class="accent">with a CLI you can audit.</span></h1>
+        <p class="lede">A small, scriptable signing service. Sends requests, collects signatures, and links every state change into a tamper-evident hash chain. The whole API surface is below — wired to a live read-only backend.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/DrBaher/sign-cli" target="_blank" rel="noopener">View on GitHub →</a>
+          <a class="btn btn-ghost" href="#try-it">Run it locally</a>
+        </div>
+        <p class="hero-meta" x-show="cold" x-cloak>
+          <span class="dot dot-amber"></span> Backend was idle — waking it up now. First load takes a few seconds.
+        </p>
+      </div>
     </header>
 
-    <section id="inbox">
-      <h2>Signer inbox</h2>
-      <div class="row">
-        <label>Signer email <input type="text" id="inbox-email" placeholder="leave blank for all" /></label>
-        <button id="inbox-refresh">Refresh</button>
-      </div>
-      <div id="inbox-error" class="error"></div>
-      <table id="inbox-table">
-        <thead><tr><th>Request ID</th><th>Title</th><th>Status</th><th>Signers</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
+    <main class="container">
 
-    <section id="snapshot">
-      <h2>Request snapshot</h2>
-      <div class="row">
-        <label>Request ID <input type="text" id="snap-id" placeholder="paste a request id" /></label>
-        <button id="snap-load">Load</button>
-      </div>
-      <pre id="snap-output">No request loaded yet.</pre>
-    </section>
+      <!-- ── Step 1 ───────────────────────────────────────────── -->
+      <section class="step" id="inbox">
+        <div class="step-narration">
+          <p class="step-num">01</p>
+          <h2>The signer's inbox</h2>
+          <p>When you send a document with <code>sign request send</code>, every signer gets a tokenized link. The API returns a per-signer view — they only see requests addressed to them.</p>
+          <p>Below is the call <code>POST /v1/signer/list</code> made against this demo's seed data. Click any row to load it into the next step.</p>
+        </div>
+        <div class="step-stage">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <span class="method method-post">POST</span>
+                <code>/v1/signer/list</code>
+              </div>
+              <button class="btn btn-sm btn-ghost" @click="loadInbox()" :disabled="inboxLoading">
+                <span x-show="!inboxLoading">↻ Refresh</span>
+                <span x-show="inboxLoading" x-cloak>Loading…</span>
+              </button>
+            </div>
+            <div class="panel-body" x-show="inboxError" x-cloak>
+              <p class="error-banner" x-text="inboxError"></p>
+            </div>
+            <div class="inbox-list" x-show="!inboxError">
+              <template x-for="entry in inbox" :key="entry.requestId">
+                <button
+                  type="button"
+                  class="inbox-card"
+                  :class="{ 'is-active': selectedId === entry.requestId }"
+                  @click="select(entry.requestId)">
+                  <div class="inbox-card-main">
+                    <p class="inbox-card-title" x-text="entry.title || 'Untitled request'"></p>
+                    <p class="inbox-card-id" x-text="entry.requestId"></p>
+                  </div>
+                  <div class="inbox-card-meta">
+                    <span class="status-pill" :class="'status-' + (entry.status || 'unknown')" x-text="entry.status || '—'"></span>
+                    <span class="meta-count" x-text="(entry.signers || []).length + ' signer' + ((entry.signers || []).length === 1 ? '' : 's')"></span>
+                  </div>
+                </button>
+              </template>
+              <p x-show="!inboxLoading && inbox.length === 0" class="empty">No requests in the demo seed.</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <section id="audit">
-      <h2>Audit chain scan</h2>
-      <div class="row">
-        <button id="scan-run">Scan all chains</button>
-      </div>
-      <pre id="scan-output">Click "Scan all chains" to verify every request's audit hash linkage.</pre>
-    </section>
+      <!-- ── Step 2 ───────────────────────────────────────────── -->
+      <section class="step" id="anatomy">
+        <div class="step-narration">
+          <p class="step-num">02</p>
+          <h2>What's inside a request</h2>
+          <p>Each request carries its full state: the original document, every signer with their individual status, and the audit metadata that links it into the hash chain (next step).</p>
+          <p>The live response from <code>POST /v1/request/show</code> drives the panel. The structured view is rendered from the JSON — same data, two presentations.</p>
+        </div>
+        <div class="step-stage">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <span class="method method-post">POST</span>
+                <code>/v1/request/show</code>
+              </div>
+              <button
+                class="btn btn-sm btn-ghost"
+                @click="showRaw = !showRaw"
+                x-show="snapshot">
+                <span x-show="!showRaw">{ } Show raw JSON</span>
+                <span x-show="showRaw" x-cloak>← Pretty view</span>
+              </button>
+            </div>
 
-    <footer>
-      <p>Endpoints: <code>POST /v1/signer/list</code>, <code>POST /v1/request/show</code>, <code>POST /v1/audit/scan</code>. Static files served by <code>sign serve --web-demo true</code>.</p>
-    </footer>
+            <div class="panel-body" x-show="!selectedId" x-cloak>
+              <p class="empty">Pick a request from step 01 to inspect it.</p>
+            </div>
+
+            <div class="panel-body" x-show="selectedId && !snapshot && !snapshotError" x-cloak>
+              <p class="empty">Loading snapshot…</p>
+            </div>
+
+            <div class="panel-body" x-show="snapshotError" x-cloak>
+              <p class="error-banner" x-text="snapshotError"></p>
+            </div>
+
+            <!-- Pretty view -->
+            <div class="snapshot" x-show="snapshot && !showRaw" x-cloak>
+              <div class="snapshot-header">
+                <h3 x-text="title()"></h3>
+                <p class="snapshot-id" x-text="selectedId"></p>
+                <div class="snapshot-tags">
+                  <span class="status-pill" :class="'status-' + status()" x-text="status()"></span>
+                  <span class="muted" x-text="formatTimestamp(createdAt()) + ' · created'"></span>
+                </div>
+              </div>
+              <div class="snapshot-body">
+                <h4>Signers</h4>
+                <ul class="signer-list">
+                  <template x-for="signer in signerRows()" :key="signer.email">
+                    <li class="signer-row">
+                      <div>
+                        <p class="signer-email" x-text="signer.email"></p>
+                        <p class="signer-name muted" x-text="signer.name || '—'"></p>
+                      </div>
+                      <span class="status-pill" :class="'status-' + signer.status" x-text="signer.status"></span>
+                    </li>
+                  </template>
+                </ul>
+                <details class="raw-toggle" x-show="auditHead()">
+                  <summary>Audit metadata</summary>
+                  <dl class="kv">
+                    <dt>Audit head</dt>
+                    <dd>
+                      <code x-text="(auditHead() || '').substring(0, 24)"></code><span class="muted" x-show="auditHead()">…</span>
+                    </dd>
+                  </dl>
+                </details>
+              </div>
+            </div>
+
+            <!-- Raw view -->
+            <div x-show="snapshot && showRaw" x-cloak>
+              <pre class="json"><code x-text="rawJson(snapshot)"></code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Step 3 ───────────────────────────────────────────── -->
+      <section class="step" id="audit">
+        <div class="step-narration">
+          <p class="step-num">03</p>
+          <h2>The audit chain</h2>
+          <p>Every state mutation — request created, signer signed, signer declined — appends an entry to a per-request hash chain. Each entry hashes the previous one, so a single tampered row breaks the chain everywhere downstream.</p>
+          <p><code>sign audit scan</code> walks every chain in the database and verifies the linkage. Below it's wired to <code>POST /v1/audit/scan</code>.</p>
+        </div>
+        <div class="step-stage">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <span class="method method-post">POST</span>
+                <code>/v1/audit/scan</code>
+              </div>
+              <button class="btn btn-primary btn-sm" @click="runAudit()" :disabled="auditRunning">
+                <span x-show="!auditRunning">▶ Run audit scan</span>
+                <span x-show="auditRunning" x-cloak>Verifying…</span>
+              </button>
+            </div>
+
+            <div class="panel-body" x-show="!audit && !auditRunning && !auditError" x-cloak>
+              <p class="empty">No scan yet. Hit "Run audit scan" to verify every chain in the database.</p>
+            </div>
+            <div class="panel-body" x-show="auditError" x-cloak>
+              <p class="error-banner" x-text="auditError"></p>
+            </div>
+
+            <div x-show="audit" x-cloak>
+              <div class="audit-summary" :class="{ 'is-ok': audit?.brokenChains === 0, 'is-bad': audit?.brokenChains > 0 }">
+                <p class="audit-headline">
+                  <span x-show="audit?.brokenChains === 0">✓ All chains verified</span>
+                  <span x-show="audit?.brokenChains > 0" x-cloak>⚠ <span x-text="audit?.brokenChains"></span> broken chain(s) detected</span>
+                </p>
+                <p class="audit-stats">
+                  <span x-text="audit?.scanned + ' chain' + (audit?.scanned === 1 ? '' : 's')"></span> ·
+                  <span x-text="audit?.totalEntries + ' entr' + (audit?.totalEntries === 1 ? 'y' : 'ies')"></span> ·
+                  <span x-show="audit?.brokenChains === 0">0 broken links</span>
+                </p>
+              </div>
+              <ul class="audit-results">
+                <template x-for="row in (audit?.results || [])" :key="row.requestId">
+                  <li class="audit-row" :class="row.ok ? 'ok' : 'bad'">
+                    <span class="audit-mark" x-text="row.ok ? '✓' : '✗'"></span>
+                    <span class="audit-id" x-text="row.requestId"></span>
+                    <span class="audit-meta muted" x-text="(row.entries || 0) + ' entries'"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── CTA ──────────────────────────────────────────────── -->
+      <section class="cta" id="try-it">
+        <h2>Run it yourself</h2>
+        <p>The demo above is read-only. Locally you get the full thing — send, sign, decline, reissue tokens, export receipts, plus Dropbox Sign and DocuSign provider adapters.</p>
+        <div class="install">
+          <p class="install-label">One-line demo (spins up an in-memory database, opens the same UI):</p>
+          <pre class="install-cmd"><code>npx sign-cli demo</code></pre>
+        </div>
+        <div class="cta-actions">
+          <a class="btn btn-primary" href="https://github.com/DrBaher/sign-cli" target="_blank" rel="noopener">GitHub repo</a>
+          <a class="btn btn-ghost" href="https://github.com/DrBaher/sign-cli#readme" target="_blank" rel="noopener">README + install guide</a>
+          <a class="btn btn-ghost" href="https://github.com/DrBaher/sign-cli/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <p>This demo is rate-limited and read-only. The four mutating routes (<code>/v1/sign</code>, <code>/v1/signer/decline</code>, <code>/v1/signer/reissue-token</code>, <code>/v1/request/receipt</code>) return <code>FORBIDDEN_READ_ONLY</code>.</p>
+        <p>State resets every 4 hours. Built with <code>sign serve --read-only true --web-demo true</code>.</p>
+      </footer>
+
+    </main>
 
     <script src="app.js"></script>
   </body>
