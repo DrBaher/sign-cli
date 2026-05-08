@@ -10,6 +10,7 @@ release.
 
 ### Added
 
+- **Hosted-demo deploy kit** — `deploy/` ships a multi-stage Dockerfile, `seed-demo.mjs` (4 sample requests; one auto-completed), `entrypoint.sh` (wipe → seed → `sign serve --read-only true --web-demo true --rate-limit 5` → exit-after-TTL), and provider configs for Fly / Render / Railway plus a docker-compose for local validation.
 - **Postgres async surface** — every read-only audit primitive (`verifyAuditChainAsync`, `listAuditEventsAsync`, `searchAuditEventsAsync`) and most write primitives (`appendAuditEventAsync`, `tryClaimWebhookEventAsync`, `insertApprovalRowAsync`, `insertArtifactRowAsync`, `markApprovalUsedAsync`, `markAllRequestApprovalsUsedAsync`, `updateRequestStatusAsync`, `reissueApprovalTokenRowAsync`, `persistRequestProviderMetadataAsync`) now run against `PostgresBackend`. Driver-level dialect translation (`?` → `$N`) handled by `db-backend.ts`.
 - **`sign db postgres-smoke`** — eight-step integration probe for the async path: bootstrap → insert → extend chain → verify → list → search. Use after `sign db migrate-postgres` to confirm a fresh deployment.
 - **`sign db migrate-postgres`** — Postgres-flavor schema bootstrap with PL/pgSQL append-only triggers. Idempotent.

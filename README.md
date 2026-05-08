@@ -13,6 +13,9 @@ That single command runs the entire lifecycle — create → send → sign → v
 chain → export receipt — against an offline local provider, then deletes
 everything. No signup. No keys. About 5 seconds.
 
+> Don't have Node? Self-host the read-only web demo in 5 minutes — see
+> [`deploy/README.md`](deploy/README.md) for Fly / Render / Railway configs.
+
 ## Read in this order
 
 1. **[Recipes](docs/recipes/README.md)** — short end-to-end guides (sign as Alice, weekly anchor, auditor handoff, agent loop over MCP).
@@ -20,7 +23,8 @@ everything. No signup. No keys. About 5 seconds.
 3. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
 4. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
 5. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
-6. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
+6. **[Hosted demo](deploy/README.md)** — deploy a public read-only sandbox on Fly / Render / Railway.
+7. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
 
 ## Why this exists
 
