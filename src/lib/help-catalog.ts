@@ -465,6 +465,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db vacuum",
+    summary: "Reclaim space + refresh planner stats. SQLite: VACUUM + PRAGMA optimize, reports pages/bytes before/after. Postgres: VACUUM ANALYZE. Both block writers briefly; pick a maintenance window.",
+    flags: [
+      { name: "--backend", description: "sqlite (default) or postgres." },
+      { name: "--pg-url", description: "postgres://… connection string (when --backend postgres; defaults to SIGN_PG_URL)." },
+    ],
+  },
+  {
     command: "db indexes-postgres",
     summary: "Postgres companion to `db indexes`. Reads pg_indexes / pg_class for the active connection, runs EXPLAIN (FORMAT JSON), and uses pg_class.reltuples for cheap row-count estimates in the suggestions heuristic.",
     flags: [

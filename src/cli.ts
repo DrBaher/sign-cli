@@ -185,6 +185,7 @@ sign db verify
 sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
 sign db indexes [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (SQLite catalog: list indexes, run EXPLAIN QUERY PLAN, suggest under-indexed tables)
 sign db indexes-postgres --pg-url postgres://… [--schema public] [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (Postgres catalog: pg_indexes companion to db indexes)
+sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: VACUUM + PRAGMA optimize; Postgres: VACUUM ANALYZE)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
@@ -365,6 +366,56 @@ async function main(): Promise<void> {
       await backend.close();
     }
     return;
+  }
+
+  if (root === "db" && sub === "vacuum") {
+    const target = (flagValue(parsed, "backend") ?? "sqlite").toLowerCase();
+    if (target === "sqlite") {
+      // SQLite VACUUM rebuilds the database file, reclaiming space; PRAGMA
+      // optimize lets the planner refresh stats. Both are safe but block
+      // writers — we tag them as ops actions, not lifecycle.
+      const before = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count;
+      const pageSize = (db.prepare("PRAGMA page_size").get() as { page_size: number }).page_size;
+      db.exec("VACUUM;");
+      db.exec("PRAGMA optimize;");
+      const after = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count;
+      console.log(JSON.stringify({
+        backend: "sqlite",
+        ranVacuum: true,
+        ranOptimize: true,
+        pageSize,
+        pagesBefore: before,
+        pagesAfter: after,
+        bytesBefore: before * pageSize,
+        bytesAfter: after * pageSize,
+        bytesReclaimed: (before - after) * pageSize,
+      }, null, 2));
+      return;
+    }
+    if (target === "postgres") {
+      const url = flagValue(parsed, "pg-url") ?? process.env.SIGN_PG_URL;
+      if (!url) {
+        throw new SignCliError({
+          code: "MISSING_FLAG",
+          message: "db vacuum --backend postgres requires --pg-url <postgres://…> (or SIGN_PG_URL env var).",
+        });
+      }
+      const { openStorageBackend } = await import("./lib/storage.js");
+      const backend = openStorageBackend({ backend: "postgres", postgresUrl: url });
+      try {
+        // VACUUM ANALYZE refreshes both space + planner stats. Cannot run
+        // inside a transaction — execAsync issues it as a one-shot.
+        await backend.execAsync("VACUUM ANALYZE");
+        console.log(JSON.stringify({ backend: "postgres", ranVacuumAnalyze: true }, null, 2));
+      } finally {
+        await backend.close();
+      }
+      return;
+    }
+    throw new SignCliError({
+      code: "INVALID_ARGS",
+      message: `db vacuum --backend must be sqlite or postgres; got ${JSON.stringify(target)}.`,
+    });
   }
 
   if (root === "db" && sub === "indexes") {
