@@ -4422,3 +4422,97 @@ export async function issueAuditReceiptsBulk(
   }
   return { total: rows.length, succeeded, failed, results };
 }
+
+// --- Receipt re-signing -----------------------------------------------------
+// After db rotate-keys, prior receipt manifests are still signed by the OLD
+// key. They remain verifiable as long as the old cert hangs around, but
+// auditors who want to verify everything against the LIVE key can call this
+// to walk each previously-issued receipt and overwrite manifest.sig +
+// manifest.cert.pem with fresh material.
+//
+// Source of truth for "where are the receipts" is the audit chain itself
+// (request.receipt_signed events carry payload.outDir). Receipt directories
+// that have moved or been deleted are reported as failures rather than
+// aborting the batch.
+
+export type ReSignReceiptsOutcome = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    requestId: string;
+    outDir: string;
+    ok: boolean;
+    error: { code: string; message: string } | null;
+  }>;
+};
+
+export async function reSignAllReceipts(
+  db: SqliteDb,
+  input: { now?: Date } = {},
+): Promise<ReSignReceiptsOutcome> {
+  const fs = await import("node:fs");
+  const pathMod = await import("node:path");
+  const cryptoMod = await import("node:crypto");
+  const { loadOrCreateLocalSigner } = await import("./local-keys.js");
+  const signer = loadOrCreateLocalSigner();
+  // Each request's most recent receipt dir wins — re-running an export
+  // overwrites the same dir, so the latest event_id row is the live receipt.
+  const rows = db.prepare(
+    `SELECT request_id, payload_json
+     FROM (
+       SELECT request_id, payload_json, ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY id DESC) AS rn
+       FROM audit_events
+       WHERE event_type = 'request.receipt_signed'
+     ) WHERE rn = 1`,
+  ).all() as Array<{ request_id: string; payload_json: string }>;
+  const results: ReSignReceiptsOutcome["results"] = [];
+  let succeeded = 0;
+  let failed = 0;
+  for (const row of rows) {
+    let outDir = "";
+    try {
+      const payload = JSON.parse(row.payload_json) as { outDir?: unknown };
+      outDir = typeof payload.outDir === "string" ? payload.outDir : "";
+    } catch {
+      // fall through
+    }
+    if (!outDir) {
+      results.push({ requestId: row.request_id, outDir, ok: false, error: { code: "INTERNAL", message: "outDir missing from request.receipt_signed payload" } });
+      failed += 1;
+      continue;
+    }
+    const manifestPath = pathMod.join(outDir, "manifest.json");
+    if (!fs.existsSync(manifestPath)) {
+      results.push({ requestId: row.request_id, outDir, ok: false, error: { code: "INTERNAL", message: `manifest.json missing at ${manifestPath}` } });
+      failed += 1;
+      continue;
+    }
+    try {
+      const manifestBytes = fs.readFileSync(manifestPath);
+      const signerObj = cryptoMod.createSign("RSA-SHA256");
+      signerObj.update(manifestBytes);
+      const signature = signerObj.sign(signer.privateKeyPem);
+      fs.writeFileSync(pathMod.join(outDir, "manifest.sig"), signature);
+      fs.writeFileSync(pathMod.join(outDir, "manifest.cert.pem"), signer.certificatePem);
+      appendAuditEvent(db, {
+        requestId: row.request_id,
+        eventType: "request.receipt_resigned",
+        payload: {
+          outDir,
+          manifestSha256: sha256(manifestBytes),
+          signatureBytes: signature.length,
+          signerSubject: signer.certificate.subject,
+        },
+        now: input.now,
+      });
+      results.push({ requestId: row.request_id, outDir, ok: true, error: null });
+      succeeded += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({ requestId: row.request_id, outDir, ok: false, error: { code: "INTERNAL", message } });
+      failed += 1;
+    }
+  }
+  return { total: rows.length, succeeded, failed, results };
+}
