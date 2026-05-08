@@ -42,6 +42,7 @@ The stub serves three purposes:
 - [x] Implement real `PostgresBackend` (via the `pg` driver) — `prepareAsync`/`execAsync` are wired through `pg.Pool.query` with on-the-fly `?` → `$N` placeholder translation. Sync `prepare`/`exec` still throw — pg is async-only and the sync→async call-site migration is its own track.
 - [ ] Migrate call sites to the async surface (`prepareAsync`/`execAsync`/`asBackend`) so they can target `PostgresBackend` without losing SQLite compatibility.
   - [x] Read-only audit primitives ship async variants: `verifyAuditChainAsync`, `listAuditEventsAsync`, `searchAuditEventsAsync`. SQLite + Postgres both pass the same tests via the placeholder translator.
+  - [x] Read-only request primitives ship async variants: `getRequestRowAsync`, `listSigningRequestsAsync`, `scanAllAuditChainsAsync`, `verifyRequestAuditChainAsync`. Sync + async share the same SQL builders so they can't drift.
 - [x] Postgres-flavor DDL bootstrap shipped at `src/lib/postgres-bootstrap.ts` and exposed as `sign db migrate-postgres --pg-url …`. Idempotent, includes the PL/pgSQL append-only triggers.
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.
 - [ ] Re-implement the audit-events append-only triggers as Postgres `BEFORE UPDATE/DELETE` triggers + `RAISE EXCEPTION`.
