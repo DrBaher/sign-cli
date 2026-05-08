@@ -1,0 +1,26 @@
+# Render Blueprint for the sign-cli hosted demo.
+#   1. Push this repo to GitHub.
+#   2. Render dashboard → New → Blueprint → point at deploy/render.yaml.
+#
+# Free tier sleeps after 15min idle; first request wakes it (cold start ~30s)
+# which doubles as our reset trigger.
+
+services:
+  - type: web
+    name: sign-cli-demo
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /web-demo/
+    envVars:
+      - key: PORT
+        value: 4000
+      - key: DEMO_TTL_SECONDS
+        value: 14400
+      - key: SIGN_DEMO_RATE_LIMIT
+        value: 5
+      - key: SIGN_DEMO_RATE_BURST
+        value: 20
+      - key: NODE_ENV
+        value: production
