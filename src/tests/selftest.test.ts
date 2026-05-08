@@ -16,6 +16,7 @@ test("runSelftest exits ok with all canonical steps green", { concurrency: false
     "audit.verify",
     "request.receipt",
     "request.verify-receipt",
+    "mcp.handshake",
   ]) {
     assert.ok(stepNames.includes(expected), `missing step ${expected}`);
   }
