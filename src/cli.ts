@@ -205,6 +205,7 @@ sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 6
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]   (anchor every request's chain head with one TSA call; produces a manifest + .tsr you can re-verify weeks later)
 sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
+sign audit anchors-list [--limit 100]   (list stored anchors with digest/tsaUrl/coveredRequests so an operator can pick which one to verify)
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
 sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
@@ -1208,6 +1209,14 @@ async function main(): Promise<void> {
     const { anchorAllAuditChainHeads } = await import("./lib/audit-anchor.js");
     const result = await anchorAllAuditChainHeads(db, { tsaUrl, outDir });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "anchors-list") {
+    const limitFlag = flagValue(parsed, "limit");
+    const { listStoredAnchors } = await import("./lib/audit-anchor.js");
+    const limit = limitFlag ? Number(limitFlag) : undefined;
+    console.log(JSON.stringify({ anchors: listStoredAnchors(db, { limit }) }, null, 2));
     return;
   }
 

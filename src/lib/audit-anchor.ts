@@ -215,3 +215,53 @@ export function verifyAnchorManifest(
     results,
   };
 }
+
+// --- Anchor enumeration -----------------------------------------------------
+// Lists stored audit_anchor artifacts so an operator can pick which anchor
+// to verify against (or just spot-check that anchors are still being issued
+// on a cadence).
+//
+// Each artifact row carries the metadata_json blob anchorAllAuditChainHeads
+// wrote, which already has tsaUrl + manifestPath + manifestBytes + digestHex
+// + coveredRequests.
+
+export type StoredAnchorEntry = {
+  artifactId: string;
+  artifactPath: string;
+  manifestPath: string | null;
+  digestHex: string | null;
+  tsaUrl: string | null;
+  coveredRequests: number | null;
+  manifestBytes: number | null;
+  contentHash: string;
+  createdAt: string;
+};
+
+export function listStoredAnchors(db: SqliteDb, opts: { limit?: number } = {}): StoredAnchorEntry[] {
+  const limit = Number.isFinite(opts.limit) && (opts.limit ?? 0) > 0 ? Math.min(Number(opts.limit), 1000) : 100;
+  // ORDER BY created_at falls back to rowid for stable tie-breaking when
+  // two anchors land in the same second (created_at has second resolution;
+  // rowid is monotonic).
+  const rows = db.prepare(
+    `SELECT id, path, content_hash, metadata_json, created_at
+     FROM artifacts
+     WHERE kind = 'audit_anchor'
+     ORDER BY datetime(created_at) DESC, rowid DESC
+     LIMIT ${limit}`,
+  ).all() as Array<{ id: string; path: string; content_hash: string; metadata_json: string; created_at: string }>;
+  return rows.map((row) => {
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(row.metadata_json); } catch { /* tolerate malformed metadata */ }
+    return {
+      artifactId: row.id,
+      artifactPath: row.path,
+      manifestPath: typeof meta.manifestPath === "string" ? meta.manifestPath : null,
+      digestHex: typeof meta.digestHex === "string" ? meta.digestHex : null,
+      tsaUrl: typeof meta.tsaUrl === "string" ? meta.tsaUrl : null,
+      coveredRequests: typeof meta.coveredRequests === "number" ? meta.coveredRequests : null,
+      manifestBytes: typeof meta.manifestBytes === "number" ? meta.manifestBytes : null,
+      contentHash: row.content_hash,
+      createdAt: row.created_at,
+    };
+  });
+}

@@ -378,6 +378,13 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "audit anchors-list",
+    summary: "List stored audit_anchor artifacts (newest first) with their digest, TSA URL, manifest path, and covered-request count. Companion to `audit anchor` (write) and `audit verify-anchor` (read-back).",
+    flags: [
+      { name: "--limit", description: "Cap rows (default 100, max 1000)." },
+    ],
+  },
+  {
     command: "audit verify-anchor",
     summary: "Re-check a previously-issued anchor manifest against the current DB. Per-row outcomes: matches (identical hash), shifted (anchored hash exists earlier in the chain — typical), tampered (anchored hash is gone — strong signal of rewrite), missing (request_id no longer exists). Exits 3 if any tampered/missing.",
     flags: [
