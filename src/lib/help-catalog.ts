@@ -427,6 +427,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db indexes",
+    summary: "Ops introspection over the SQLite catalog: list every index (with table, columns, unique/partial flags, original CREATE INDEX SQL); optionally EXPLAIN QUERY PLAN for a SQL string; optionally suggest under-indexed tables.",
+    flags: [
+      { name: "--explain", description: "SQL string. Runs EXPLAIN QUERY PLAN and includes the steps in the response." },
+      { name: "--suggest", description: "true to include a suggestions[] array — user tables with > --suggest-threshold rows and zero user-created indexes." },
+      { name: "--suggest-threshold", description: "Row count above which a table is considered for suggestions (default 1000)." },
+    ],
+  },
+  {
     command: "db migrate-postgres",
     summary: "One-shot Postgres bootstrap: connects to --pg-url, creates the ported schema (CREATE TABLE IF NOT EXISTS) and the audit_events append-only triggers via PL/pgSQL. Idempotent — safe to re-run.",
     flags: [
