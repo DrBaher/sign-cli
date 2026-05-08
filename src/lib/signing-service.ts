@@ -1787,28 +1787,28 @@ export async function watchSigningRequestStatus(
   }
 }
 
-export function listAuditEvents(db: SqliteDb | DbBackend, requestId: string): Array<{
+export type AuditEventRow = {
   id: number;
   event_type: string;
   payload_json: string;
   hash_prev: string | null;
   hash_self: string;
   created_at: string;
-}> {
-  const backend = asBackend(db);
-  return backend.prepare(
-    `SELECT id, event_type, payload_json, hash_prev, hash_self, created_at
-     FROM audit_events
-     WHERE request_id = ?
-     ORDER BY id ASC`,
-  ).all(requestId) as Array<{
-    id: number;
-    event_type: string;
-    payload_json: string;
-    hash_prev: string | null;
-    hash_self: string;
-    created_at: string;
-  }>;
+};
+
+const LIST_AUDIT_EVENTS_SQL =
+  `SELECT id, event_type, payload_json, hash_prev, hash_self, created_at
+   FROM audit_events
+   WHERE request_id = ?
+   ORDER BY id ASC`;
+
+export function listAuditEvents(db: SqliteDb | DbBackend, requestId: string): AuditEventRow[] {
+  return asBackend(db).prepare(LIST_AUDIT_EVENTS_SQL).all(requestId) as AuditEventRow[];
+}
+
+// Async variant — same query via prepareAsync so PostgresBackend works.
+export async function listAuditEventsAsync(backend: DbBackend, requestId: string): Promise<AuditEventRow[]> {
+  return await backend.prepareAsync(LIST_AUDIT_EVENTS_SQL).all(requestId) as AuditEventRow[];
 }
 
 function tryClaimWebhookEvent(
