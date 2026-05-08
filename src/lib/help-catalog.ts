@@ -298,6 +298,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--document-sha256", description: "SHA-256 for the synthetic context (or use --snapshot)." },
       { name: "--signer-email", description: "Signer email for the synthetic context (or use --snapshot)." },
       { name: "--snapshot", description: "Path to a request show JSON file; pulls title/sha256/signer from it." },
+      { name: "--batch", description: "Path to a JSON array of { title, documentSha256, signerEmail, label? } contexts. Emits { sign, decline, report, errored } counters + a per-row decisions[] array. Per-row errors are caught — one bad row doesn't poison the batch." },
     ],
     example:
       `sign signer policy try --spec ./policy.json \\\n` +
