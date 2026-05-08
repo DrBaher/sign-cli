@@ -189,7 +189,7 @@ sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: 
 sign db rotate-keys [--key-dir ./data/local-keys] [--re-sign-receipts true]   (re-issue the local signer keypair; --re-sign-receipts also walks every previously-issued receipt and re-signs each manifest with the new key; records request.receipt_resigned per row)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
-sign mcp serve [--read-only true] [--tool <name> ...] [--capability tools|resources|prompts ...] [--emit-events ./mcp.ndjson]  (stdio MCP server; --emit-events tees every JSON-RPC message in/out to the named NDJSON file for compliance replay; --capability/--tool/--read-only further restrict the surface)
+sign mcp serve [--read-only true] [--tool <name> ...] [--capability tools|resources|prompts ...] [--emit-events ./mcp.ndjson [--emit-events-redact true]]  (stdio MCP server; --emit-events tees every JSON-RPC message in/out to NDJSON; --emit-events-redact masks token-shaped fields in the log; --capability/--tool/--read-only further restrict the surface)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
 sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>] [--rate-limit <rps> [--rate-limit-burst <n>]] [--read-only true]   (HTTP REST surface; --read-only blocks the four lifecycle-mutating routes with FORBIDDEN_READ_ONLY)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
@@ -1982,7 +1982,8 @@ async function main(): Promise<void> {
       ? new Set(capabilityNames as Array<"tools" | "resources" | "prompts">)
       : undefined;
     const emitEventsPath = flagValue(parsed, "emit-events");
-    await serveMcpStdio({ input: process.stdin, output: process.stdout, db, readOnly, allowedTools, capabilities, emitEventsPath });
+    const emitEventsRedact = (flagValue(parsed, "emit-events-redact") ?? "false") === "true";
+    await serveMcpStdio({ input: process.stdin, output: process.stdout, db, readOnly, allowedTools, capabilities, emitEventsPath, emitEventsRedact });
     return;
   }
 
