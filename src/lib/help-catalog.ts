@@ -320,6 +320,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--snapshot", description: "Diff a single context loaded from a request show JSON file." },
       { name: "--inbox", description: "true to diff against every pending inbox row (filtered by --signer-email)." },
       { name: "--signer-email", description: "Inbox filter / fallback signer for the synthetic context." },
+      { name: "--format", description: "json (default) or markdown — markdown renders a reviewer-friendly table sorted changed-first." },
     ],
     example:
       `sign signer policy diff --before ./policy.v1.json --after ./policy.v2.json \\\n` +
