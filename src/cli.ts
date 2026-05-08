@@ -186,6 +186,7 @@ sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-ru
 sign db indexes [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (SQLite catalog: list indexes, run EXPLAIN QUERY PLAN, suggest under-indexed tables)
 sign db indexes-postgres --pg-url postgres://… [--schema public] [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (Postgres catalog: pg_indexes companion to db indexes)
 sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: VACUUM + PRAGMA optimize; Postgres: VACUUM ANALYZE)
+sign db rotate-keys [--key-dir ./data/local-keys]   (re-issue the local signer keypair; backs up the old cert+key with a timestamped suffix)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve [--read-only true] [--tool <name> ...]  (stdio Model Context Protocol server; --tool restricts tools/list + tools/call to the named subset; --read-only also blocks sign + signer_decline)
@@ -368,6 +369,14 @@ async function main(): Promise<void> {
     } finally {
       await backend.close();
     }
+    return;
+  }
+
+  if (root === "db" && sub === "rotate-keys") {
+    const keyDir = flagValue(parsed, "key-dir");
+    const { rotateLocalSignerKeys } = await import("./lib/local-keys.js");
+    const report = rotateLocalSignerKeys({ keyDir });
+    console.log(JSON.stringify(report, null, 2));
     return;
   }
 

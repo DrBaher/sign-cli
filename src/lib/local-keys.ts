@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHash, createSign, generateKeyPairSync, X509Certificate } from "node:crypto";
 import { parseAsn1 } from "./asn1.js";
@@ -125,6 +125,75 @@ export function loadOrCreateSignerKeyPair(input: {
   });
   const fingerprintSha256 = createHash("sha256").update(keyPair.certificateDer).digest("hex");
   return { ...keyPair, fingerprintSha256, subjectCommonName };
+}
+
+// Rotate the local signer keypair: back up the existing key+cert with a
+// timestamped suffix, then generate a fresh keypair + self-signed cert in
+// place. Returns the old/new fingerprints + backup paths so the caller can
+// record the rotation in an external log if they want a persistent trail.
+//
+// Limitation: existing receipt manifests stay signed by the OLD key. They
+// remain verifiable as long as the .bak.<timestamp>.cert.pem is around, but
+// re-signing every prior receipt is a separate operation (not implemented
+// yet — would require walking artifacts and re-signing each manifest).
+export type RotateLocalKeysReport = {
+  rotatedAt: string;
+  oldFingerprintSha256: string | null;
+  newFingerprintSha256: string;
+  backupKeyPath: string | null;
+  backupCertPath: string | null;
+  keyDir: string;
+};
+
+export function rotateLocalSignerKeys(input: {
+  keyDir?: string;
+  commonName?: string;
+  organization?: string;
+  now?: Date;
+} = {}): RotateLocalKeysReport {
+  const dir = path.resolve(input.keyDir ?? localKeyDir());
+  mkdirSync(dir, { recursive: true });
+  const keyPath = path.join(dir, KEY_FILE);
+  const certPath = path.join(dir, CERT_FILE);
+  const now = input.now ?? new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-");
+
+  let backupKeyPath: string | null = null;
+  let backupCertPath: string | null = null;
+  let oldFingerprintSha256: string | null = null;
+  if (existsSync(certPath)) {
+    const oldCertPem = readFileSync(certPath, "utf8");
+    const oldCertDer = pemToDer(oldCertPem);
+    oldFingerprintSha256 = createHash("sha256").update(oldCertDer).digest("hex");
+    backupCertPath = path.join(dir, `signer.${stamp}.bak.cert.pem`);
+    copyFileSync(certPath, backupCertPath);
+    if (existsSync(keyPath)) {
+      backupKeyPath = path.join(dir, `signer.${stamp}.bak.key.pem`);
+      copyFileSync(keyPath, backupKeyPath);
+      // Lock down the backup key the same way as the live key.
+      try { chmodSync(backupKeyPath, 0o600); } catch { /* best-effort */ }
+    }
+  }
+
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
+  const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  const cert = buildSelfSignedCertificate(privateKeyPem, publicKeyDer, {
+    commonName: input.commonName ?? "Sign CLI Local Signer",
+    organization: input.organization ?? "Sign CLI Local Provider",
+  });
+  writeFileSync(keyPath, privateKeyPem, { mode: 0o600 });
+  writeFileSync(certPath, cert.certificatePem, { mode: 0o644 });
+  const newFingerprintSha256 = createHash("sha256").update(cert.certificateDer).digest("hex");
+
+  return {
+    rotatedAt: now.toISOString(),
+    oldFingerprintSha256,
+    newFingerprintSha256,
+    backupKeyPath,
+    backupCertPath,
+    keyDir: dir,
+  };
 }
 
 export function extractCertSerialAndIssuer(certificateDer: Buffer): { serialNumber: Buffer; issuerDer: Buffer } {

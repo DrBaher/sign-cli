@@ -498,6 +498,13 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db rotate-keys",
+    summary: "Re-issue the local signer keypair (RSA 2048 + self-signed cert). Backs up the old cert+key with a timestamped suffix in the same directory so previously-issued receipts stay verifiable. Limitation: existing receipt manifests stay signed by the old key — re-signing every prior receipt is a separate operation, not yet implemented.",
+    flags: [
+      { name: "--key-dir", description: "Directory holding signer.key.pem + signer.cert.pem (default ./data/local-keys, overridable via SIGN_LOCAL_KEY_DIR)." },
+    ],
+  },
+  {
     command: "db vacuum",
     summary: "Reclaim space + refresh planner stats. SQLite: VACUUM + PRAGMA optimize, reports pages/bytes before/after. Postgres: VACUUM ANALYZE. Both block writers briefly; pick a maintenance window.",
     flags: [
