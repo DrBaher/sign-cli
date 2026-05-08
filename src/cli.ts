@@ -188,7 +188,7 @@ sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap:
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
-sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https; --web-demo serves the bundled dashboard at /web-demo/index.html)
+sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>] [--rate-limit <rps> [--rate-limit-burst <n>]]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips to https; --web-demo serves the bundled dashboard; --rate-limit imposes a per-IP token bucket)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
@@ -1464,7 +1464,15 @@ async function main(): Promise<void> {
     const webDemoDir = webDemoFlag === "true"
       ? (await import("node:path")).resolve("fixtures/web-demo")
       : (webDemoFlag && webDemoFlag !== "false" ? (await import("node:path")).resolve(webDemoFlag) : undefined);
-    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir });
+    const rateLimitRps = flagValue(parsed, "rate-limit");
+    const rateLimitCapacity = flagValue(parsed, "rate-limit-burst");
+    const rateLimit = rateLimitRps
+      ? {
+          refillPerSec: Math.max(0.1, Number(rateLimitRps)),
+          capacity: rateLimitCapacity ? Math.max(1, Number(rateLimitCapacity)) : Math.max(1, Number(rateLimitRps) * 2),
+        }
+      : undefined;
+    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir, rateLimit });
     const shutdown = () => server.close(() => process.exit(0));
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
@@ -1473,6 +1481,7 @@ async function main(): Promise<void> {
       url: `${tls ? "https" : "http"}://${bind}:${port}`,
       tls: Boolean(tls),
       authRequired: Boolean(authToken),
+      rateLimit: rateLimit ? { refillPerSec: rateLimit.refillPerSec, capacity: rateLimit.capacity } : null,
       webDemo: webDemoDir ? `${tls ? "https" : "http"}://${bind}:${port}/web-demo/index.html` : null,
       routes: [
         "GET /v1/health",
