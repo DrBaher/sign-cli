@@ -378,6 +378,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "audit chain-bundle",
+    summary: "Self-contained compliance bundle. Writes a directory containing INDEX.json + the most recent anchor (.tsr + manifest.json) + a per-request receipt bundle for every request that has audit events. Self-contained — auditors can re-verify offline (re-hash the anchor manifest, compare to .tsr; verifyRequestReceiptBundle each request).",
+    flags: [
+      { name: "--out", required: true, description: "Output directory for the bundle." },
+      { name: "--request-id", description: "Repeatable. Restrict to specific request_ids; default includes every request with audit events." },
+    ],
+  },
+  {
     command: "audit anchors-list",
     summary: "List stored audit_anchor artifacts (newest first) with their digest, TSA URL, manifest path, and covered-request count. Companion to `audit anchor` (write) and `audit verify-anchor` (read-back).",
     flags: [
