@@ -62,7 +62,8 @@ test("shipMetricsLoop POSTs the rendered Prometheus body once and stops on max-p
         assert.match(recorded[0].headers["content-type"] ?? "", /text\/plain/);
         // The body is the Prometheus output — at minimum it should contain a HELP/TYPE line.
         assert.match(recorded[0].body, /sign_/);
-        assert.deepEqual(events, ["push", "stopped"]);
+        // "render" fires for every snapshot; "push" once per actual POST; "stopped" once at exit.
+        assert.deepEqual(events, ["render", "push", "stopped"]);
       },
     );
   } finally {
@@ -115,7 +116,8 @@ test("shipMetricsLoop logs HTTP errors but keeps the loop alive", async () => {
         });
         assert.equal(report.pushes, 2);
         assert.equal(report.errors, 1);
-        assert.deepEqual(phases.filter((p) => p !== "stopped"), ["error", "push"]);
+        // Render fires before each push attempt; the first push errors, the second succeeds.
+        assert.deepEqual(phases.filter((p) => p !== "stopped"), ["render", "error", "render", "push"]);
       },
     );
   } finally {

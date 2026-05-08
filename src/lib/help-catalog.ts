@@ -534,6 +534,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--header", description: "Repeatable. KEY=VALUE pairs added to each request." },
       { name: "--interval-seconds", description: "Cadence between pushes (default 30)." },
       { name: "--max-pushes", description: "Stop after this many pushes — useful for scripted runs." },
+      { name: "--batch-size", description: "Render every interval, but POST every Nth interval. The body bundles N snapshots separated by `# BATCH BOUNDARY <iso>` comment lines. Same data volume, N× fewer round-trips." },
     ],
   },
   {

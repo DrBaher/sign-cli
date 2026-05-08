@@ -214,7 +214,7 @@ sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixt
 sign webhook ingest [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>] [--request-id <id>]
 sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>] [--pretty true]
 sign metrics show   (print Prometheus text rendered from the local DB once)
-sign metrics ship --url https://example.com/metrics [--bearer <t>] [--header K=V ...] [--interval-seconds 30] [--max-pushes <n>]   (long-running pusher; logs each POST to stderr)`);
+sign metrics ship --url https://example.com/metrics [--bearer <t>] [--header K=V ...] [--interval-seconds 30] [--max-pushes <n>] [--batch-size <n>]   (long-running pusher; --batch-size N renders every interval but POSTs every Nth, bundling N snapshots per body)`);
 }
 
 function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>): string | undefined {
@@ -1682,22 +1682,29 @@ async function main(): Promise<void> {
     const intervalMs = intervalSecondsRaw ? Math.max(1, Number(intervalSecondsRaw)) * 1000 : undefined;
     const maxPushesRaw = flagValue(parsed, "max-pushes");
     const maxPushes = maxPushesRaw ? Math.max(1, Number(maxPushesRaw)) : undefined;
+    const batchSizeRaw = flagValue(parsed, "batch-size");
+    const batchSize = batchSizeRaw ? Math.max(1, Number(batchSizeRaw)) : undefined;
     const { shipMetricsLoop } = await import("./lib/metrics-ship.js");
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
-    process.stderr.write(`[metrics ship] POST ${url} every ${(intervalMs ?? 30000) / 1000}s (Ctrl+C to stop)\n`);
+    process.stderr.write(`[metrics ship] POST ${url} every ${(intervalMs ?? 30000) / 1000}s${batchSize && batchSize > 1 ? ` (batched ${batchSize}×)` : ""} (Ctrl+C to stop)\n`);
     const report = await shipMetricsLoop(db, {
       url,
       bearer,
       headers,
       intervalMs,
       maxPushes,
+      batchSize,
       signal: controller.signal,
       onProgress: (event) => {
-        if (event.phase === "push") {
-          process.stderr.write(`[metrics ship] push #${event.pushNumber} → HTTP ${event.status} (${event.bytes}B)\n`);
+        if (event.phase === "render") {
+          if (batchSize && batchSize > 1) {
+            process.stderr.write(`[metrics ship] render #${event.pushNumber} buffered=${event.bufferedSnapshots}/${batchSize} (${event.bytes}B)\n`);
+          }
+        } else if (event.phase === "push") {
+          process.stderr.write(`[metrics ship] push #${event.pushNumber} → HTTP ${event.status} (${event.bytes}B${event.snapshotsInBody > 1 ? `, ${event.snapshotsInBody} snapshots` : ""})\n`);
         } else if (event.phase === "error") {
           process.stderr.write(`[metrics ship] push #${event.pushNumber} ERROR: ${event.error}\n`);
         } else {
