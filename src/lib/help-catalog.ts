@@ -311,6 +311,18 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Verify the audit chain's hash linkage; exits 3 on a break.",
   },
   {
+    command: "audit search",
+    summary: "Log-style filter across the full audit_events table. All flags are AND'd; --payload-contains does a substring match on the JSON-serialized payload.",
+    flags: [
+      { name: "--request-id", description: "Scope to a single request." },
+      { name: "--event-type", description: "Exact event_type match (e.g. request.signed)." },
+      { name: "--since", description: "ISO 8601 lower bound on created_at." },
+      { name: "--until", description: "ISO 8601 upper bound on created_at." },
+      { name: "--payload-contains", description: "Substring search across the JSON payload — handy for grepping an email or token hint." },
+      { name: "--limit", description: "Cap rows (default 1000, max 5000)." },
+    ],
+  },
+  {
     command: "audit scan",
     summary: "Verify the audit chain for every request in the local DB at once. Exits 3 if any chain is broken.",
     flags: [

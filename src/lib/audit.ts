@@ -2,6 +2,7 @@ import { asBackend, type DbBackend } from "./db-backend.js";
 import type { SqliteDb } from "./db.js";
 import { maybeNotifySignerEvent } from "./notify.js";
 import { notifyResourceChanged } from "./resource-watch.js";
+import { SignCliError } from "./sign-error.js";
 import { nowIso, sha256, stableStringify } from "./util.js";
 
 export type AuditChainBreak =
@@ -124,4 +125,82 @@ export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
   notifyResourceChanged(`request://${input.requestId}/audit`);
 
   return { hashPrev, hashSelf, createdAt };
+}
+
+// Cross-request log-style search over audit_events. All filters are AND'd.
+// payloadContains does a substring match on the JSON-serialized payload — not a
+// JSON-path query, but enough to grep for an email / token-hint / request id
+// without each call site building its own LIKE clause.
+export type AuditSearchHit = {
+  id: number;
+  requestId: string;
+  eventType: string;
+  createdAt: string;
+  hashSelf: string;
+  payload: unknown;
+};
+
+export type AuditSearchResult = {
+  total: number;
+  results: AuditSearchHit[];
+};
+
+export function searchAuditEvents(
+  db: SqliteDb | DbBackend,
+  opts: {
+    requestId?: string;
+    eventType?: string;
+    since?: string;
+    until?: string;
+    payloadContains?: string;
+    limit?: number;
+  } = {},
+): AuditSearchResult {
+  const backend = asBackend(db);
+  for (const key of ["since", "until"] as const) {
+    const value = opts[key];
+    if (value !== undefined && Number.isNaN(Date.parse(value))) {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `--${key} must be an ISO 8601 timestamp; got ${JSON.stringify(value)}.`,
+      });
+    }
+  }
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.requestId) { where.push("request_id = ?"); params.push(opts.requestId); }
+  if (opts.eventType) { where.push("event_type = ?"); params.push(opts.eventType); }
+  if (opts.since) { where.push("datetime(created_at) >= datetime(?)"); params.push(opts.since); }
+  if (opts.until) { where.push("datetime(created_at) <= datetime(?)"); params.push(opts.until); }
+  if (opts.payloadContains) { where.push("instr(payload_json, ?) > 0"); params.push(opts.payloadContains); }
+  const limit = Number.isFinite(opts.limit) && (opts.limit ?? 0) > 0
+    ? Math.min(Number(opts.limit), 5000)
+    : 1000;
+  const rows = backend.prepare(
+    `SELECT id, request_id, event_type, payload_json, hash_self, created_at
+     FROM audit_events
+     ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY id DESC
+     LIMIT ${limit}`,
+  ).all(...params) as Array<{
+    id: number;
+    request_id: string;
+    event_type: string;
+    payload_json: string;
+    hash_self: string;
+    created_at: string;
+  }>;
+  const results: AuditSearchHit[] = rows.map((row) => {
+    let payload: unknown;
+    try { payload = JSON.parse(row.payload_json); } catch { payload = row.payload_json; }
+    return {
+      id: row.id,
+      requestId: row.request_id,
+      eventType: row.event_type,
+      createdAt: row.created_at,
+      hashSelf: row.hash_self,
+      payload,
+    };
+  });
+  return { total: results.length, results };
 }

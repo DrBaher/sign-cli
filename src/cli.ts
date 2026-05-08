@@ -191,6 +191,7 @@ sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
 sign audit show --request-id <id> [--format json|csv]
+sign audit search [--request-id <id>] [--event-type request.signed] [--since <iso>] [--until <iso>] [--payload-contains <substr>] [--limit 1000]   (log-style filter across the full audit_events table)
 sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
 sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
@@ -951,6 +952,20 @@ async function main(): Promise<void> {
     } else {
       console.log(JSON.stringify(events, null, 2));
     }
+    return;
+  }
+
+  if (root === "audit" && sub === "search") {
+    const { searchAuditEvents } = await import("./lib/audit.js");
+    const result = searchAuditEvents(db, {
+      requestId: flagValue(parsed, "request-id"),
+      eventType: flagValue(parsed, "event-type"),
+      since: flagValue(parsed, "since"),
+      until: flagValue(parsed, "until"),
+      payloadContains: flagValue(parsed, "payload-contains"),
+      limit: flagValue(parsed, "limit") ? Number(flagValue(parsed, "limit")) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 
