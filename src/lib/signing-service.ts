@@ -2511,7 +2511,7 @@ export async function remindSigningRequest(
 
 export function listSigningRequests(
   db: SqliteDb,
-  input: { provider?: SignProvider; status?: string; limit?: number } = {},
+  input: { provider?: SignProvider; status?: string; limit?: number; since?: string } = {},
 ): Array<{
   id: string;
   title: string;
@@ -2532,6 +2532,18 @@ export function listSigningRequests(
   if (input.status) {
     where.push("status = ?");
     params.push(input.status);
+  }
+  if (input.since) {
+    // Validate the since timestamp so a malformed flag fails fast instead of producing
+    // SQL with an invalid literal that silently filters everything out.
+    if (Number.isNaN(Date.parse(input.since))) {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `--since must be an ISO 8601 timestamp; got ${JSON.stringify(input.since)}.`,
+      });
+    }
+    where.push("datetime(created_at) >= datetime(?)");
+    params.push(input.since);
   }
   const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 500) : 100;
   const rows = db.prepare(

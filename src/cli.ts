@@ -168,7 +168,7 @@ sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--i
 sign request remind --request-id <id> [--provider dropbox|docusign|signwell] [--email signer@example.com]
 sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
 sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json]
-sign request list [--provider dropbox|docusign|signwell] [--status created|sent|approved|completed|canceled] [--limit 100]
+sign request list [--provider dropbox|docusign|signwell|local] [--status created|sent|approved|completed|canceled] [--since 2026-05-01T00:00:00Z] [--limit 100] [--format json|table]
 sign request show --request-id <id>
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
@@ -1080,8 +1080,21 @@ async function main(): Promise<void> {
     const provider = flagValue(parsed, "provider") ? selectedProvider : undefined;
     const status = flagValue(parsed, "status");
     const limit = flagValue(parsed, "limit") ? Number(flagValue(parsed, "limit")) : undefined;
-    const rows = listSigningRequests(db, { provider, status, limit });
-    console.log(JSON.stringify(rows, null, 2));
+    const since = flagValue(parsed, "since");
+    const format = (flagValue(parsed, "format") ?? "json").toLowerCase();
+    if (format !== "json" && format !== "table") {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `--format must be json or table; got ${JSON.stringify(format)}.`,
+      });
+    }
+    const rows = listSigningRequests(db, { provider, status, limit, since });
+    if (format === "table") {
+      const { renderRequestsTable } = await import("./lib/request-table.js");
+      console.log(renderRequestsTable(rows));
+    } else {
+      console.log(JSON.stringify(rows, null, 2));
+    }
     return;
   }
 

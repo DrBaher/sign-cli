@@ -149,11 +149,13 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request list",
-    summary: "List recent requests from local SQLite.",
+    summary: "List recent requests from local SQLite. JSON by default; --format table renders a fixed-width grep-able view.",
     flags: [
       { name: "--provider", description: "Filter by provider." },
       { name: "--status", description: "Filter by status." },
-      { name: "--limit", description: "Cap rows (default 100)." },
+      { name: "--since", description: "Only rows created at or after this ISO 8601 timestamp." },
+      { name: "--limit", description: "Cap rows (default 100, max 500)." },
+      { name: "--format", description: "json (default) or table." },
     ],
   },
   {
