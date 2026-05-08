@@ -207,7 +207,7 @@ sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]
 sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
 sign audit anchors-list [--limit 100]   (list stored anchors with digest/tsaUrl/coveredRequests so an operator can pick which one to verify)
 sign audit chain-bundle --out ./bundle/ [--request-id <id> ...] [--tarball ./bundle.tar.gz] [--include-source-pdf true]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json; --tarball writes a portable .tar.gz; --include-source-pdf copies the unsigned source PDF into each receipt dir for reproducibility)
-sign audit verify-chain-bundle (--bundle ./bundle/ | --tarball ./bundle.tar.gz)   (re-check a previously-issued chain bundle: INDEX.json + anchor digest + every per-request receipt; --tarball extracts to a temp dir and verifies in-process; exits 3 on any failure)
+sign audit verify-chain-bundle (--bundle ./bundle/ | --tarball ./bundle.tar.gz) [--report ./out.ndjson]   (re-check a previously-issued chain bundle: INDEX.json + anchor digest + every per-request receipt; --tarball extracts to a temp dir; --report streams per-request results as NDJSON; exits 3 on any failure)
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
 sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
@@ -1285,6 +1285,7 @@ async function main(): Promise<void> {
   if (root === "audit" && sub === "verify-chain-bundle") {
     const bundleDir = flagValue(parsed, "bundle");
     const tarballPath = flagValue(parsed, "tarball");
+    const reportPath = flagValue(parsed, "report");
     if (!bundleDir && !tarballPath) {
       throw new SignCliError({
         code: "MISSING_FLAG",
@@ -1295,6 +1296,27 @@ async function main(): Promise<void> {
     const report = tarballPath
       ? await verifyAuditChainBundleFromTarball(tarballPath)
       : await verifyAuditChainBundle(bundleDir!);
+    if (reportPath) {
+      const fs = await import("node:fs");
+      const pathMod = await import("node:path");
+      const resolved = pathMod.resolve(reportPath);
+      fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+      const stream = fs.createWriteStream(resolved, { flags: "a" });
+      for (const row of report.results) {
+        stream.write(JSON.stringify({ ...row, observedAt: new Date().toISOString() }) + "\n");
+      }
+      stream.write(JSON.stringify({
+        summary: true,
+        ok: report.ok,
+        bundleDir: report.bundleDir,
+        passed: report.passed,
+        failed: report.failed,
+        anchor: report.anchor,
+        errors: report.errors,
+        observedAt: new Date().toISOString(),
+      }) + "\n");
+      await new Promise<void>((resolve) => stream.end(resolve));
+    }
     console.log(JSON.stringify(report, null, 2));
     if (!report.ok) process.exitCode = 3;
     return;

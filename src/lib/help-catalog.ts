@@ -388,6 +388,7 @@ export const HELP_CATALOG: CommandSpec[] = [
     flags: [
       { name: "--bundle", description: "Path to a directory previously written by `audit chain-bundle`." },
       { name: "--tarball", description: "Path to a .tar.gz produced by `audit chain-bundle --tarball`. Extracted in-process to a temp dir." },
+      { name: "--report", description: "Append one NDJSON line per per-request result + a final {summary:true,…} line. Useful when verifying many bundles in one run; same shape as the bulk commands' --ndjson mode." },
     ],
   },
   {
