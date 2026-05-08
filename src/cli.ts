@@ -173,7 +173,7 @@ sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--
 sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json] [--ndjson true]
 sign request bulk-resend --csv ./resend.csv [--token-ttl-minutes 30] [--emit-tokens ./tokens.json] [--ndjson true]   (re-issue signer tokens from a CSV roster — rows: request_id,signer_email[,token_ttl_minutes]; per-row failures are captured, exits 3 if any failed)
 sign request list [--provider dropbox|docusign|signwell|local] [--status created|sent|approved|completed|canceled] [--since 2026-05-01T00:00:00Z] [--limit 100] [--format json|table]
-sign request show --request-id <id> [--metrics true] [--hash-only true]
+sign request show --request-id <id> [--metrics true] [--hash-only true] [--recipient <email>]
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
 sign request rerun-policy --request-id <id> --spec ./policy.json [--signer-email <e>]   (re-evaluate a stored request against an updated policy spec; pure read)
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
@@ -2048,6 +2048,40 @@ async function main(): Promise<void> {
     }
     const includeMetrics = (flagValue(parsed, "metrics") ?? "false") === "true";
     const snapshot = getRequestSnapshot(db, requestId, { includeMetrics });
+    const recipientFilter = flagValue(parsed, "recipient");
+    if (recipientFilter) {
+      const norm = recipientFilter.trim().toLowerCase();
+      // Confirm the recipient is actually on this request — refuse otherwise.
+      const requestSigners = (() => {
+        try { return JSON.parse(snapshot.request.signers_json) as Array<{ email?: string; name?: string; order?: number }>; }
+        catch { return []; }
+      })();
+      const matchedSigner = requestSigners.find((s) => (s.email ?? "").trim().toLowerCase() === norm);
+      if (!matchedSigner) {
+        throw new SignCliError({
+          code: "SIGNER_NOT_RECIPIENT",
+          message: `${recipientFilter} is not a recipient on request ${requestId}.`,
+        });
+      }
+      // Build a redacted view: drop other signers from request.signers_json,
+      // approvals, signedBy. Hide declinedBy/declineReason unless this
+      // recipient is the one who declined.
+      const redactedSnapshot = {
+        ...snapshot,
+        request: {
+          ...snapshot.request,
+          signers_json: JSON.stringify([matchedSigner]),
+        },
+        approvals: snapshot.approvals.filter((a) => a.signer_email.trim().toLowerCase() === norm),
+        signedBy: snapshot.signedBy
+          ? snapshot.signedBy.filter((s) => s.email.trim().toLowerCase() === norm)
+          : null,
+        declinedBy: snapshot.declinedBy && snapshot.declinedBy.trim().toLowerCase() === norm ? snapshot.declinedBy : null,
+        declineReason: snapshot.declinedBy && snapshot.declinedBy.trim().toLowerCase() === norm ? snapshot.declineReason : null,
+      };
+      console.log(JSON.stringify({ ...redactedSnapshot, recipientView: recipientFilter }, null, 2));
+      return;
+    }
     console.log(JSON.stringify(snapshot, null, 2));
     return;
   }
