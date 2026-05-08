@@ -19,10 +19,10 @@ mkdir -p "${DATA_DIR}"
 echo "[entrypoint] seeding demo data"
 node ./deploy/seed-demo.mjs || echo "[entrypoint] seed failed (continuing with empty DB)"
 
-echo "[entrypoint] starting sign serve on 0.0.0.0:${PORT} (TTL ${DEMO_TTL_SECONDS}s)"
+echo "[entrypoint] starting sign serve on [::]:${PORT} (TTL ${DEMO_TTL_SECONDS}s)"
 node ./dist/cli.js serve \
   --port "${PORT}" \
-  --bind 0.0.0.0 \
+  --bind '::' \
   --read-only true \
   --web-demo true \
   --rate-limit "${RATE_LIMIT}" \
