@@ -445,7 +445,7 @@ function insertArtifactParams(input: InsertArtifactParams): unknown[] {
   ];
 }
 
-function insertArtifactRow(db: SqliteDb, input: InsertArtifactParams): void {
+export function insertArtifactRow(db: SqliteDb, input: InsertArtifactParams): void {
   db.prepare(INSERT_ARTIFACT_SQL).run(...insertArtifactParams(input) as Parameters<ReturnType<SqliteDb["prepare"]>["run"]>);
 }
 
@@ -1159,18 +1159,15 @@ export function createSigningRequest(
   );
 
   for (const document of documents) {
-    db.prepare(
-      `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      createId("art"),
+    insertArtifactRow(db, {
+      id: createId("art"),
       requestId,
-      "document",
-      document.path,
-      document.hash,
-      stableStringify({ title: input.title, name: document.name }),
+      kind: "document",
+      path: document.path,
+      contentHash: document.hash,
+      metadataJson: stableStringify({ title: input.title, name: document.name }),
       createdAt,
-    );
+    });
   }
 
   const tokens = sortedSigners.map((signer) => {
@@ -1648,10 +1645,15 @@ export async function fetchFinalSignedPdf(
     now,
   });
 
-  db.prepare(
-    `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(createId("art"), request.id, "signed_pdf", outPath, hash, stableStringify({ bytes: pdf.length, provider }), nowIso(now));
+  insertArtifactRow(db, {
+    id: createId("art"),
+    requestId: request.id,
+    kind: "signed_pdf",
+    path: outPath,
+    contentHash: hash,
+    metadataJson: stableStringify({ bytes: pdf.length, provider }),
+    createdAt: nowIso(now),
+  });
 
   appendAuditEvent(db, {
     requestId: request.id,
@@ -2956,18 +2958,15 @@ export async function timestampRequestAuditChain(
   fs.writeFileSync(outPath, result.responseBuffer);
 
   const now = input.now ?? new Date();
-  db.prepare(
-    `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    createId("art"),
-    input.requestId,
-    "audit_timestamp",
-    outPath,
-    sha256(result.responseBuffer),
-    stableStringify({ tsaUrl: result.tsaUrl, bytes: result.responseBuffer.length, hashSelf: lastEvent.hash_self }),
-    nowIso(now),
-  );
+  insertArtifactRow(db, {
+    id: createId("art"),
+    requestId: input.requestId,
+    kind: "audit_timestamp",
+    path: outPath,
+    contentHash: sha256(result.responseBuffer),
+    metadataJson: stableStringify({ tsaUrl: result.tsaUrl, bytes: result.responseBuffer.length, hashSelf: lastEvent.hash_self }),
+    createdAt: nowIso(now),
+  });
 
   const inspection = inspectTimestampResponse(result.responseBuffer, digest);
 
