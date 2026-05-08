@@ -127,3 +127,147 @@ export async function exportAuditChainBundle(
 
   return report;
 }
+
+// --- Bundle verification ----------------------------------------------------
+// Re-check a previously-issued chain bundle in one shot. Walks every
+// requests/<id>/ subdir through verifyRequestReceiptBundle, re-hashes the
+// anchor manifest and matches against INDEX.json's recorded digest, and
+// confirms expected files exist.
+//
+// No DB needed. The bundle is supposed to be self-contained — verifying it
+// shouldn't require the issuing system to still exist.
+
+import { verifyRequestReceiptBundle } from "./receipt-verify.js";
+import { sha256, stableStringify } from "./util.js";
+
+export type BundleVerifyRow = {
+  requestId: string;
+  ok: boolean;
+  receiptDir: string;
+  errors: string[];
+};
+
+export type BundleVerifyReport = {
+  ok: boolean;
+  bundleDir: string;
+  indexPath: string;
+  anchor:
+    | { present: false }
+    | { present: true; tsrPath: string; manifestPath: string; recordedDigest: string | null; recomputedDigest: string; matches: boolean };
+  total: number;
+  passed: number;
+  failed: number;
+  results: BundleVerifyRow[];
+  errors: string[];          // top-level structural errors (missing INDEX.json, malformed JSON, etc.)
+};
+
+export async function verifyAuditChainBundle(bundleDir: string): Promise<BundleVerifyReport> {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const root = path.resolve(bundleDir);
+  const errors: string[] = [];
+
+  const indexPath = path.join(root, "INDEX.json");
+  if (!fs.existsSync(indexPath)) {
+    return {
+      ok: false, bundleDir: root, indexPath,
+      anchor: { present: false },
+      total: 0, passed: 0, failed: 0, results: [],
+      errors: [`INDEX.json missing at ${indexPath}`],
+    };
+  }
+
+  let index: { anchor?: { manifestPath?: string; tsrPath?: string; digestHex?: string }; requests?: Array<{ requestId?: string; receiptDir?: string }> };
+  try {
+    index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+  } catch (error) {
+    return {
+      ok: false, bundleDir: root, indexPath,
+      anchor: { present: false },
+      total: 0, passed: 0, failed: 0, results: [],
+      errors: [`INDEX.json is not valid JSON: ${(error as Error).message}`],
+    };
+  }
+
+  // Anchor check (if present): re-hash the manifest, compare to recordedDigest.
+  let anchor: BundleVerifyReport["anchor"] = { present: false };
+  if (index.anchor && typeof index.anchor.manifestPath === "string") {
+    const manifestRel = index.anchor.manifestPath;
+    // INDEX.json carries an absolute path written at bundle time; the file
+    // may have moved. Fall back to looking for it under anchor/ if the
+    // recorded path doesn't exist.
+    let manifestPath = manifestRel;
+    if (!fs.existsSync(manifestPath)) {
+      const anchorDir = path.join(root, "anchor");
+      if (fs.existsSync(anchorDir)) {
+        const candidate = fs.readdirSync(anchorDir).find((n) => n.endsWith(".manifest.json"));
+        if (candidate) manifestPath = path.join(anchorDir, candidate);
+      }
+    }
+    if (!fs.existsSync(manifestPath)) {
+      errors.push(`anchor manifest missing at ${manifestRel} (and no .manifest.json in ./anchor/)`);
+      anchor = { present: true, tsrPath: index.anchor.tsrPath ?? "", manifestPath: manifestRel, recordedDigest: index.anchor.digestHex ?? null, recomputedDigest: "", matches: false };
+    } else {
+      let manifest: Array<{ requestId: string; hashSelf: string }>;
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      } catch (error) {
+        errors.push(`anchor manifest at ${manifestPath} is not JSON: ${(error as Error).message}`);
+        manifest = [];
+      }
+      const sorted = [...manifest].sort((a, b) => a.requestId.localeCompare(b.requestId));
+      const recomputed = sha256(stableStringify(sorted));
+      const recorded = index.anchor.digestHex ?? null;
+      anchor = {
+        present: true,
+        tsrPath: index.anchor.tsrPath ?? "",
+        manifestPath,
+        recordedDigest: recorded,
+        recomputedDigest: recomputed,
+        matches: recorded === recomputed,
+      };
+      if (!anchor.matches) errors.push(`anchor digest mismatch: INDEX.json=${recorded}, recomputed=${recomputed}`);
+    }
+  }
+
+  // Per-request receipt checks.
+  const requests = Array.isArray(index.requests) ? index.requests : [];
+  const requestsRoot = path.join(root, "requests");
+  const results: BundleVerifyRow[] = [];
+  let passed = 0;
+  let failed = 0;
+  for (const entry of requests) {
+    const requestId = String(entry.requestId ?? "");
+    if (!requestId) continue;
+    // Prefer the relative receiptDir stored in INDEX (path.relative output)
+    // over any absolute path the bundle may have once recorded.
+    const relDir = entry.receiptDir ?? path.join("requests", requestId);
+    const receiptDir = path.isAbsolute(relDir) ? relDir : path.join(root, relDir);
+    if (!fs.existsSync(receiptDir)) {
+      results.push({ requestId, ok: false, receiptDir, errors: [`receipt directory missing: ${receiptDir}`] });
+      failed += 1;
+      continue;
+    }
+    const verdict = verifyRequestReceiptBundle(receiptDir);
+    const rowOk = verdict.ok === true;
+    results.push({
+      requestId,
+      ok: rowOk,
+      receiptDir,
+      errors: rowOk ? [] : (verdict.errors ?? [(verdict as { reason?: string }).reason ?? "verification failed"]),
+    });
+    if (rowOk) passed += 1; else failed += 1;
+    void requestsRoot;
+  }
+
+  const ok = failed === 0 && errors.length === 0 && (anchor.present === false || anchor.matches);
+  return {
+    ok, bundleDir: root, indexPath,
+    anchor,
+    total: results.length,
+    passed,
+    failed,
+    results,
+    errors,
+  };
+}
