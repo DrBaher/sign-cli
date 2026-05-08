@@ -276,3 +276,51 @@ export function listStoredAnchors(db: SqliteDb, opts: { limit?: number } = {}): 
     };
   });
 }
+
+// Dry-run preview: same manifest + digest computation as the real anchor,
+// but no TSA call, no on-disk artifact, no audit_events appended. Lets an
+// operator check what `audit anchor` *would* produce — manifest size,
+// digest, covered request count — before burning a TSA round-trip.
+export type AnchorDryRunReport = {
+  digestHex: string;
+  manifest: AnchorManifestEntry[];
+  manifestBytes: number;
+  // Echoes back the cutoff so the caller can confirm `--since` was honored.
+  since: string | null;
+};
+
+export function previewAnchorAllAuditChainHeads(
+  db: SqliteDb,
+  input: { since?: string } = {},
+): AnchorDryRunReport {
+  if (input.since !== undefined && Number.isNaN(Date.parse(input.since))) {
+    throw new Error(`anchor since must be an ISO 8601 timestamp; got ${JSON.stringify(input.since)}.`);
+  }
+  const sinceClause = input.since ? `WHERE datetime(created_at) >= datetime(?)` : "";
+  const sinceParams = input.since ? [input.since] : [];
+  const rows = db.prepare(
+    `SELECT request_id, hash_self
+     FROM (
+       SELECT request_id, hash_self, created_at, ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY id DESC) AS rn
+       FROM audit_events
+       ${sinceClause}
+     ) WHERE rn = 1
+     ORDER BY request_id`,
+  ).all(...sinceParams) as Array<{ request_id: string; hash_self: string }>;
+  if (rows.length === 0) {
+    throw new Error(input.since
+      ? `No audit events at or after ${input.since} — nothing to anchor.`
+      : "No audit events found across any request — nothing to anchor.");
+  }
+  const manifest: AnchorManifestEntry[] = rows.map((row) => ({
+    requestId: row.request_id,
+    hashSelf: row.hash_self,
+  }));
+  const manifestText = stableStringify(manifest);
+  return {
+    digestHex: sha256(manifestText),
+    manifest,
+    manifestBytes: Buffer.byteLength(manifestText, "utf8"),
+    since: input.since ?? null,
+  };
+}

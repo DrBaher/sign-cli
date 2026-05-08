@@ -203,7 +203,7 @@ sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
 sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
-sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/] [--since 2026-05-01T00:00:00Z | --since-anchor latest|<artifactId>]   (anchor every request's chain head with one TSA call; --since/--since-anchor restricts to chains that advanced after the cutoff)
+sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/] [--since 2026-05-01T00:00:00Z | --since-anchor latest|<artifactId>] [--dry-run true]   (anchor every request's chain head with one TSA call; --dry-run prints the manifest + digest without contacting the TSA or writing artifacts)
 sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
 sign audit anchors-list [--limit 100]   (list stored anchors with digest/tsaUrl/coveredRequests so an operator can pick which one to verify)
 sign audit chain-bundle --out ./bundle/ [--request-id <id> ...] [--tarball ./bundle.tar.gz] [--include-source-pdf true]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json; --tarball writes a portable .tar.gz; --include-source-pdf copies the unsigned source PDF into each receipt dir for reproducibility)
@@ -1288,6 +1288,13 @@ async function main(): Promise<void> {
         });
       }
       since = chosen.createdAt;
+    }
+    const dryRun = (flagValue(parsed, "dry-run") ?? "false") === "true";
+    if (dryRun) {
+      const { previewAnchorAllAuditChainHeads } = await import("./lib/audit-anchor.js");
+      const preview = previewAnchorAllAuditChainHeads(db, { since });
+      console.log(JSON.stringify({ dryRun: true, ...preview }, null, 2));
+      return;
     }
     const { anchorAllAuditChainHeads } = await import("./lib/audit-anchor.js");
     const result = await anchorAllAuditChainHeads(db, { tsaUrl, outDir, since });
