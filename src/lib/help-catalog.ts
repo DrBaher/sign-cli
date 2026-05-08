@@ -265,6 +265,14 @@ export const HELP_CATALOG: CommandSpec[] = [
       `  --title "Mutual NDA" --document-sha256 abc... --signer-email alice@example.com`,
   },
   {
+    command: "signer policy lint",
+    summary: "Static checks for a policy spec: invalid regexes, unreachable rules after match: \"any\", redundant rules with the same action as a broader earlier rule, decline actions without a reason. Exits 3 if errors are present; warnings are non-fatal.",
+    flags: [
+      { name: "--spec", required: true, description: "Path to policy.json." },
+    ],
+    example: `sign signer policy lint --spec ./policy.json`,
+  },
+  {
     command: "signer policy diff",
     summary: "Compare two policy specs against the same context(s) and report which rows would flip action. Pure preview — never touches request state.",
     flags: [

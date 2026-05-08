@@ -157,6 +157,7 @@ sign signer policy run --request-id <id> --token <token> --spec ./policy.json [-
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
 sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
+sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request sign-url --request-id <id> --signature-id <signatureId> [--provider dropbox|docusign|signwell] [--return-url https://...]
@@ -727,6 +728,17 @@ async function main(): Promise<void> {
     }
     const summary = diffPolicies(before, after, contexts);
     console.log(JSON.stringify({ before: beforePath, after: afterPath, ...summary }, null, 2));
+    return;
+  }
+
+  if (root === "signer" && sub === "policy" && action === "lint") {
+    const specPath = flagValue(parsed, "spec", true)!;
+    const { loadPolicySpec } = await import("./lib/policy-engine.js");
+    const { lintPolicySpec } = await import("./lib/policy-lint.js");
+    const spec = loadPolicySpec(specPath);
+    const report = lintPolicySpec(spec);
+    console.log(JSON.stringify({ spec: specPath, ...report }, null, 2));
+    if (!report.ok) process.exitCode = 3;
     return;
   }
 
