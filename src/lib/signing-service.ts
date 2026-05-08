@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { appendAuditEvent, verifyAuditChain } from "./audit.js";
+import { appendAuditEvent, verifyAuditChain, verifyAuditChainAsync } from "./audit.js";
 import type { AuditVerificationResult } from "./audit.js";
 import {
   checkDocuSignAccountAccess,
@@ -280,8 +280,19 @@ type ProviderApi = {
   }) => Promise<{ remoteResponse: unknown }>;
 };
 
+const GET_REQUEST_ROW_SQL = "SELECT * FROM requests WHERE id = ?";
+
 function getRequestRow(db: SqliteDb | DbBackend, requestId: string): RequestRow {
-  const row = asBackend(db).prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as RequestRow | undefined;
+  const row = asBackend(db).prepare(GET_REQUEST_ROW_SQL).get(requestId) as RequestRow | undefined;
+  if (!row) {
+    throw new Error(`Request not found: ${requestId}`);
+  }
+  return row;
+}
+
+// Async sibling. Same SQL, runs through prepareAsync so PostgresBackend works.
+export async function getRequestRowAsync(backend: DbBackend, requestId: string): Promise<RequestRow> {
+  const row = await backend.prepareAsync(GET_REQUEST_ROW_SQL).get(requestId) as RequestRow | undefined;
   if (!row) {
     throw new Error(`Request not found: ${requestId}`);
   }
@@ -2511,10 +2522,19 @@ export async function remindSigningRequest(
   return { provider, providerRequestId, remoteResponse: result.remoteResponse };
 }
 
-export function listSigningRequests(
-  db: SqliteDb | DbBackend,
-  input: { provider?: SignProvider; status?: string; limit?: number; since?: string } = {},
-): Array<{
+type ListSigningRequestsRow = {
+  id: string;
+  title: string;
+  status: string;
+  provider: string | null;
+  provider_request_id: string | null;
+  provider_status: string | null;
+  signers_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SigningRequestSummary = {
   id: string;
   title: string;
   status: string;
@@ -2524,8 +2544,9 @@ export function listSigningRequests(
   signers: number;
   createdAt: string;
   updatedAt: string;
-}> {
-  const backend = asBackend(db);
+};
+
+function buildListSigningRequestsQuery(input: { provider?: SignProvider; status?: string; limit?: number; since?: string }): { sql: string; params: (string | number | null)[] } {
   const where: string[] = [];
   const params: (string | number | null)[] = [];
   if (input.provider) {
@@ -2537,8 +2558,6 @@ export function listSigningRequests(
     params.push(input.status);
   }
   if (input.since) {
-    // Validate the since timestamp so a malformed flag fails fast instead of producing
-    // SQL with an invalid literal that silently filters everything out.
     if (Number.isNaN(Date.parse(input.since))) {
       throw new SignCliError({
         code: "INVALID_ARGS",
@@ -2549,49 +2568,64 @@ export function listSigningRequests(
     params.push(input.since);
   }
   const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 500) : 100;
-  const rows = backend.prepare(
-    `SELECT id, title, status, provider, provider_request_id, provider_status, signers_json, created_at, updated_at
+  const sql = `SELECT id, title, status, provider, provider_request_id, provider_status, signers_json, created_at, updated_at
      FROM requests
      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY datetime(created_at) DESC
-     LIMIT ${limit}`,
-  ).all(...params) as Array<{
-    id: string;
-    title: string;
-    status: string;
-    provider: string | null;
-    provider_request_id: string | null;
-    provider_status: string | null;
-    signers_json: string;
-    created_at: string;
-    updated_at: string;
-  }>;
+     LIMIT ${limit}`;
+  return { sql, params };
+}
 
-  return rows.map((row) => {
-    let signers = 0;
-    try {
-      const parsed = JSON.parse(row.signers_json);
-      signers = Array.isArray(parsed) ? parsed.length : 0;
-    } catch {
-      signers = 0;
-    }
-    return {
-      id: row.id,
-      title: row.title,
-      status: row.status,
-      provider: row.provider as SignProvider | null,
-      providerRequestId: row.provider_request_id,
-      providerStatus: row.provider_status,
-      signers,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
-  });
+function projectListSigningRequestsRow(row: ListSigningRequestsRow): SigningRequestSummary {
+  let signers = 0;
+  try {
+    const parsed = JSON.parse(row.signers_json);
+    signers = Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    signers = 0;
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    provider: row.provider as SignProvider | null,
+    providerRequestId: row.provider_request_id,
+    providerStatus: row.provider_status,
+    signers,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function listSigningRequests(
+  db: SqliteDb | DbBackend,
+  input: { provider?: SignProvider; status?: string; limit?: number; since?: string } = {},
+): SigningRequestSummary[] {
+  const { sql, params } = buildListSigningRequestsQuery(input);
+  const rows = asBackend(db).prepare(sql).all(...params) as ListSigningRequestsRow[];
+  return rows.map(projectListSigningRequestsRow);
+}
+
+// Async sibling. Same query + projection, but via prepareAsync.
+export async function listSigningRequestsAsync(
+  backend: DbBackend,
+  input: { provider?: SignProvider; status?: string; limit?: number; since?: string } = {},
+): Promise<SigningRequestSummary[]> {
+  const { sql, params } = buildListSigningRequestsQuery(input);
+  const rows = await backend.prepareAsync(sql).all(...params) as ListSigningRequestsRow[];
+  return rows.map(projectListSigningRequestsRow);
 }
 
 export function verifyRequestAuditChain(db: SqliteDb | DbBackend, requestId: string): AuditVerificationResult {
   getRequestRow(db, requestId);
   return verifyAuditChain(db, requestId);
+}
+
+// Async sibling — same call shape, but every DB op goes through prepareAsync
+// so PostgresBackend works.
+export async function verifyRequestAuditChainAsync(backend: DbBackend, requestId: string): Promise<AuditVerificationResult> {
+  await getRequestRowAsync(backend, requestId);
+  return verifyAuditChainAsync(backend, requestId);
 }
 
 export type AuditScanReport = {
@@ -2608,34 +2642,58 @@ export type AuditScanReport = {
   }>;
 };
 
+function buildScanAllAuditChainsQuery(input: { provider?: SignProvider; status?: string; limit?: number }): { sql: string; params: (string | number | null)[] } {
+  const where: string[] = [];
+  const params: (string | number | null)[] = [];
+  if (input.provider) { where.push("provider = ?"); params.push(input.provider); }
+  if (input.status) { where.push("status = ?"); params.push(input.status); }
+  const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 5000) : 1000;
+  const sql = `SELECT id, title, status FROM requests
+     ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY datetime(created_at) DESC
+     LIMIT ${limit}`;
+  return { sql, params };
+}
+
 export function scanAllAuditChains(
   db: SqliteDb | DbBackend,
   input: { provider?: SignProvider; status?: string; limit?: number } = {},
 ): AuditScanReport {
   const backend = asBackend(db);
-  const where: string[] = [];
-  const params: (string | number | null)[] = [];
-  if (input.provider) {
-    where.push("provider = ?");
-    params.push(input.provider);
-  }
-  if (input.status) {
-    where.push("status = ?");
-    params.push(input.status);
-  }
-  const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 5000) : 1000;
-  const rows = backend.prepare(
-    `SELECT id, title, status FROM requests
-     ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
-     ORDER BY datetime(created_at) DESC
-     LIMIT ${limit}`,
-  ).all(...params) as Array<{ id: string; title: string; status: string }>;
+  const { sql, params } = buildScanAllAuditChainsQuery(input);
+  const rows = backend.prepare(sql).all(...params) as Array<{ id: string; title: string; status: string }>;
 
   let valid = 0;
   let invalid = 0;
   const results: AuditScanReport["results"] = [];
   for (const row of rows) {
     const chain = verifyAuditChain(backend, row.id);
+    results.push({
+      requestId: row.id,
+      title: row.title,
+      status: row.status,
+      valid: chain.valid,
+      events: chain.events,
+      break: chain.break,
+    });
+    if (chain.valid) valid += 1;
+    else invalid += 1;
+  }
+  return { total: rows.length, valid, invalid, results };
+}
+
+// Async sibling — same query + sequential per-row verifyAuditChainAsync.
+export async function scanAllAuditChainsAsync(
+  backend: DbBackend,
+  input: { provider?: SignProvider; status?: string; limit?: number } = {},
+): Promise<AuditScanReport> {
+  const { sql, params } = buildScanAllAuditChainsQuery(input);
+  const rows = await backend.prepareAsync(sql).all(...params) as Array<{ id: string; title: string; status: string }>;
+  let valid = 0;
+  let invalid = 0;
+  const results: AuditScanReport["results"] = [];
+  for (const row of rows) {
+    const chain = await verifyAuditChainAsync(backend, row.id);
     results.push({
       requestId: row.id,
       title: row.title,
