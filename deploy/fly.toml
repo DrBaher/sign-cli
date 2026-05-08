@@ -6,7 +6,7 @@
 # parks the machine when idle, restart restores fresh demo state.
 
 app = "sign-cli-demo"
-primary_region = "iad"
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
