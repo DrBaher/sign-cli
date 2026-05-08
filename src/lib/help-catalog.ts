@@ -291,7 +291,11 @@ export const HELP_CATALOG: CommandSpec[] = [
   // Audit + bundles
   {
     command: "audit show",
-    summary: "List all audit events for a request.",
+    summary: "List all audit events for a request. JSON by default; --format csv emits an RFC 4180 CSV (CRLF line endings, quoted payloads) for spreadsheet-driven compliance review.",
+    flags: [
+      { name: "--request-id", required: true, description: "Request to dump." },
+      { name: "--format", description: "json (default) or csv." },
+    ],
   },
   {
     command: "audit verify",

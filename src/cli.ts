@@ -187,7 +187,7 @@ Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
-sign audit show --request-id <id>
+sign audit show --request-id <id> [--format json|csv]
 sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
 sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
@@ -934,8 +934,20 @@ async function main(): Promise<void> {
 
   if (root === "audit" && sub === "show") {
     const requestId = flagValue(parsed, "request-id", true)!;
+    const format = (flagValue(parsed, "format") ?? "json").toLowerCase();
+    if (format !== "json" && format !== "csv") {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `--format must be json or csv; got ${JSON.stringify(format)}.`,
+      });
+    }
     const events = listAuditEvents(db, requestId);
-    console.log(JSON.stringify(events, null, 2));
+    if (format === "csv") {
+      const { renderAuditChainAsCsv } = await import("./lib/audit-csv.js");
+      process.stdout.write(renderAuditChainAsCsv(events));
+    } else {
+      console.log(JSON.stringify(events, null, 2));
+    }
     return;
   }
 
