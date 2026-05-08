@@ -20,6 +20,16 @@ import {
 import { SIGN_CLI_VERSION } from "./help-catalog.js";
 import { buildOpenApiSpec } from "./openapi.js";
 import { renderPrometheusMetrics } from "./prom-metrics.js";
+import { TokenBucketLimiter } from "./rate-limit.js";
+
+function clientKey(req: http.IncomingMessage): string {
+  // Trust X-Forwarded-For if present (operators terminating TLS at a load
+  // balancer rely on it). Otherwise fall back to the socket peer address.
+  const fwd = req.headers["x-forwarded-for"];
+  if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0].trim();
+  if (Array.isArray(fwd) && fwd.length > 0) return fwd[0].split(",")[0].trim();
+  return req.socket.remoteAddress ?? "unknown";
+}
 
 type RouteHandler = (db: SqliteDb, body: Record<string, unknown>) => Promise<unknown> | unknown;
 
@@ -129,6 +139,10 @@ export type HttpServerOptions = {
   // GET /web-demo/* (and GET / redirects to /web-demo/). Lets the bundled
   // dashboard talk to /v1/* without CORS gymnastics.
   webDemoDir?: string;
+  // Per-IP token-bucket rate limiter. When set, every /v1/* request consumes
+  // one token from the requester's bucket; over-budget requests get a 429
+  // with a Retry-After header.
+  rateLimit?: { capacity: number; refillPerSec: number };
 };
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
@@ -189,6 +203,9 @@ export function listMockHttpRoutes(): string[] {
 
 export function startHttpApiServer(opts: HttpServerOptions): http.Server | https.Server {
   const requireAuth = Boolean(opts.authToken);
+  const limiter = opts.rateLimit
+    ? new TokenBucketLimiter({ capacity: opts.rateLimit.capacity, refillPerSec: opts.rateLimit.refillPerSec })
+    : null;
   const handler: http.RequestListener = async (req, res) => {
     const route = `${req.method ?? "GET"} ${(req.url ?? "/").split("?")[0]}`;
     const handler = ROUTES[route];
@@ -197,6 +214,19 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
     // *call* /v1/* with the user's bearer token. Auth still gates the API.
     if (opts.webDemoDir && tryServeWebDemo(opts.webDemoDir, req, res)) {
       return;
+    }
+
+    if (limiter) {
+      const decision = limiter.take(clientKey(req));
+      res.setHeader("x-ratelimit-limit", String(decision.capacity));
+      res.setHeader("x-ratelimit-remaining", String(decision.remaining));
+      if (!decision.allowed) {
+        res.statusCode = 429;
+        res.setHeader("retry-after", String(decision.retryAfterSeconds));
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: false, error: { code: "RATE_LIMITED", message: `Too many requests; retry in ${decision.retryAfterSeconds}s.` } }));
+        return;
+      }
     }
 
     if (requireAuth) {

@@ -473,6 +473,8 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--tls-key", description: "TLS private key PEM path." },
       { name: "--tls-ca", description: "Optional CA bundle PEM (forwarded to https.createServer)." },
       { name: "--web-demo", description: "true to serve the bundled dashboard from fixtures/web-demo, or a path to your own static dir. Mounts at /web-demo/index.html, same-origin (no CORS)." },
+      { name: "--rate-limit", description: "Tokens per second per IP (token bucket). Over-budget requests get 429 with Retry-After. Honors X-Forwarded-For when present." },
+      { name: "--rate-limit-burst", description: "Bucket capacity (max burst). Defaults to 2× --rate-limit." },
     ],
   },
   {
