@@ -1,3 +1,5 @@
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 import type { SqliteDb } from "./db.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
@@ -707,8 +709,28 @@ export async function serveMcpStdio(opts: {
   readOnly?: boolean;
   allowedTools?: ReadonlySet<string>;
   capabilities?: ReadonlySet<"tools" | "resources" | "prompts">;
+  // Path to append every JSON-RPC message (in and out) as NDJSON. Each line
+  // is { direction: "in"|"out", at: <ISO>, message: <JSON-RPC body> }.
+  // Compliance-grade replay log — pair with a strict file ACL so only the
+  // operator can read/write it.
+  emitEventsPath?: string;
 }): Promise<void> {
   const rl = readline.createInterface({ input: opts.input, crlfDelay: Infinity });
+  // Optional audit log — append every JSON-RPC message (in and out) as
+  // NDJSON. Wrap the output stream with a teeing writeMessage; tee inbound
+  // at parse time.
+  let emitStream: WriteStream | null = null;
+  if (opts.emitEventsPath) {
+    const resolved = path.resolve(opts.emitEventsPath);
+    mkdirSync(path.dirname(resolved), { recursive: true });
+    emitStream = createWriteStream(resolved, { flags: "a" });
+  }
+  const writeMessageTeed = (out: NodeJS.WritableStream, message: JsonRpcMessage): void => {
+    if (emitStream) {
+      emitStream.write(JSON.stringify({ direction: "out", at: new Date().toISOString(), message }) + "\n");
+    }
+    writeMessage(out, message);
+  };
   // Per-connection subscription registry. Each entry is the unsubscribe fn
   // returned by subscribeResource(). On stream end we drop them all.
   const subscriptions = new Map<string, () => void>();
@@ -720,12 +742,15 @@ export async function serveMcpStdio(opts: {
       try {
         message = JSON.parse(trimmed) as JsonRpcMessage;
       } catch {
-        writeMessage(opts.output, {
+        writeMessageTeed(opts.output, {
           jsonrpc: JSON_RPC_VERSION,
           id: null,
           error: { code: -32700, message: "Parse error" },
         });
         continue;
+      }
+      if (emitStream) {
+        emitStream.write(JSON.stringify({ direction: "in", at: new Date().toISOString(), message }) + "\n");
       }
       const id = message.id ?? null;
       const isNotification = id === null || id === undefined;
@@ -741,7 +766,7 @@ export async function serveMcpStdio(opts: {
         const uri = typeof params.uri === "string" ? params.uri : "";
         if (!uri) {
           if (!isNotification) {
-            writeMessage(opts.output, {
+            writeMessageTeed(opts.output, {
               jsonrpc: JSON_RPC_VERSION,
               id,
               error: { code: -32602, message: `${message.method} requires a string \`uri\` parameter.` },
@@ -752,7 +777,7 @@ export async function serveMcpStdio(opts: {
         if (message.method === "resources/subscribe") {
           if (!subscriptions.has(uri)) {
             const unsubscribe = subscribeResource(uri, (changedUri) => {
-              writeMessage(opts.output, {
+              writeMessageTeed(opts.output, {
                 jsonrpc: JSON_RPC_VERSION,
                 method: "notifications/resources/updated",
                 params: { uri: changedUri },
@@ -768,14 +793,14 @@ export async function serveMcpStdio(opts: {
           }
         }
         if (!isNotification) {
-          writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: {} });
+          writeMessageTeed(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: {} });
         }
         continue;
       }
       const progressToken = extractProgressToken(message.params);
     const emitProgress: McpEmitProgress | undefined = progressToken !== null
       ? (progress) => {
-          writeMessage(opts.output, {
+          writeMessageTeed(opts.output, {
             jsonrpc: JSON_RPC_VERSION,
             method: "notifications/progress",
             params: { progressToken, ...progress },
@@ -793,11 +818,11 @@ export async function serveMcpStdio(opts: {
         capabilities: opts.capabilities,
       });
       if (dispatch.kind === "ignored" || isNotification) continue;
-      writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
+      writeMessageTeed(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
       } catch (error) {
         if (isNotification) continue;
         const messageText = error instanceof Error ? error.message : String(error);
-        writeMessage(opts.output, {
+        writeMessageTeed(opts.output, {
           jsonrpc: JSON_RPC_VERSION,
           id,
           error: { code: -32601, message: messageText },
@@ -809,5 +834,8 @@ export async function serveMcpStdio(opts: {
       unsubscribe();
     }
     subscriptions.clear();
+    if (emitStream) {
+      await new Promise<void>((resolve) => emitStream!.end(resolve));
+    }
   }
 }

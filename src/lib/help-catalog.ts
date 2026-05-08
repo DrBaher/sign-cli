@@ -544,6 +544,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--read-only", description: "true to block the sign + signer_decline tools with code FORBIDDEN_READ_ONLY. Read tools (signer_list, request_show, audit_verify, …) stay available." },
       { name: "--tool", description: "Repeatable. Restrict tools/list + tools/call to the named subset — anything outside returns the same UNKNOWN_TOOL envelope as a real unknown tool, so an agent can't probe for hidden capabilities. Useful for least-privilege agent loops." },
       { name: "--capability", description: "Repeatable: tools / resources / prompts. Advertises only the named capabilities at initialize; disabled capabilities answer their list/read methods with INVALID_ARGS. Useful when an agent only needs one surface (e.g. tools-only)." },
+      { name: "--emit-events", description: "Append every JSON-RPC message (in/out) to this file as NDJSON ({ direction, at, message }). Compliance-grade replay log — pair with a strict file ACL." },
     ],
   },
   {
