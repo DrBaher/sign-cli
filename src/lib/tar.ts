@@ -25,7 +25,7 @@
 // Files are followed by their data padded to 512-byte boundaries. The archive
 // terminates with two consecutive 512-byte zero blocks.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 
@@ -106,4 +106,88 @@ export function tarEntriesFromDir(dir: string, rootName: string): TarEntry[] {
 export function buildTarGzFromDir(dir: string, rootName: string, now?: Date): Buffer {
   const archive = buildTarArchive(tarEntriesFromDir(dir, rootName), now);
   return zlib.gzipSync(archive);
+}
+
+// --- USTAR reader -----------------------------------------------------------
+// Smallest reader that handles what our writer produces: regular files (type
+// "0" or NUL) and directories ("5"). No links, sparse files, long-name
+// extensions, or PAX. Throws on unrecognized typeflags so a surprise input
+// fails loudly.
+
+export type ReadTarEntry = {
+  name: string;
+  data: Buffer;
+  isDir: boolean;
+  mtimeSeconds: number;
+};
+
+function parseOctal(buffer: Buffer, offset: number, length: number): number {
+  let end = offset + length;
+  while (end > offset && (buffer[end - 1] === 0x00 || buffer[end - 1] === 0x20)) end -= 1;
+  const str = buffer.toString("utf8", offset, end).trim();
+  if (str.length === 0) return 0;
+  return parseInt(str, 8) || 0;
+}
+
+function readField(buffer: Buffer, offset: number, length: number): string {
+  let end = offset + length;
+  while (end > offset && buffer[end - 1] === 0x00) end -= 1;
+  return buffer.toString("utf8", offset, end);
+}
+
+export function readTarArchive(archive: Buffer): ReadTarEntry[] {
+  const entries: ReadTarEntry[] = [];
+  let offset = 0;
+  while (offset + 512 <= archive.length) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((b) => b === 0)) break;
+    const magic = readField(header, 257, 6).trim();
+    if (magic !== "ustar") {
+      throw new Error(`Unrecognized tar magic at offset ${offset}: ${JSON.stringify(magic)}`);
+    }
+    const name = readField(header, 0, 100);
+    const size = parseOctal(header, 124, 12);
+    const mtimeSeconds = parseOctal(header, 136, 12);
+    const typeflag = header[156] === 0 ? "0" : String.fromCharCode(header[156]);
+    if (typeflag !== "0" && typeflag !== "5") {
+      throw new Error(`Unsupported tar typeflag '${typeflag}' for entry ${name}`);
+    }
+    const isDir = typeflag === "5";
+    offset += 512;
+    let data: Buffer = Buffer.alloc(0);
+    if (!isDir && size > 0) {
+      data = Buffer.from(archive.subarray(offset, offset + size));
+      const padded = Math.ceil(size / 512) * 512;
+      offset += padded;
+    }
+    entries.push({ name, data, isDir, mtimeSeconds });
+  }
+  return entries;
+}
+
+export function readTarGzArchive(gz: Buffer): ReadTarEntry[] {
+  return readTarArchive(zlib.gunzipSync(gz));
+}
+
+// Extract every regular-file entry into outDir. Path-traversal-safe:
+// resolved destinations that escape outDir throw before any file is written.
+export function extractTarToDir(archive: Buffer, outDir: string): string[] {
+  const entries = readTarArchive(archive);
+  mkdirSync(outDir, { recursive: true });
+  const resolvedOut = path.resolve(outDir);
+  const written: string[] = [];
+  for (const entry of entries) {
+    const dest = path.resolve(outDir, entry.name);
+    if (dest !== resolvedOut && !dest.startsWith(resolvedOut + path.sep)) {
+      throw new Error(`Refusing to extract outside of outDir: ${entry.name}`);
+    }
+    if (entry.isDir) {
+      mkdirSync(dest, { recursive: true });
+    } else {
+      mkdirSync(path.dirname(dest), { recursive: true });
+      writeFileSync(dest, entry.data);
+      written.push(dest);
+    }
+  }
+  return written;
 }

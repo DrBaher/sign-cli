@@ -380,9 +380,10 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "audit verify-chain-bundle",
-    summary: "Re-check a previously-issued chain bundle in one shot. No DB needed — the bundle is supposed to be self-contained. Re-hashes the anchor manifest and confirms the digest matches INDEX.json; runs verifyRequestReceiptBundle on every per-request directory. Exits 3 on any failure.",
+    summary: "Re-check a previously-issued chain bundle in one shot. No DB needed — the bundle is supposed to be self-contained. Re-hashes the anchor manifest and confirms the digest matches INDEX.json; runs verifyRequestReceiptBundle on every per-request directory. Accepts either a directory or a .tar.gz produced by `audit chain-bundle --tarball`. Exits 3 on any failure.",
     flags: [
-      { name: "--bundle", required: true, description: "Path to a directory previously written by `audit chain-bundle`." },
+      { name: "--bundle", description: "Path to a directory previously written by `audit chain-bundle`." },
+      { name: "--tarball", description: "Path to a .tar.gz produced by `audit chain-bundle --tarball`. Extracted in-process to a temp dir." },
     ],
   },
   {
