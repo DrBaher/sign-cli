@@ -66,6 +66,7 @@ import {
   REQUEST_WATCH_EXIT_CODES,
   reissueSignerToken,
   remindSigningRequest,
+  rerunPolicyForRequest,
   runSignerPolicy,
   runSignerPolicyAll,
   scanAllAuditChains,
@@ -173,6 +174,7 @@ sign request bulk-resend --csv ./resend.csv [--token-ttl-minutes 30] [--emit-tok
 sign request list [--provider dropbox|docusign|signwell|local] [--status created|sent|approved|completed|canceled] [--since 2026-05-01T00:00:00Z] [--limit 100] [--format json|table]
 sign request show --request-id <id>
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
+sign request rerun-policy --request-id <id> --spec ./policy.json [--signer-email <e>]   (re-evaluate a stored request against an updated policy spec; pure read)
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign selftest [--keep-workspace true]   (in-process E2E smoke; exits 3 on any failure — drop-in for deploy health checks)
@@ -1530,6 +1532,17 @@ async function main(): Promise<void> {
     const result = diffRequests(db, before, after);
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.identical ? 0 : 1;
+    return;
+  }
+
+  if (root === "request" && sub === "rerun-policy") {
+    const requestId = flagValue(parsed, "request-id", true)!;
+    const specPath = flagValue(parsed, "spec", true)!;
+    const signerEmail = flagValue(parsed, "signer-email");
+    const { loadPolicySpec } = await import("./lib/policy-engine.js");
+    const spec = loadPolicySpec(specPath);
+    const result = rerunPolicyForRequest(db, { requestId, spec, signerEmail });
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 
