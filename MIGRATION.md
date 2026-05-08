@@ -18,7 +18,7 @@ Selected via `SIGN_DB_BACKEND` (default `sqlite`). Today's matrix:
 | Backend    | Status         | Notes |
 |------------|----------------|-------|
 | `sqlite`   | production-ready | Default. Single file at `SIGN_DB_PATH` (defaults to `./data/sign.db`). WAL mode, busy timeout 5s. |
-| `postgres` | **stub**       | Interface exists at `src/lib/storage.ts`; `openStorage` throws when invoked. Tracked for a future PR. |
+| `postgres` | **partial**    | `pg`-backed adapter at `src/lib/db-backend.ts` exposes `prepareAsync`/`execAsync` with `?`→`$N` translation. Sync `prepare`/`exec` still throw — call-site sync→async migration is the remaining gap. |
 
 ### Why a stub?
 
@@ -39,7 +39,8 @@ The stub serves three purposes:
 - [ ] Migrate the ~30 `SqliteDb`-typed call sites to `DbBackend` one at a time (start with read-only audit/show paths, leave the lifecycle writes for last).
   - [x] `verifyAuditChain` and `listAuditEvents` accept `SqliteDb | DbBackend` via `asBackend(...)`. All existing call sites still work; new code can pass a `DbBackend` directly.
   - [x] `getRequestRow` (private), `listSigningRequests`, `verifyRequestAuditChain`, `scanAllAuditChains` accept `SqliteDb | DbBackend`.
-- [ ] Implement real `PostgresBackend` (via the `pg` driver) — replace the throwing methods with real prepared-statement execution.
+- [x] Implement real `PostgresBackend` (via the `pg` driver) — `prepareAsync`/`execAsync` are wired through `pg.Pool.query` with on-the-fly `?` → `$N` placeholder translation. Sync `prepare`/`exec` still throw — pg is async-only and the sync→async call-site migration is its own track.
+- [ ] Migrate call sites to the async surface (`prepareAsync`/`execAsync`/`asBackend`) so they can target `PostgresBackend` without losing SQLite compatibility.
 - [ ] Replace baseline `CREATE TABLE IF NOT EXISTS` with backend-aware DDL (datatypes diverge: `INTEGER` ↔ `BIGINT`, `TEXT` is portable).
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.
 - [ ] Re-implement the audit-events append-only triggers as Postgres `BEFORE UPDATE/DELETE` triggers + `RAISE EXCEPTION`.
