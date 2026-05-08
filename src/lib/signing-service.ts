@@ -280,8 +280,8 @@ type ProviderApi = {
   }) => Promise<{ remoteResponse: unknown }>;
 };
 
-function getRequestRow(db: SqliteDb, requestId: string): RequestRow {
-  const row = db.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as RequestRow | undefined;
+function getRequestRow(db: SqliteDb | DbBackend, requestId: string): RequestRow {
+  const row = asBackend(db).prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as RequestRow | undefined;
   if (!row) {
     throw new Error(`Request not found: ${requestId}`);
   }
@@ -2512,7 +2512,7 @@ export async function remindSigningRequest(
 }
 
 export function listSigningRequests(
-  db: SqliteDb,
+  db: SqliteDb | DbBackend,
   input: { provider?: SignProvider; status?: string; limit?: number; since?: string } = {},
 ): Array<{
   id: string;
@@ -2525,6 +2525,7 @@ export function listSigningRequests(
   createdAt: string;
   updatedAt: string;
 }> {
+  const backend = asBackend(db);
   const where: string[] = [];
   const params: (string | number | null)[] = [];
   if (input.provider) {
@@ -2548,7 +2549,7 @@ export function listSigningRequests(
     params.push(input.since);
   }
   const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 500) : 100;
-  const rows = db.prepare(
+  const rows = backend.prepare(
     `SELECT id, title, status, provider, provider_request_id, provider_status, signers_json, created_at, updated_at
      FROM requests
      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
@@ -2588,7 +2589,7 @@ export function listSigningRequests(
   });
 }
 
-export function verifyRequestAuditChain(db: SqliteDb, requestId: string): AuditVerificationResult {
+export function verifyRequestAuditChain(db: SqliteDb | DbBackend, requestId: string): AuditVerificationResult {
   getRequestRow(db, requestId);
   return verifyAuditChain(db, requestId);
 }
@@ -2608,9 +2609,10 @@ export type AuditScanReport = {
 };
 
 export function scanAllAuditChains(
-  db: SqliteDb,
+  db: SqliteDb | DbBackend,
   input: { provider?: SignProvider; status?: string; limit?: number } = {},
 ): AuditScanReport {
+  const backend = asBackend(db);
   const where: string[] = [];
   const params: (string | number | null)[] = [];
   if (input.provider) {
@@ -2622,7 +2624,7 @@ export function scanAllAuditChains(
     params.push(input.status);
   }
   const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.min(Number(input.limit), 5000) : 1000;
-  const rows = db.prepare(
+  const rows = backend.prepare(
     `SELECT id, title, status FROM requests
      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY datetime(created_at) DESC
@@ -2633,7 +2635,7 @@ export function scanAllAuditChains(
   let invalid = 0;
   const results: AuditScanReport["results"] = [];
   for (const row of rows) {
-    const chain = verifyAuditChain(db, row.id);
+    const chain = verifyAuditChain(backend, row.id);
     results.push({
       requestId: row.id,
       title: row.title,
