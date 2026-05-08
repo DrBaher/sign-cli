@@ -173,7 +173,7 @@ sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--
 sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json] [--ndjson true]
 sign request bulk-resend --csv ./resend.csv [--token-ttl-minutes 30] [--emit-tokens ./tokens.json] [--ndjson true]   (re-issue signer tokens from a CSV roster — rows: request_id,signer_email[,token_ttl_minutes]; per-row failures are captured, exits 3 if any failed)
 sign request list [--provider dropbox|docusign|signwell|local] [--status created|sent|approved|completed|canceled] [--since 2026-05-01T00:00:00Z] [--limit 100] [--format json|table]
-sign request show --request-id <id>
+sign request show --request-id <id> [--metrics true] [--hash-only true]
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
 sign request rerun-policy --request-id <id> --spec ./policy.json [--signer-email <e>]   (re-evaluate a stored request against an updated policy spec; pure read)
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
@@ -1848,6 +1848,29 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "show") {
     const requestId = flagValue(parsed, "request-id", true)!;
+    const hashOnly = (flagValue(parsed, "hash-only") ?? "false") === "true";
+    if (hashOnly) {
+      // Pure-hash projection — no signers, status, or PII. Stable across
+      // builds for diff-style scripted comparisons (jq, watch, sha256sum).
+      const requestRow = db.prepare(
+        "SELECT id, document_hash FROM requests WHERE id = ?",
+      ).get(requestId) as { id: string; document_hash: string | null } | undefined;
+      if (!requestRow) {
+        throw new SignCliError({
+          code: "REQUEST_NOT_FOUND",
+          message: `Request not found: ${requestId}`,
+        });
+      }
+      const headRow = db.prepare(
+        "SELECT hash_self FROM audit_events WHERE request_id = ? ORDER BY id DESC LIMIT 1",
+      ).get(requestId) as { hash_self: string } | undefined;
+      console.log(JSON.stringify({
+        requestId: requestRow.id,
+        documentSha256: requestRow.document_hash,
+        chainHead: headRow?.hash_self ?? null,
+      }, null, 2));
+      return;
+    }
     const includeMetrics = (flagValue(parsed, "metrics") ?? "false") === "true";
     const snapshot = getRequestSnapshot(db, requestId, { includeMetrics });
     console.log(JSON.stringify(snapshot, null, 2));
