@@ -299,6 +299,52 @@ export async function getRequestRowAsync(backend: DbBackend, requestId: string):
   return row;
 }
 
+type InsertApprovalParams = {
+  id: string;
+  requestId: string;
+  signerName: string;
+  signerEmail: string;
+  signerOrder: number;
+  tokenHash: string;
+  tokenHint: string;
+  docHash: string;
+  expiresAt: string;
+  createdAt: string;
+};
+
+const INSERT_APPROVAL_SQL =
+  `INSERT INTO approvals (
+    id, request_id, signer_name, signer_email, signer_order, token_hash, token_hint, doc_hash, expires_at, used_at, approved_at, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+function insertApprovalParams(input: InsertApprovalParams): unknown[] {
+  return [
+    input.id,
+    input.requestId,
+    input.signerName,
+    input.signerEmail,
+    input.signerOrder,
+    input.tokenHash,
+    input.tokenHint,
+    input.docHash,
+    input.expiresAt,
+    null,
+    null,
+    input.createdAt,
+  ];
+}
+
+function insertApprovalRow(db: SqliteDb, input: InsertApprovalParams): void {
+  db.prepare(INSERT_APPROVAL_SQL).run(...insertApprovalParams(input) as Parameters<ReturnType<SqliteDb["prepare"]>["run"]>);
+}
+
+// Async sibling — same INSERT, runs through prepareAsync so PostgresBackend
+// works. Used by future createSigningRequestAsync; existing sync paths keep
+// using insertApprovalRow.
+export async function insertApprovalRowAsync(backend: DbBackend, input: InsertApprovalParams): Promise<void> {
+  await backend.prepareAsync(INSERT_APPROVAL_SQL).run(...insertApprovalParams(input));
+}
+
 function listApprovalRows(db: SqliteDb, requestId: string): ApprovalRow[] {
   return db.prepare("SELECT * FROM approvals WHERE request_id = ? ORDER BY signer_order ASC").all(requestId) as ApprovalRow[];
 }
@@ -1014,24 +1060,18 @@ export function createSigningRequest(
   const tokens = sortedSigners.map((signer) => {
     const token = createToken();
     const expiresAt = nowIso(new Date(now.getTime() + input.tokenTtlMinutes * 60_000));
-    db.prepare(
-      `INSERT INTO approvals (
-        id, request_id, signer_name, signer_email, signer_order, token_hash, token_hint, doc_hash, expires_at, used_at, approved_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      createId("apr"),
+    insertApprovalRow(db, {
+      id: createId("apr"),
       requestId,
-      signer.name,
-      signer.email,
-      signer.order,
-      sha256(token),
-      tokenHint(token),
-      primaryHash,
+      signerName: signer.name,
+      signerEmail: signer.email,
+      signerOrder: signer.order,
+      tokenHash: sha256(token),
+      tokenHint: tokenHint(token),
+      docHash: primaryHash,
       expiresAt,
-      null,
-      null,
       createdAt,
-    );
+    });
     return { signer, token, expiresAt };
   });
 
