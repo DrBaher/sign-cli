@@ -514,7 +514,10 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "mcp serve",
-    summary: "Stdio Model Context Protocol server (tools + resources for LLM agents).",
+    summary: "Stdio Model Context Protocol server (tools + resources for LLM agents). --read-only blocks lifecycle-mutating tools (sign, signer_decline) with FORBIDDEN_READ_ONLY — same shape as the HTTP --read-only knob.",
+    flags: [
+      { name: "--read-only", description: "true to block the sign + signer_decline tools with code FORBIDDEN_READ_ONLY. Read tools (signer_list, request_show, audit_verify, …) stay available." },
+    ],
   },
   {
     command: "serve",

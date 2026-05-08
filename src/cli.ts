@@ -188,7 +188,7 @@ sign db indexes-postgres --pg-url postgres://… [--schema public] [--explain "S
 sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: VACUUM + PRAGMA optimize; Postgres: VACUUM ANALYZE)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
-sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
+sign mcp serve [--read-only true]  (stdio Model Context Protocol server; --read-only blocks the sign + signer_decline tools with FORBIDDEN_READ_ONLY)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
 sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>] [--rate-limit <rps> [--rate-limit-burst <n>]] [--read-only true]   (HTTP REST surface; --read-only blocks the four lifecycle-mutating routes with FORBIDDEN_READ_ONLY)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
@@ -1783,7 +1783,8 @@ async function main(): Promise<void> {
   }
 
   if (root === "mcp" && sub === "serve") {
-    await serveMcpStdio({ input: process.stdin, output: process.stdout, db });
+    const readOnly = (flagValue(parsed, "read-only") ?? "false") === "true";
+    await serveMcpStdio({ input: process.stdin, output: process.stdout, db, readOnly });
     return;
   }
 

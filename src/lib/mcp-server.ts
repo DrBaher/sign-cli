@@ -464,9 +464,20 @@ export type McpDispatchInput = {
   params?: unknown;
   db: SqliteDb;
   emitProgress?: McpEmitProgress;
+  // When true, tools/call refuses the lifecycle-mutating tools with a
+  // FORBIDDEN_READ_ONLY error envelope (same code shape as the HTTP
+  // --read-only path).
+  readOnly?: boolean;
 };
 
 export type McpDispatchResult = { kind: "result"; value: unknown } | { kind: "ignored" };
+
+// Mutating tool names. Mirrors the HTTP READ_ONLY_BLOCKED_ROUTES set scoped
+// to what the MCP surface actually exposes.
+export const READ_ONLY_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
+  "sign",
+  "signer_decline",
+]);
 
 export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchResult> {
   const { method, params, db } = input;
@@ -529,6 +540,30 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
               type: "text",
               text: JSON.stringify(
                 { ok: false, error: { code: "UNKNOWN_TOOL", message: `Tool not found: ${toolName || "(unnamed)"}` } },
+                null,
+                2,
+              ),
+            },
+          ],
+          isError: true,
+        },
+      };
+    }
+    if (input.readOnly && READ_ONLY_BLOCKED_TOOLS.has(tool.name)) {
+      return {
+        kind: "result",
+        value: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ok: false,
+                  error: {
+                    code: "FORBIDDEN_READ_ONLY",
+                    message: `Server is running with --read-only true; tools/call for "${tool.name}" is disabled.`,
+                  },
+                },
                 null,
                 2,
               ),
@@ -613,6 +648,7 @@ export async function serveMcpStdio(opts: {
   input: NodeJS.ReadableStream;
   output: NodeJS.WritableStream;
   db: SqliteDb;
+  readOnly?: boolean;
 }): Promise<void> {
   const rl = readline.createInterface({ input: opts.input, crlfDelay: Infinity });
   // Per-connection subscription registry. Each entry is the unsubscribe fn
@@ -694,6 +730,7 @@ export async function serveMcpStdio(opts: {
         params: message.params,
         db: opts.db,
         emitProgress,
+        readOnly: opts.readOnly,
       });
       if (dispatch.kind === "ignored" || isNotification) continue;
       writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
