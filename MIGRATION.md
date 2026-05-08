@@ -48,6 +48,7 @@ The stub serves three purposes:
   - [x] Third write primitive: `insertApprovalRowAsync` — the per-signer approvals INSERT used by `createSigningRequest`. Sync + async share `INSERT_APPROVAL_SQL` + `insertApprovalParams(...)` so the column order can't drift.
   - [x] First UPDATE primitives: `updateRequestStatusAsync` and `markApprovalUsedAsync`. Sync versions now go through tiny helpers (`updateRequestStatus`, `markApprovalUsed`) that share the same SQL constants as the async siblings.
   - [x] Bulk auto-approve UPDATE + artifact INSERT: `markAllRequestApprovalsUsedAsync` (the auto-approve fast path) and `insertArtifactRowAsync` (the artifact INSERT used by export/timestamp/anchor). Sync paths route through `markAllRequestApprovalsUsed` / `insertArtifactRow` so column order stays single-source.
+  - [x] Token reissue UPDATE: `reissueApprovalTokenRowAsync`. Sync `reissueSignerToken` now calls `reissueApprovalTokenRow`; both share `REISSUE_APPROVAL_TOKEN_SQL`.
 - [x] Postgres-flavor DDL bootstrap shipped at `src/lib/postgres-bootstrap.ts` and exposed as `sign db migrate-postgres --pg-url …`. Idempotent, includes the PL/pgSQL append-only triggers.
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.
 - [ ] Re-implement the audit-events append-only triggers as Postgres `BEFORE UPDATE/DELETE` triggers + `RAISE EXCEPTION`.

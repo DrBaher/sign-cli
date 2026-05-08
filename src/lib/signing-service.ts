@@ -384,6 +384,32 @@ export async function markApprovalUsedAsync(
 const MARK_ALL_REQUEST_APPROVALS_USED_SQL =
   "UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?";
 
+const REISSUE_APPROVAL_TOKEN_SQL =
+  "UPDATE approvals SET token_hash = ?, token_hint = ?, expires_at = ? WHERE id = ?";
+
+function reissueApprovalTokenRow(
+  db: SqliteDb,
+  approvalId: string,
+  tokenHash: string,
+  tokenHint: string,
+  expiresAt: string,
+): void {
+  db.prepare(REISSUE_APPROVAL_TOKEN_SQL).run(tokenHash, tokenHint, expiresAt, approvalId);
+}
+
+// Async sibling — flips token_hash + token_hint + expires_at on one
+// approval row. Used by future reissueSignerTokenAsync; existing sync paths
+// keep using reissueApprovalTokenRow.
+export async function reissueApprovalTokenRowAsync(
+  backend: DbBackend,
+  approvalId: string,
+  tokenHash: string,
+  tokenHint: string,
+  expiresAt: string,
+): Promise<void> {
+  await backend.prepareAsync(REISSUE_APPROVAL_TOKEN_SQL).run(tokenHash, tokenHint, expiresAt, approvalId);
+}
+
 function markAllRequestApprovalsUsed(db: SqliteDb, requestId: string, nowStamp: string): void {
   db.prepare(MARK_ALL_REQUEST_APPROVALS_USED_SQL).run(nowStamp, nowStamp, requestId);
 }
@@ -3747,9 +3773,7 @@ export function reissueSignerToken(
   const newHash = sha256(newToken);
   const newHint = tokenHint(newToken);
   const expiresAt = nowIso(new Date(now.getTime() + ttl * 60_000));
-  db.prepare(
-    "UPDATE approvals SET token_hash = ?, token_hint = ?, expires_at = ? WHERE id = ?",
-  ).run(newHash, newHint, expiresAt, approvalRow.id);
+  reissueApprovalTokenRow(db, approvalRow.id, newHash, newHint, expiresAt);
 
   appendAuditEvent(db, {
     requestId: request.id,
