@@ -38,6 +38,7 @@ The stub serves three purposes:
 - [x] Add `openStorageBackend()` in `src/lib/storage.ts` so new code can target the abstract `DbBackend` instead of the concrete `SqliteDb`.
 - [ ] Migrate the ~30 `SqliteDb`-typed call sites to `DbBackend` one at a time (start with read-only audit/show paths, leave the lifecycle writes for last).
   - [x] `verifyAuditChain` and `listAuditEvents` accept `SqliteDb | DbBackend` via `asBackend(...)`. All existing call sites still work; new code can pass a `DbBackend` directly.
+  - [x] `getRequestRow` (private), `listSigningRequests`, `verifyRequestAuditChain`, `scanAllAuditChains` accept `SqliteDb | DbBackend`.
 - [ ] Implement real `PostgresBackend` (via the `pg` driver) — replace the throwing methods with real prepared-statement execution.
 - [ ] Replace baseline `CREATE TABLE IF NOT EXISTS` with backend-aware DDL (datatypes diverge: `INTEGER` ↔ `BIGINT`, `TEXT` is portable).
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.

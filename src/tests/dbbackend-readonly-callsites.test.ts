@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { verifyAuditChain } from "../lib/audit.js";
 import { wrapSqliteDb, isDbBackend, asBackend } from "../lib/db-backend.js";
-import { createSigningRequest, listAuditEvents } from "../lib/signing-service.js";
+import {
+  createSigningRequest,
+  listAuditEvents,
+  listSigningRequests,
+  scanAllAuditChains,
+  verifyRequestAuditChain,
+} from "../lib/signing-service.js";
 import { createDb, createDocumentFixture, makeTempDb } from "./helpers.js";
 
 test("verifyAuditChain accepts a DbBackend wrapper and returns the same result as the SqliteDb path", () => {
@@ -59,6 +65,36 @@ test("isDbBackend / asBackend correctly distinguish SqliteDb from DbBackend", ()
     assert.equal(isDbBackend(wrapped), true, "wrapped backend is a DbBackend");
     // asBackend is idempotent
     assert.equal(asBackend(wrapped), wrapped);
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
+
+test("listSigningRequests / verifyRequestAuditChain / scanAllAuditChains accept a DbBackend wrapper", () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  const documentPath = createDocumentFixture("dbb-round2");
+  try {
+    const created = createSigningRequest(db, {
+      title: "Round 2",
+      documentPath,
+      signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
+      tokenTtlMinutes: 30,
+      provider: "dropbox",
+    });
+    const wrapped = wrapSqliteDb(db);
+
+    assert.deepEqual(listSigningRequests(db), listSigningRequests(wrapped));
+
+    const verifySqlite = verifyRequestAuditChain(db, created.requestId);
+    const verifyBackend = verifyRequestAuditChain(wrapped, created.requestId);
+    assert.deepEqual(verifySqlite, verifyBackend);
+
+    const scanSqlite = scanAllAuditChains(db);
+    const scanBackend = scanAllAuditChains(wrapped);
+    assert.deepEqual(scanSqlite, scanBackend);
+    assert.equal(scanSqlite.total, 1);
   } finally {
     db.close();
     cleanup();
