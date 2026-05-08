@@ -519,6 +519,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--web-demo", description: "true to serve the bundled dashboard from fixtures/web-demo, or a path to your own static dir. Mounts at /web-demo/index.html, same-origin (no CORS)." },
       { name: "--rate-limit", description: "Tokens per second per IP (token bucket). Over-budget requests get 429 with Retry-After. Honors X-Forwarded-For when present." },
       { name: "--rate-limit-burst", description: "Bucket capacity (max burst). Defaults to 2× --rate-limit." },
+      { name: "--read-only", description: "true to block the four lifecycle-mutating routes (POST /v1/sign, /v1/signer/decline, /v1/signer/reissue-token, /v1/request/receipt) with HTTP 403 + code FORBIDDEN_READ_ONLY. Read endpoints stay available — useful for compliance or production-clone dashboards." },
     ],
   },
   {
