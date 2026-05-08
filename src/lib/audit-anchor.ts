@@ -125,3 +125,93 @@ export async function anchorAllAuditChainHeads(
     inspection,
   };
 }
+
+// --- Anchor verification ----------------------------------------------------
+// Read a previously-issued anchor (manifest.json) and re-check whether the
+// chains it covered have shifted. Per-row outcome:
+//
+//   matches    — the request's current chain head equals what was anchored
+//   shifted    — the chain has progressed (new events appended after the anchor)
+//                — typical and expected; not necessarily tampering
+//   tampered   — the chain head now exists at an EARLIER id than the anchored
+//                row, or the anchored hash isn't present anywhere — strong
+//                signal that history was rewritten
+//   missing    — the requestId no longer exists at all
+//
+// The anchor's own digest is recomputed and surfaced too, so callers can
+// match it against the .tsr's contained digest (the cryptographic seal).
+
+export type AnchorVerifyOutcome = "matches" | "shifted" | "tampered" | "missing";
+
+export type AnchorVerifyRow = {
+  requestId: string;
+  anchoredHashSelf: string;
+  currentHashSelf: string | null;
+  outcome: AnchorVerifyOutcome;
+};
+
+export type AnchorVerifyReport = {
+  digestHex: string;        // recomputed from the loaded manifest
+  total: number;
+  matches: number;
+  shifted: number;
+  tampered: number;
+  missing: number;
+  results: AnchorVerifyRow[];
+};
+
+export function verifyAnchorManifest(
+  db: SqliteDb,
+  manifest: ReadonlyArray<AnchorManifestEntry>,
+): AnchorVerifyReport {
+  // Recompute the digest the same way anchorAllAuditChainHeads did, so
+  // callers can compare it to the .tsr's contained digest.
+  const sorted = [...manifest].sort((a, b) => a.requestId.localeCompare(b.requestId));
+  const digestHex = sha256(stableStringify(sorted));
+
+  const results: AnchorVerifyRow[] = [];
+  let matches = 0;
+  let shifted = 0;
+  let tampered = 0;
+  let missing = 0;
+
+  for (const entry of sorted) {
+    // Latest hash_self (current chain head) for the requestId.
+    const headRow = db.prepare(
+      `SELECT id, hash_self FROM audit_events WHERE request_id = ? ORDER BY id DESC LIMIT 1`,
+    ).get(entry.requestId) as { id: number; hash_self: string } | undefined;
+    if (!headRow) {
+      results.push({ requestId: entry.requestId, anchoredHashSelf: entry.hashSelf, currentHashSelf: null, outcome: "missing" });
+      missing += 1;
+      continue;
+    }
+    if (headRow.hash_self === entry.hashSelf) {
+      results.push({ requestId: entry.requestId, anchoredHashSelf: entry.hashSelf, currentHashSelf: headRow.hash_self, outcome: "matches" });
+      matches += 1;
+      continue;
+    }
+    // Was the anchored hash ever present in this request's chain? If yes, the
+    // chain has progressed past it (shifted). If no, history was rewritten —
+    // tampered.
+    const ancestor = db.prepare(
+      `SELECT 1 FROM audit_events WHERE request_id = ? AND hash_self = ? LIMIT 1`,
+    ).get(entry.requestId, entry.hashSelf);
+    if (ancestor) {
+      results.push({ requestId: entry.requestId, anchoredHashSelf: entry.hashSelf, currentHashSelf: headRow.hash_self, outcome: "shifted" });
+      shifted += 1;
+    } else {
+      results.push({ requestId: entry.requestId, anchoredHashSelf: entry.hashSelf, currentHashSelf: headRow.hash_self, outcome: "tampered" });
+      tampered += 1;
+    }
+  }
+
+  return {
+    digestHex,
+    total: sorted.length,
+    matches,
+    shifted,
+    tampered,
+    missing,
+    results,
+  };
+}

@@ -377,6 +377,13 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "audit verify-anchor",
+    summary: "Re-check a previously-issued anchor manifest against the current DB. Per-row outcomes: matches (identical hash), shifted (anchored hash exists earlier in the chain — typical), tampered (anchored hash is gone — strong signal of rewrite), missing (request_id no longer exists). Exits 3 if any tampered/missing.",
+    flags: [
+      { name: "--manifest", required: true, description: "Path to the audit-anchor-<ts>.manifest.json file emitted by `audit anchor`." },
+    ],
+  },
+  {
     command: "audit export",
     summary: "Bundle audit.json + signed.pdf + audit.tsr + manifest.json.",
   },

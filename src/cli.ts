@@ -203,6 +203,7 @@ sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--l
 sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]   (anchor every request's chain head with one TSA call; produces a manifest + .tsr you can re-verify weeks later)
+sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
 sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
@@ -1133,6 +1134,26 @@ async function main(): Promise<void> {
     const { anchorAllAuditChainHeads } = await import("./lib/audit-anchor.js");
     const result = await anchorAllAuditChainHeads(db, { tsaUrl, outDir });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "audit" && sub === "verify-anchor") {
+    const manifestPath = flagValue(parsed, "manifest", true)!;
+    const fs = await import("node:fs");
+    let manifest: Array<{ requestId: string; hashSelf: string }>;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (!Array.isArray(manifest)) throw new Error("manifest must be a JSON array");
+    } catch (error) {
+      throw new SignCliError({
+        code: "INVALID_SPEC",
+        message: `Failed to load anchor manifest at ${manifestPath}: ${(error as Error).message}`,
+      });
+    }
+    const { verifyAnchorManifest } = await import("./lib/audit-anchor.js");
+    const report = verifyAnchorManifest(db, manifest);
+    console.log(JSON.stringify(report, null, 2));
+    if (report.tampered > 0 || report.missing > 0) process.exitCode = 3;
     return;
   }
 
