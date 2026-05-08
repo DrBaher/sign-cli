@@ -206,7 +206,7 @@ sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]   (anchor every request's chain head with one TSA call; produces a manifest + .tsr you can re-verify weeks later)
 sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
 sign audit anchors-list [--limit 100]   (list stored anchors with digest/tsaUrl/coveredRequests so an operator can pick which one to verify)
-sign audit chain-bundle --out ./bundle/ [--request-id <id> ...] [--tarball ./bundle.tar.gz]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json; --tarball writes a portable .tar.gz)
+sign audit chain-bundle --out ./bundle/ [--request-id <id> ...] [--tarball ./bundle.tar.gz] [--include-source-pdf true]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json; --tarball writes a portable .tar.gz; --include-source-pdf copies the unsigned source PDF into each receipt dir for reproducibility)
 sign audit verify-chain-bundle (--bundle ./bundle/ | --tarball ./bundle.tar.gz)   (re-check a previously-issued chain bundle: INDEX.json + anchor digest + every per-request receipt; --tarball extracts to a temp dir and verifies in-process; exits 3 on any failure)
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
@@ -1285,11 +1285,13 @@ async function main(): Promise<void> {
     const out = flagValue(parsed, "out", true)!;
     const requestIds = flagValues(parsed, "request-id");
     const tarballPath = flagValue(parsed, "tarball");
+    const includeSourcePdf = (flagValue(parsed, "include-source-pdf") ?? "false") === "true";
     const { exportAuditChainBundle } = await import("./lib/audit-chain-bundle.js");
     const result = await exportAuditChainBundle(db, {
       outDir: out,
       requestIds: requestIds.length > 0 ? requestIds : undefined,
       tarballPath,
+      includeSourcePdf,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
