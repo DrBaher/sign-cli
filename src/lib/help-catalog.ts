@@ -416,6 +416,21 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Print the MCP tool catalog without starting the server.",
   },
   {
+    command: "metrics show",
+    summary: "Render Prometheus text from the local DB and write it to stdout. Same body as GET /v1/metrics, no server required.",
+  },
+  {
+    command: "metrics ship",
+    summary: "Long-running pusher that POSTs the Prometheus text to a remote endpoint on a cadence. Exits cleanly on SIGINT/SIGTERM. Errors don't crash the loop — backs off (capped at 10× the base interval) instead.",
+    flags: [
+      { name: "--url", required: true, description: "Endpoint that accepts POST text/plain (e.g. a Prometheus pushgateway-equivalent)." },
+      { name: "--bearer", description: "Optional Bearer token; sent as Authorization header." },
+      { name: "--header", description: "Repeatable. KEY=VALUE pairs added to each request." },
+      { name: "--interval-seconds", description: "Cadence between pushes (default 30)." },
+      { name: "--max-pushes", description: "Stop after this many pushes — useful for scripted runs." },
+    ],
+  },
+  {
     command: "completion",
     summary: "Print a shell completion script (bash | zsh | fish).",
   },

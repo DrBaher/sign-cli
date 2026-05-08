@@ -199,7 +199,9 @@ sign request create --spec ./request.json [--param key=value ...]   (variable su
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
 sign webhook ingest [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>] [--request-id <id>]
-sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>] [--pretty true]`);
+sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>] [--pretty true]
+sign metrics show   (print Prometheus text rendered from the local DB once)
+sign metrics ship --url https://example.com/metrics [--bearer <t>] [--header K=V ...] [--interval-seconds 30] [--max-pushes <n>]   (long-running pusher; logs each POST to stderr)`);
 }
 
 function resolveProviderApiKey(provider: ReturnType<typeof resolveSignProvider>): string | undefined {
@@ -1334,6 +1336,58 @@ async function main(): Promise<void> {
         "POST /v1/audit/scan",
       ],
     }, null, 2));
+    return;
+  }
+
+  if (root === "metrics" && sub === "show") {
+    const { renderPrometheusMetrics } = await import("./lib/prom-metrics.js");
+    process.stdout.write(renderPrometheusMetrics(db));
+    return;
+  }
+
+  if (root === "metrics" && sub === "ship") {
+    const url = flagValue(parsed, "url", true)!;
+    const bearer = flagValue(parsed, "bearer");
+    const headerEntries = flagValues(parsed, "header");
+    const headers: Record<string, string> = {};
+    for (const entry of headerEntries) {
+      const eq = entry.indexOf("=");
+      if (eq <= 0) {
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: `--header expects KEY=VALUE; got ${JSON.stringify(entry)}.`,
+        });
+      }
+      headers[entry.slice(0, eq).trim()] = entry.slice(eq + 1);
+    }
+    const intervalSecondsRaw = flagValue(parsed, "interval-seconds");
+    const intervalMs = intervalSecondsRaw ? Math.max(1, Number(intervalSecondsRaw)) * 1000 : undefined;
+    const maxPushesRaw = flagValue(parsed, "max-pushes");
+    const maxPushes = maxPushesRaw ? Math.max(1, Number(maxPushesRaw)) : undefined;
+    const { shipMetricsLoop } = await import("./lib/metrics-ship.js");
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    process.stderr.write(`[metrics ship] POST ${url} every ${(intervalMs ?? 30000) / 1000}s (Ctrl+C to stop)\n`);
+    const report = await shipMetricsLoop(db, {
+      url,
+      bearer,
+      headers,
+      intervalMs,
+      maxPushes,
+      signal: controller.signal,
+      onProgress: (event) => {
+        if (event.phase === "push") {
+          process.stderr.write(`[metrics ship] push #${event.pushNumber} → HTTP ${event.status} (${event.bytes}B)\n`);
+        } else if (event.phase === "error") {
+          process.stderr.write(`[metrics ship] push #${event.pushNumber} ERROR: ${event.error}\n`);
+        } else {
+          process.stderr.write(`[metrics ship] stopped (${event.reason})\n`);
+        }
+      },
+    });
+    console.log(JSON.stringify(report, null, 2));
     return;
   }
 
