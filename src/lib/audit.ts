@@ -1,3 +1,4 @@
+import { asBackend, type DbBackend } from "./db-backend.js";
 import type { SqliteDb } from "./db.js";
 import { maybeNotifySignerEvent } from "./notify.js";
 import { notifyResourceChanged } from "./resource-watch.js";
@@ -13,8 +14,9 @@ export type AuditVerificationResult = {
   break: AuditChainBreak | null;
 };
 
-export function verifyAuditChain(db: SqliteDb, requestId: string): AuditVerificationResult {
-  const rows = db.prepare(
+export function verifyAuditChain(db: SqliteDb | DbBackend, requestId: string): AuditVerificationResult {
+  const backend = asBackend(db);
+  const rows = backend.prepare(
     `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, created_at
      FROM audit_events
      WHERE request_id = ?

@@ -96,8 +96,26 @@ function notImplemented(method: string): SignCliError {
   });
 }
 
-// --- Helper -----------------------------------------------------------------
+// --- Helpers ----------------------------------------------------------------
 
 export function wrapSqliteDb(db: SqliteDb): DbBackend {
   return new SqliteBackend(db);
+}
+
+export function isDbBackend(value: unknown): value is DbBackend {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    typeof (value as { kind: unknown }).kind === "string" &&
+    typeof (value as { prepare?: unknown }).prepare === "function"
+  );
+}
+
+// Idempotent: returns the value as-is if it already implements DbBackend, otherwise
+// wraps a raw SqliteDb. Lets a function take `SqliteDb | DbBackend` while only
+// dealing with `DbBackend` internally — useful for the gradual call-site
+// migration tracked in MIGRATION.md.
+export function asBackend(db: SqliteDb | DbBackend): DbBackend {
+  return isDbBackend(db) ? db : wrapSqliteDb(db);
 }
