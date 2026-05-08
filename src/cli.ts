@@ -198,7 +198,7 @@ Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
-sign audit show --request-id <id> [--format json|csv] [--event-type <t> ...]   (filter to one or more event_type values; --event-type is repeatable)
+sign audit show --request-id <id> [--format json|csv|pretty] [--event-type <t> ...]   (--format pretty renders a human-readable timeline)
 sign audit search [--request-id <id>] [--event-type request.signed] [--since <iso>] [--until <iso>] [--payload-contains <substr>] [--limit 1000]   (log-style filter across the full audit_events table)
 sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
@@ -1212,10 +1212,10 @@ async function main(): Promise<void> {
   if (root === "audit" && sub === "show") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const format = (flagValue(parsed, "format") ?? "json").toLowerCase();
-    if (format !== "json" && format !== "csv") {
+    if (format !== "json" && format !== "csv" && format !== "pretty") {
       throw new SignCliError({
         code: "INVALID_ARGS",
-        message: `--format must be json or csv; got ${JSON.stringify(format)}.`,
+        message: `--format must be json, csv, or pretty; got ${JSON.stringify(format)}.`,
       });
     }
     const eventTypes = flagValues(parsed, "event-type");
@@ -1227,6 +1227,9 @@ async function main(): Promise<void> {
     if (format === "csv") {
       const { renderAuditChainAsCsv } = await import("./lib/audit-csv.js");
       process.stdout.write(renderAuditChainAsCsv(events));
+    } else if (format === "pretty") {
+      const { renderAuditChainAsPretty } = await import("./lib/audit-pretty.js");
+      process.stdout.write(renderAuditChainAsPretty(events) + "\n");
     } else {
       console.log(JSON.stringify(events, null, 2));
     }
