@@ -193,6 +193,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--request-id", required: true, description: "Request id." },
       { name: "--metrics", description: "true to include the metrics rollup." },
       { name: "--hash-only", description: "true to suppress everything except the request_id, document SHA-256, and current audit-chain head. Stable across builds." },
+      { name: "--recipient", description: "Email of a signer on this request. Returns a redacted snapshot showing only that recipient's view — other signers, their approvals, and decline reasons from other recipients are stripped. Useful when sharing status with one signer without leaking others. Errors SIGNER_NOT_RECIPIENT if the email isn't on the request." },
     ],
   },
   {
