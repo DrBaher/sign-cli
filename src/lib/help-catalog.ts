@@ -273,6 +273,19 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Loop the inbox and apply a policy to every request the agent has a token for.",
   },
   {
+    command: "signer policy run-watch",
+    summary: "Long-running: tail the inbox and apply a policy to every NEW entry (initial snapshot is informational). Composes signer watch + signer policy run-all so an agent can stay attached. Exits 3 if any row failed, 4 on --timeout-seconds.",
+    flags: [
+      { name: "--tokens-file", required: true, description: "JSON map { requestId: token } or array of { requestId, token } — same shape as run-all." },
+      { name: "--spec", required: true, description: "Path to policy.json." },
+      { name: "--signer-email", description: "Restrict to one signer's inbox view." },
+      { name: "--dry-run", description: "true to run evaluatePolicy + log decisions without applying state changes." },
+      { name: "--exit-on-first", description: "true to exit after the first new entry is evaluated." },
+      { name: "--interval-seconds", description: "Belt-and-suspenders poll interval (default 1s)." },
+      { name: "--timeout-seconds", description: "Exit code 4 after this many seconds with no new entry." },
+    ],
+  },
+  {
     command: "signer policy try",
     summary: "Offline tester for a policy spec — supply a synthetic context and print the decision without touching state.",
     flags: [
