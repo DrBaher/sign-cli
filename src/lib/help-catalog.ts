@@ -378,6 +378,8 @@ export const HELP_CATALOG: CommandSpec[] = [
     flags: [
       { name: "--tsa-url", description: "RFC 3161 TSA endpoint (default DigiCert)." },
       { name: "--out", description: "Output dir for the .tsr + manifest.json (default ./artifacts/)." },
+      { name: "--since", description: "ISO 8601 cutoff. Only chains whose latest event lands at or after this timestamp are anchored — smaller manifest, cheaper to verify." },
+      { name: "--since-anchor", description: "`latest` or an explicit anchor artifactId. Resolves to that anchor's createdAt and uses it as --since." },
     ],
   },
   {
