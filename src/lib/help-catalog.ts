@@ -426,7 +426,10 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "mcp tools",
-    summary: "Print the MCP tool catalog without starting the server.",
+    summary: "Print the MCP tool catalog without starting the server. Each tool ships an inputSchema; tools that return structured responses also ship an outputSchema so generic agent loops can validate without per-tool code.",
+    flags: [
+      { name: "--format", description: "json (default) or markdown — markdown renders a docs page including input + output schemas." },
+    ],
   },
   {
     command: "metrics show",
