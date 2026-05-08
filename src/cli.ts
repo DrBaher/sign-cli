@@ -189,7 +189,7 @@ sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: 
 sign db rotate-keys [--key-dir ./data/local-keys]   (re-issue the local signer keypair; backs up the old cert+key with a timestamped suffix)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
-sign mcp serve [--read-only true] [--tool <name> ...]  (stdio Model Context Protocol server; --tool restricts tools/list + tools/call to the named subset; --read-only also blocks sign + signer_decline)
+sign mcp serve [--read-only true] [--tool <name> ...] [--capability tools|resources|prompts ...]  (stdio Model Context Protocol server; --capability advertises only the named capabilities at initialize and refuses the matching list/read methods otherwise; --tool restricts tools/list + tools/call to the named subset; --read-only also blocks sign + signer_decline)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
 sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>] [--rate-limit <rps> [--rate-limit-burst <n>]] [--read-only true]   (HTTP REST surface; --read-only blocks the four lifecycle-mutating routes with FORBIDDEN_READ_ONLY)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
@@ -1898,7 +1898,19 @@ async function main(): Promise<void> {
     const readOnly = (flagValue(parsed, "read-only") ?? "false") === "true";
     const allowedToolNames = flagValues(parsed, "tool");
     const allowedTools = allowedToolNames.length > 0 ? new Set(allowedToolNames) : undefined;
-    await serveMcpStdio({ input: process.stdin, output: process.stdout, db, readOnly, allowedTools });
+    const capabilityNames = flagValues(parsed, "capability");
+    for (const cap of capabilityNames) {
+      if (cap !== "tools" && cap !== "resources" && cap !== "prompts") {
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: `--capability must be one of tools, resources, prompts; got ${JSON.stringify(cap)}.`,
+        });
+      }
+    }
+    const capabilities = capabilityNames.length > 0
+      ? new Set(capabilityNames as Array<"tools" | "resources" | "prompts">)
+      : undefined;
+    await serveMcpStdio({ input: process.stdin, output: process.stdout, db, readOnly, allowedTools, capabilities });
     return;
   }
 

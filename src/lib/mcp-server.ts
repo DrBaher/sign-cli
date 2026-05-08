@@ -498,9 +498,20 @@ export type McpDispatchInput = {
   // shape as a real unknown tool, so an agent can't probe the server for
   // hidden capabilities.
   allowedTools?: ReadonlySet<string>;
+  // When set, only these capabilities are advertised at initialize and the
+  // matching list/read methods are answered. Disabled capabilities respond
+  // with a JSON-RPC method-not-found shaped error envelope.
+  capabilities?: ReadonlySet<"tools" | "resources" | "prompts">;
 };
 
 export type McpDispatchResult = { kind: "result"; value: unknown } | { kind: "ignored" };
+
+function capabilityDisabled(name: "tools" | "resources" | "prompts"): SignCliError {
+  return new SignCliError({
+    code: "INVALID_ARGS",
+    message: `Capability "${name}" is disabled on this MCP server (mcp serve --capability …).`,
+  });
+}
 
 // Mutating tool names. Mirrors the HTTP READ_ONLY_BLOCKED_ROUTES set scoped
 // to what the MCP surface actually exposes.
@@ -511,33 +522,40 @@ export const READ_ONLY_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
 
 export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchResult> {
   const { method, params, db } = input;
+  const isEnabled = (cap: "tools" | "resources" | "prompts") =>
+    !input.capabilities || input.capabilities.has(cap);
+
   if (method === "initialize") {
+    const advertised: Record<string, unknown> = {};
+    if (isEnabled("tools")) advertised.tools = {};
+    if (isEnabled("resources")) advertised.resources = { listChanged: false, subscribe: true };
+    if (isEnabled("prompts")) advertised.prompts = { listChanged: false };
     return {
       kind: "result",
       value: {
         protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {
-          tools: {},
-          resources: { listChanged: false, subscribe: true },
-          prompts: { listChanged: false },
-        },
+        capabilities: advertised,
         serverInfo: { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
       },
     };
   }
   if (method === "tools/list") {
+    if (!isEnabled("tools")) throw capabilityDisabled("tools");
     const tools = input.allowedTools
       ? listMcpTools().filter((t) => input.allowedTools!.has(t.name))
       : listMcpTools();
     return { kind: "result", value: { tools } };
   }
   if (method === "resources/list") {
+    if (!isEnabled("resources")) throw capabilityDisabled("resources");
     return { kind: "result", value: { resources: listMcpResources(db) } };
   }
   if (method === "prompts/list") {
+    if (!isEnabled("prompts")) throw capabilityDisabled("prompts");
     return { kind: "result", value: { prompts: listMcpPrompts() } };
   }
   if (method === "prompts/get") {
+    if (!isEnabled("prompts")) throw capabilityDisabled("prompts");
     const params = (input.params ?? {}) as { name?: unknown; arguments?: unknown };
     if (typeof params.name !== "string" || params.name.length === 0) {
       throw new SignCliError({
@@ -549,6 +567,7 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
     return { kind: "result", value: getMcpPrompt({ name: params.name, arguments: promptArgs }) };
   }
   if (method === "resources/read") {
+    if (!isEnabled("resources")) throw capabilityDisabled("resources");
     const readParams = (params ?? {}) as { uri?: unknown };
     if (typeof readParams.uri !== "string" || readParams.uri.length === 0) {
       throw new SignCliError({
@@ -560,6 +579,7 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
     return { kind: "result", value: { contents: [content] } };
   }
   if (method === "tools/call") {
+    if (!isEnabled("tools")) throw capabilityDisabled("tools");
     const callParams = (params ?? {}) as { name?: unknown; arguments?: unknown };
     const toolName = typeof callParams.name === "string" ? callParams.name : "";
     const toolArgs = (callParams.arguments ?? {}) as Record<string, unknown>;
@@ -686,6 +706,7 @@ export async function serveMcpStdio(opts: {
   db: SqliteDb;
   readOnly?: boolean;
   allowedTools?: ReadonlySet<string>;
+  capabilities?: ReadonlySet<"tools" | "resources" | "prompts">;
 }): Promise<void> {
   const rl = readline.createInterface({ input: opts.input, crlfDelay: Infinity });
   // Per-connection subscription registry. Each entry is the unsubscribe fn
@@ -769,6 +790,7 @@ export async function serveMcpStdio(opts: {
         emitProgress,
         readOnly: opts.readOnly,
         allowedTools: opts.allowedTools,
+        capabilities: opts.capabilities,
       });
       if (dispatch.kind === "ignored" || isNotification) continue;
       writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
