@@ -1,7 +1,7 @@
 {
   "name": "sign-cli",
   "version": "0.5.0",
-  "description": "CLI for consent-gated, auditable e-sign workflows with Dropbox Sign, DocuSign, SignWell, and a built-in local provider — with embedded signing, webhook ingest, audit-chain verification, RFC 3161 timestamping, PDF signature inspection, and a verifiable PAdES signer for offline demos.",
+  "description": "Signing CLI for AI agents and ops people who want a verifiable audit trail. Per-signer tokens, declarative policies, an MCP server, RFC 3161 timestamping, and re-verifiable receipt bundles — over Dropbox Sign / DocuSign / SignWell or a no-account local provider.",
   "private": false,
   "type": "module",
   "license": "MIT",

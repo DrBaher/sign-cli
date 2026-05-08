@@ -1,21 +1,41 @@
 # sign-cli
 
-> **TL;DR**
-> - **Agent-as-signer** for `--provider local`: per-signer tokens, declarative policy, MCP server. ([signer-side flow](#signer-side-flow-agent-friendly), [MCP server](#mcp-server-for-llm-agents))
-> - **Compliance-grade audit**: hash-chained events, RFC 3161 timestamping, signed receipt bundles. ([trust beyond the provider](#trust-beyond-the-provider))
-> - **Bring-your-own-provider**: Dropbox Sign / DocuSign / SignWell with a built-in local simulator that needs no signup. ([providers](#commands))
+**A signing CLI for AI agents and ops people who want a verifiable audit trail.**
+Per-signer tokens, declarative policies, an MCP server, RFC 3161 timestamping,
+and re-verifiable receipt bundles — all with a no-account local provider so you
+can try it in 30 seconds before pointing it at Dropbox Sign / DocuSign / SignWell.
 
 ```bash
-npx sign-cli demo                    # zero-account end-to-end demo (local provider)
-sign --help                          # grouped command index
-sign examples                        # 7 curated walkthroughs
-sign --catalog json | jq             # machine-readable command + flag catalog
-sign mcp serve                       # stdio MCP server for LLM agents
+npx sign-cli demo
 ```
 
-## Quick start
+That single command runs the entire lifecycle — create → send → sign → verify
+chain → export receipt — against an offline local provider, then deletes
+everything. No signup. No keys. About 5 seconds.
 
-No accounts? No keys? No clone? Just run the demo:
+## Read in this order
+
+1. **[Recipes](docs/recipes/README.md)** — short end-to-end guides (sign as Alice, weekly anchor, auditor handoff, agent loop over MCP).
+2. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
+3. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
+4. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
+
+## Why this exists
+
+Most signing tools assume a human sits at a browser. This one assumes:
+
+- An **agent** wants to sign on someone's behalf with a declarative policy, not a webhook.
+- An **auditor** wants to re-verify a year-old signature without trusting that today's database is honest.
+- An **operator** wants to swap providers (or run offline) without rewriting their automation.
+
+What you get:
+
+- **Agent-friendly**: stdio MCP server with typed input/output schemas, capability scoping, allow-list tools, NDJSON replay log.
+- **Provider-agnostic**: Dropbox Sign / DocuSign / SignWell, plus a built-in local simulator that needs no signup.
+- **Verifiable**: hash-chained audit events, append-only triggers, RFC 3161 cross-request anchors, self-contained receipt bundles.
+
+## Quick start (no clone)
+
 ```bash
 npx sign-cli demo
 ```
@@ -34,8 +54,6 @@ node dist/cli.js init
 node dist/cli.js doctor providers
 ```
 `sign init` walks you through provider selection and writes a `.env`. `doctor providers` confirms it's wired up. See [ONBOARDING.md](./ONBOARDING.md) for the longer path.
-
-End-to-end recipes (sign as Alice, weekly anchor, auditor handoff, agent loop) live in [`docs/recipes/`](./docs/recipes/README.md).
 
 ## What this gives you
 - Human approval tokens (single-use, TTL)
