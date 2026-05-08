@@ -148,6 +148,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "request bulk-resend",
+    summary: "Re-issue signer tokens en masse from a CSV roster. Rows: request_id,signer_email[,token_ttl_minutes]. Per-row failures (signer-not-recipient, already-signed, missing approval) are captured so the batch keeps going. Exits 3 if any row failed.",
+    flags: [
+      { name: "--csv", required: true, description: "CSV with request_id + signer_email columns." },
+      { name: "--token-ttl-minutes", description: "Default TTL for new tokens (default 30); overridable per row." },
+      { name: "--emit-tokens", description: "Write a tokens roster to this path (the canonical artifact; stdout strips raw tokens)." },
+    ],
+  },
+  {
     command: "request list",
     summary: "List recent requests from local SQLite. JSON by default; --format table renders a fixed-width grep-able view.",
     flags: [

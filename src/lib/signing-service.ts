@@ -3575,6 +3575,96 @@ export function reissueSignerToken(
   };
 }
 
+export type BulkResendOutcome = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    row: number;
+    requestId: string | null;
+    signerEmail: string | null;
+    ok: boolean;
+    token: string | null;
+    tokenHint: string | null;
+    expiresAt: string | null;
+    error: { code: string; message: string } | null;
+  }>;
+};
+
+// Bulk re-issue signer tokens from a roster of {requestId, signerEmail}.
+// Per-row failures are captured (signer-not-recipient, already-signed, missing
+// request) so a single bad record can't poison the batch. Caller controls the
+// default TTL via tokenTtlMinutes; per-row override comes from the row itself.
+export function bulkReissueSignerTokens(
+  db: SqliteDb,
+  input: {
+    rows: Array<{ requestId?: string; signerEmail?: string; tokenTtlMinutes?: number }>;
+    tokenTtlMinutes?: number;
+    now?: Date;
+    onProgress?: (event: { row: number; total: number; phase: "reissuing" | "done" | "error"; requestId?: string; signerEmail?: string; error?: string }) => void;
+  },
+): BulkResendOutcome {
+  const onProgress = input.onProgress ?? (() => {});
+  const results: BulkResendOutcome["results"] = [];
+  let succeeded = 0;
+  let failed = 0;
+  for (let i = 0; i < input.rows.length; i += 1) {
+    const row = input.rows[i];
+    const rowNumber = i + 1;
+    const requestId = row.requestId?.trim() ?? "";
+    const signerEmail = row.signerEmail?.trim() ?? "";
+    if (!requestId || !signerEmail) {
+      const error = "row is missing request_id and/or signer_email";
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "error", requestId, signerEmail, error });
+      results.push({
+        row: rowNumber,
+        requestId: requestId || null,
+        signerEmail: signerEmail || null,
+        ok: false,
+        token: null, tokenHint: null, expiresAt: null,
+        error: { code: "INVALID_ARGS", message: error },
+      });
+      failed += 1;
+      continue;
+    }
+    onProgress({ row: rowNumber, total: input.rows.length, phase: "reissuing", requestId, signerEmail });
+    try {
+      const outcome = reissueSignerToken(db, {
+        requestId,
+        signerEmail,
+        tokenTtlMinutes: row.tokenTtlMinutes ?? input.tokenTtlMinutes,
+        now: input.now,
+      });
+      results.push({
+        row: rowNumber,
+        requestId: outcome.requestId,
+        signerEmail: outcome.signerEmail,
+        ok: true,
+        token: outcome.token,
+        tokenHint: outcome.tokenHint,
+        expiresAt: outcome.expiresAt,
+        error: null,
+      });
+      succeeded += 1;
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "done", requestId, signerEmail });
+    } catch (error) {
+      const code = error instanceof SignCliError ? error.code : "INTERNAL";
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({
+        row: rowNumber,
+        requestId,
+        signerEmail,
+        ok: false,
+        token: null, tokenHint: null, expiresAt: null,
+        error: { code, message },
+      });
+      failed += 1;
+      onProgress({ row: rowNumber, total: input.rows.length, phase: "error", requestId, signerEmail, error: message });
+    }
+  }
+  return { total: input.rows.length, succeeded, failed, results };
+}
+
 export type FetchUnsignedDocumentResult = {
   requestId: string;
   providerRequestId: string;
