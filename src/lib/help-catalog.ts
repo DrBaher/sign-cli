@@ -379,6 +379,13 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "audit verify-chain-bundle",
+    summary: "Re-check a previously-issued chain bundle in one shot. No DB needed — the bundle is supposed to be self-contained. Re-hashes the anchor manifest and confirms the digest matches INDEX.json; runs verifyRequestReceiptBundle on every per-request directory. Exits 3 on any failure.",
+    flags: [
+      { name: "--bundle", required: true, description: "Path to a directory previously written by `audit chain-bundle`." },
+    ],
+  },
+  {
     command: "audit chain-bundle",
     summary: "Self-contained compliance bundle. Writes a directory containing INDEX.json + the most recent anchor (.tsr + manifest.json) + a per-request receipt bundle for every request that has audit events. Self-contained — auditors can re-verify offline (re-hash the anchor manifest, compare to .tsr; verifyRequestReceiptBundle each request).",
     flags: [
