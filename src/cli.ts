@@ -39,6 +39,7 @@ import { loadSignWellWebhookPayloadFile, requireSignWellWebhookSecret, verifySig
 import {
   approveSigningRequest,
   buildProviderMatrix,
+  bulkReissueSignerTokens,
   bulkSendFromCsv,
   cancelSigningRequest,
   declineSigningRequestAsSigner,
@@ -168,6 +169,7 @@ sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--i
 sign request remind --request-id <id> [--provider dropbox|docusign|signwell] [--email signer@example.com]
 sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
 sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json]
+sign request bulk-resend --csv ./resend.csv [--token-ttl-minutes 30] [--emit-tokens ./tokens.json]   (re-issue signer tokens from a CSV roster — rows: request_id,signer_email[,token_ttl_minutes]; per-row failures are captured, exits 3 if any failed)
 sign request list [--provider dropbox|docusign|signwell|local] [--status created|sent|approved|completed|canceled] [--since 2026-05-01T00:00:00Z] [--limit 100] [--format json|table]
 sign request show --request-id <id>
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
@@ -1166,6 +1168,47 @@ async function main(): Promise<void> {
       fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
       fs.writeFileSync(resolved, JSON.stringify(roster, null, 2));
       // Strip raw tokens from the public stdout output — the file is the canonical artifact.
+      result.results = result.results.map((r) => ({ ...r, token: r.token ? "<written-to-file>" : null }));
+    }
+    console.log(JSON.stringify(result, null, 2));
+    if (result.failed > 0) process.exitCode = 3;
+    return;
+  }
+
+  if (root === "request" && sub === "bulk-resend") {
+    const csvPath = flagValue(parsed, "csv", true)!;
+    const tokenTtlMinutes = flagValue(parsed, "token-ttl-minutes") ? Number(flagValue(parsed, "token-ttl-minutes")) : undefined;
+    const csvRows = await loadCsvFile(csvPath);
+    validateBulkRowCount(csvRows.length);
+    const logger = createLogger({ mode: resolveLogMode(flagValue(parsed, "log")) });
+    const rows = csvRows.map((row) => ({
+      requestId: (row.request_id ?? row.requestId ?? "").trim(),
+      signerEmail: (row.signer_email ?? row.signerEmail ?? row.email ?? "").trim(),
+      tokenTtlMinutes: row.token_ttl_minutes || row.tokenTtlMinutes
+        ? Number(row.token_ttl_minutes ?? row.tokenTtlMinutes)
+        : undefined,
+    }));
+    const result = bulkReissueSignerTokens(db, {
+      rows,
+      tokenTtlMinutes,
+      onProgress: (event) => logger.info("bulk-resend", event),
+    });
+    const emitTokensPath = flagValue(parsed, "emit-tokens");
+    if (emitTokensPath) {
+      const fs = await import("node:fs");
+      const pathMod = await import("node:path");
+      const roster = result.results
+        .filter((r) => r.ok && r.token)
+        .map((r) => ({
+          row: r.row,
+          requestId: r.requestId,
+          signerEmail: r.signerEmail,
+          token: r.token,
+          tokenExpiresAt: r.expiresAt,
+        }));
+      const resolved = pathMod.resolve(emitTokensPath);
+      fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
+      fs.writeFileSync(resolved, JSON.stringify(roster, null, 2));
       result.results = result.results.map((r) => ({ ...r, token: r.token ? "<written-to-file>" : null }));
     }
     console.log(JSON.stringify(result, null, 2));
