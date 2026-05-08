@@ -157,7 +157,7 @@ sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minu
 sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
-sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson]   (long-running: tail the inbox + apply the policy to every new entry; --report streams every evaluated entry to a file for offline replay/audit; exits 3 if any row failed, 4 on timeout)
+sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson] [--on-decision "<cmd>"]   (long-running: tail the inbox + apply the policy; --on-decision spawns <cmd> per entry with the entry JSON on stdin and SIGN_HOOK_* env vars; exits 3 if any row failed, 4 on timeout)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
 sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
 sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
@@ -956,7 +956,9 @@ async function main(): Promise<void> {
       fs.mkdirSync(pathMod.dirname(resolved), { recursive: true });
       reportStream = fs.createWriteStream(resolved, { flags: "a" });
     }
-    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""}${reportPath ? ` → ${reportPath}` : ""} (Ctrl+C to stop)\n`);
+    const onDecisionCmd = flagValue(parsed, "on-decision");
+    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""}${reportPath ? ` → ${reportPath}` : ""}${onDecisionCmd ? ` | hook: ${onDecisionCmd}` : ""} (Ctrl+C to stop)\n`);
+    const { spawn } = await import("node:child_process");
     const outcome = await runSignerPolicyWatch(db, {
       tokens, spec, signerEmail, exitOnFirst, timeoutMs, pollIntervalMs, dryRun,
       onEntry: (entry) => {
@@ -964,6 +966,32 @@ async function main(): Promise<void> {
         process.stderr.write(`${tag} ${entry.requestId}${entry.error ? ` ${entry.error.code}: ${entry.error.message}` : ""}\n`);
         if (reportStream) {
           reportStream.write(JSON.stringify({ ...entry, observedAt: new Date().toISOString() }) + "\n");
+        }
+        if (onDecisionCmd) {
+          // Spawn the hook as a child process; pipe the entry as JSON on
+          // stdin. Don't wait on the child — fire-and-forget keeps the
+          // watcher loop responsive. Errors land on stderr but don't
+          // affect the watcher's exit code.
+          try {
+            const child = spawn(onDecisionCmd, [], {
+              stdio: ["pipe", "inherit", "inherit"],
+              shell: true,
+              env: {
+                ...process.env,
+                SIGN_HOOK_REQUEST_ID: entry.requestId,
+                SIGN_HOOK_SIGNER_EMAIL: entry.signerEmail ?? "",
+                SIGN_HOOK_OK: String(entry.ok),
+                SIGN_HOOK_ACTION: entry.decision?.action ?? "",
+                SIGN_HOOK_SKIPPED: String(entry.skipped),
+              },
+            });
+            child.on("error", (err) => {
+              process.stderr.write(`[signer policy run-watch] hook spawn error: ${(err as Error).message}\n`);
+            });
+            child.stdin.end(JSON.stringify(entry) + "\n");
+          } catch (err) {
+            process.stderr.write(`[signer policy run-watch] hook spawn failed: ${(err as Error).message}\n`);
+          }
         }
       },
     });
