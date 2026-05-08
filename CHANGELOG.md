@@ -2,6 +2,52 @@
 
 All notable changes to `sign-cli`. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/).
 
+`scripts/changelog.mjs` prints a Keep-a-Changelog-shaped block for commits
+since the last tag — use it to seed the `[Unreleased]` section before a
+release.
+
+## [Unreleased]
+
+### Added
+
+- **Postgres async surface** — every read-only audit primitive (`verifyAuditChainAsync`, `listAuditEventsAsync`, `searchAuditEventsAsync`) and most write primitives (`appendAuditEventAsync`, `tryClaimWebhookEventAsync`, `insertApprovalRowAsync`, `insertArtifactRowAsync`, `markApprovalUsedAsync`, `markAllRequestApprovalsUsedAsync`, `updateRequestStatusAsync`, `reissueApprovalTokenRowAsync`, `persistRequestProviderMetadataAsync`) now run against `PostgresBackend`. Driver-level dialect translation (`?` → `$N`) handled by `db-backend.ts`.
+- **`sign db postgres-smoke`** — eight-step integration probe for the async path: bootstrap → insert → extend chain → verify → list → search. Use after `sign db migrate-postgres` to confirm a fresh deployment.
+- **`sign db migrate-postgres`** — Postgres-flavor schema bootstrap with PL/pgSQL append-only triggers. Idempotent.
+- **`sign db rotate-keys`** — re-issues the local signer keypair with timestamped backups. `--re-sign-receipts true` walks every prior receipt and re-signs each manifest with the new key.
+- **`sign audit anchor`** — cross-request RFC 3161 anchoring with `--since`, `--since-anchor`, and `--dry-run` modes. Companion commands: `audit anchors-list`, `audit verify-anchor`.
+- **`sign audit chain-bundle`** — self-contained compliance directory (anchor + per-request receipts + INDEX.json). `--tarball` writes a portable `.tar.gz` (pure-Node USTAR + gzip writer); `--include-source-pdf true` includes the unsigned PDF for reproducibility.
+- **`sign audit verify-chain-bundle`** — re-checks a stored bundle (dir or tarball) and reports per-request results; `--report` streams NDJSON.
+- **`sign audit show`** gains `--format pretty` (human-readable timeline), `--format csv` (RFC 4180), `--event-type` (repeatable), and `--since`/`--until` (time window).
+- **`sign audit search`** — log-style cross-request filter with `--request-id`, `--event-type`, `--since`, `--until`, `--payload-contains`.
+- **`sign signer policy lint`** — static checks (invalid regex, empty rules, unreachable rules, redundant rules, decline-without-reason, contradictory rules).
+- **`sign signer policy diff`** — preview action flips between two specs against a snapshot or the inbox; `--format markdown` renders a reviewer-friendly table.
+- **`sign signer policy try`** — offline tester; `--batch` evaluates an array of contexts in one shot.
+- **`sign signer policy run-watch`** — long-running tail-the-inbox + apply-policy loop. Flags: `--report` (NDJSON), `--on-decision <cmd>` (shellout hook), `--since-anchor` (skip already-anchored chains).
+- **`sign request rerun-policy`** — re-evaluate a stored request against an updated spec. Pure read.
+- **`sign request bulk-resend`** — re-issue tokens en masse from a CSV roster.
+- **`sign request show`** gains `--hash-only true` (stable digest triple) and `--recipient <email>` (redacted single-signer view).
+- **`sign request list`** gains `--since`, `--format json|table`.
+- **`sign metrics show` / `sign metrics ship`** — Prometheus text output and a long-running pusher; `--batched` coalesces N snapshots per HTTP body.
+- **`sign serve --rate-limit`** — token-bucket per-IP gate with `X-RateLimit-*` headers and `Retry-After`.
+- **`sign serve --read-only` + `sign mcp serve --read-only`** — block lifecycle-mutating endpoints/tools with `FORBIDDEN_READ_ONLY`.
+- **`sign mcp serve`** gains `--tool` allow-list, `--capability` toggle (tools/resources/prompts), `--emit-events` NDJSON tee log, `--emit-events-redact true` (mask token-shaped fields).
+- **`sign serve --web-demo true`** — bundled static HTML/CSS/JS dashboard served from same origin under `/web-demo/*` (no CORS).
+- **MCP tool catalog** — every tool ships an `inputSchema` and most ship an `outputSchema`; `request_watch` ships a `progressSchema`. `sign mcp tools --format markdown` renders the catalog as a docs page.
+- **Selftest MCP leg** — `runSelftest` now also drives `initialize`, `tools/list`, `tools/call request_show`, `tools/call audit_verify` through the JSON-RPC server.
+
+### Refactor
+
+- All `INSERT INTO artifacts` call sites route through `insertArtifactRow`. Sync write primitives now share SQL constants + parameter projections with their async siblings — column order can't drift.
+
+### Docs
+
+- New `docs/recipes/` — sign-as-Alice, weekly anchor, auditor handoff, agent loop over MCP.
+- New `docs/architecture.md` — mermaid diagram + layer-by-layer prose.
+- New `docs/comparison.md` — frank pros/cons vs. SaaS providers and DIY.
+- New `docs/compliance-posture.md` — explicit threat model + what the audit chain proves and doesn't.
+- New `integrations/` — Claude Desktop config + langchain wrapper starters.
+- README intro tightened: one-line lede, `npx sign-cli demo` above the fold, "Read in this order" pointer to the four entry points.
+
 ## [0.5.0] — 2026-05-07
 
 A large discoverability + agent-as-signer release.
