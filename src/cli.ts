@@ -159,7 +159,7 @@ sign signer policy run --request-id <id> --token <token> --spec ./policy.json [-
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
 sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson] [--on-decision "<cmd>"] [--since-anchor latest|<artifactId>]   (long-running: tail the inbox + apply the policy; --since-anchor evaluates only entries created after the named anchor was issued; exits 3 if any row failed, 4 on timeout)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
-sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
+sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>]) [--format json|markdown]   (preview action changes between two specs; --format markdown renders a reviewer-friendly table)
 sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
 sign request send-embedded --request-id <id> [--client-id <clientId>] [--provider dropbox|docusign|signwell] [--test-mode true]
@@ -857,6 +857,19 @@ async function main(): Promise<void> {
       }
     }
     const summary = diffPolicies(before, after, contexts);
+    const format = (flagValue(parsed, "format") ?? "json").toLowerCase();
+    if (format === "markdown") {
+      const { renderPolicyDiffAsMarkdown } = await import("./lib/policy-diff.js");
+      process.stdout.write(renderPolicyDiffAsMarkdown(summary, { before: beforePath, after: afterPath }));
+      process.stdout.write("\n");
+      return;
+    }
+    if (format !== "json") {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `--format must be json or markdown; got ${JSON.stringify(format)}.`,
+      });
+    }
     console.log(JSON.stringify({ before: beforePath, after: afterPath, ...summary }, null, 2));
     return;
   }

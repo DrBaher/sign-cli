@@ -86,3 +86,47 @@ function safeEvaluate(
     };
   }
 }
+
+// Render a diff summary as a Markdown report. Produces a top-level rollup
+// (totals + flipped breakdown) followed by one row per result, ordered
+// changed-first so a reviewer scrolls to the meaningful entries
+// immediately.
+export function renderPolicyDiffAsMarkdown(
+  summary: PolicyDiffSummary,
+  meta: { before: string; after: string },
+): string {
+  const lines: string[] = [];
+  lines.push("# Policy diff");
+  lines.push("");
+  lines.push(`- before: \`${meta.before}\``);
+  lines.push(`- after:  \`${meta.after}\``);
+  lines.push(`- total:  ${summary.total}`);
+  lines.push(`- changed: **${summary.changed}** (sign: ${summary.flipped.sign}, decline: ${summary.flipped.decline}, report: ${summary.flipped.report})`);
+  lines.push(`- unchanged: ${summary.unchanged}`);
+  lines.push("");
+  if (summary.results.length === 0) {
+    lines.push("_No contexts to diff._");
+    return lines.join("\n");
+  }
+  lines.push("| changed | requestId | title | signerEmail | before → after | reason |");
+  lines.push("|---|---|---|---|---|---|");
+  // Sort changed-first so the most important rows surface to the top.
+  const sorted = [...summary.results].sort((a, b) =>
+    Number(b.changed) - Number(a.changed),
+  );
+  for (const row of sorted) {
+    const flag = row.changed ? "✓" : " ";
+    const transition = `${row.before.action} → ${row.after.action}`;
+    const reason = (row.changed ? row.after.reason : null) ?? "—";
+    lines.push(
+      `| ${flag} | \`${row.ctx.requestId ?? "—"}\` | ${escapeCell(row.ctx.title)} | ${escapeCell(row.ctx.signerEmail)} | ${transition} | ${escapeCell(reason)} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function escapeCell(value: string): string {
+  // Markdown table cells: escape pipes and backticks so a malicious title can't
+  // break out of the row. Newlines in titles/reasons are rare but break tables.
+  return String(value).replace(/[|`]/g, (c) => `\\${c}`).replace(/\n/g, " ");
+}
