@@ -138,6 +138,7 @@ export async function exportAuditChainBundle(
 // shouldn't require the issuing system to still exist.
 
 import { verifyRequestReceiptBundle } from "./receipt-verify.js";
+import { extractTarToDir } from "./tar.js";
 import { sha256, stableStringify } from "./util.js";
 
 export type BundleVerifyRow = {
@@ -270,4 +271,48 @@ export async function verifyAuditChainBundle(bundleDir: string): Promise<BundleV
     results,
     errors,
   };
+}
+
+// Tarball-aware front door. Accepts either:
+//   { bundleDir }  — directory bundle (delegates to verifyAuditChainBundle)
+//   { tarball }    — .tar.gz produced by `audit chain-bundle --tarball`;
+//                    extracted to a temp directory, then verified, then
+//                    cleaned up (preserves nothing on disk).
+//
+// Detects the on-disk top-level directory inside the archive (basename of
+// the bundle when it was produced) and verifies that nested directory
+// directly. Refuses to extract outside the temp dir (path-traversal guard
+// already lives in extractTarToDir).
+export async function verifyAuditChainBundleFromTarball(tarballPath: string): Promise<BundleVerifyReport> {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sign-verify-tarball-"));
+  try {
+    try {
+      const raw = fs.readFileSync(tarballPath);
+      const isGzip = raw[0] === 0x1f && raw[1] === 0x8b;
+      const tarBytes = isGzip ? (await import("node:zlib")).gunzipSync(raw) : raw;
+      extractTarToDir(tarBytes, tempRoot);
+    } catch (error) {
+      return {
+        ok: false, bundleDir: tempRoot, indexPath: path.join(tempRoot, "INDEX.json"),
+        anchor: { present: false }, total: 0, passed: 0, failed: 0, results: [],
+        errors: [`failed to read tarball at ${tarballPath}: ${(error as Error).message}`],
+      };
+    }
+    // Look for the on-disk root: either INDEX.json sits at the temp root
+    // (rare — happens if the archive was produced with rootName === "."), or
+    // it's one level deep (the typical "bundle/INDEX.json" layout).
+    let bundleDir = tempRoot;
+    if (!fs.existsSync(path.join(tempRoot, "INDEX.json"))) {
+      const inner = fs.readdirSync(tempRoot);
+      if (inner.length === 1 && fs.statSync(path.join(tempRoot, inner[0])).isDirectory()) {
+        bundleDir = path.join(tempRoot, inner[0]);
+      }
+    }
+    return await verifyAuditChainBundle(bundleDir);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
