@@ -38,6 +38,9 @@ type ToolDefinition = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  // Optional output schema — JSON Schema for the success-case result. Lets
+  // generic agent loops validate responses without per-tool special-casing.
+  outputSchema?: Record<string, unknown>;
   handler: ToolHandler;
 };
 
@@ -75,6 +78,20 @@ const TOOLS: ToolDefinition[] = [
       type: "object",
       properties: { signer_email: { type: "string", description: "Signer email to filter by." } },
     },
+    outputSchema: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          documentId: { type: "string" },
+          requestId: { type: ["string", "null"] },
+          title: { type: "string" },
+          status: { type: "string" },
+          signers: { type: "array" },
+          tokens: { type: "array" },
+        },
+      },
+    },
     handler: (db, args) => listSignerInbox(db, { signerEmail: str(args, "signer_email") }),
   },
   {
@@ -91,6 +108,18 @@ const TOOLS: ToolDefinition[] = [
         out_path: { type: "string", description: "Optional path to write the unsigned PDF." },
       },
       required: ["request_id", "token"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        providerRequestId: { type: "string" },
+        signerEmail: { type: "string" },
+        title: { type: "string" },
+        bytes: { type: "number" },
+        sha256: { type: "string" },
+        outPath: { type: ["string", "null"] },
+      },
     },
     handler: (db, args) =>
       fetchUnsignedDocumentForSigner(db, {
@@ -119,6 +148,16 @@ const TOOLS: ToolDefinition[] = [
       },
       required: ["request_id", "token"],
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        signerEmail: { type: "string" },
+        signedAt: { type: "string" },
+        status: { type: "string" },
+        signedDocumentPath: { type: ["string", "null"] },
+      },
+    },
     handler: (db, args) =>
       signSigningRequest(db, {
         requestId: requiredStr(args, "request_id"),
@@ -143,6 +182,16 @@ const TOOLS: ToolDefinition[] = [
       },
       required: ["request_id", "token"],
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        signerEmail: { type: "string" },
+        declinedAt: { type: "string" },
+        reason: { type: ["string", "null"] },
+        status: { type: "string" },
+      },
+    },
     handler: (db, args) =>
       declineSigningRequestAsSigner(db, {
         requestId: requiredStr(args, "request_id"),
@@ -161,6 +210,16 @@ const TOOLS: ToolDefinition[] = [
       properties: { request_id: { type: "string" } },
       required: ["request_id"],
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        request: { type: "object" },
+        approvals: { type: "array" },
+        signedBy: { type: "array" },
+        declinedBy: { type: ["string", "null"] },
+        nextSteps: { type: "array", items: { type: "string" } },
+      },
+    },
     handler: (db, args) => getRequestSnapshot(db, requiredStr(args, "request_id")),
   },
   {
@@ -175,6 +234,16 @@ const TOOLS: ToolDefinition[] = [
         provider: { type: "string", enum: ["dropbox", "docusign", "signwell", "local"] },
       },
       required: ["request_id"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        provider: { type: "string" },
+        status: { type: "string" },
+        providerStatus: { type: ["string", "null"] },
+        terminal: { type: ["string", "null"] },
+      },
     },
     handler: async (db, args) => {
       const provider = resolveProviderArg(args);
@@ -193,6 +262,14 @@ const TOOLS: ToolDefinition[] = [
       properties: { request_id: { type: "string" } },
       required: ["request_id"],
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        valid: { type: "boolean" },
+        events: { type: "number" },
+        break: { type: ["object", "null"] },
+      },
+    },
     handler: (db, args) => verifyRequestAuditChain(db, requiredStr(args, "request_id")),
   },
   {
@@ -209,6 +286,15 @@ const TOOLS: ToolDefinition[] = [
         timeout_ms: { type: "number" },
       },
       required: ["request_id"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        terminal: { type: ["string", "null"] },
+        attempts: { type: "number" },
+        finalStatus: { type: "string" },
+      },
     },
     handler: async (db, args, ctx) => {
       const provider = resolveProviderArg(args);
@@ -267,8 +353,41 @@ function validateToolArgs(
   return { ok: true };
 }
 
-export function listMcpTools(): Array<Pick<ToolDefinition, "name" | "description" | "inputSchema">> {
-  return TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+export function listMcpTools(): Array<Pick<ToolDefinition, "name" | "description" | "inputSchema" | "outputSchema">> {
+  return TOOLS.map(({ name, description, inputSchema, outputSchema }) => ({
+    name,
+    description,
+    inputSchema,
+    ...(outputSchema ? { outputSchema } : {}),
+  }));
+}
+
+// Markdown renderer for the tools catalog. Useful for `sign mcp tools --format markdown`
+// when generating docs for non-MCP clients building generic agent loops.
+export function renderMcpToolsAsMarkdown(): string {
+  const tools = listMcpTools();
+  const lines: string[] = ["# MCP tools", "", `Sign-cli exposes ${tools.length} MCP tools. Each tool has a JSON-Schema input contract; tools that return a structured response also expose an outputSchema.`, ""];
+  for (const tool of tools) {
+    lines.push(`## \`${tool.name}\``);
+    lines.push("");
+    lines.push(tool.description);
+    lines.push("");
+    lines.push("### Input");
+    lines.push("");
+    lines.push("```json");
+    lines.push(JSON.stringify(tool.inputSchema, null, 2));
+    lines.push("```");
+    lines.push("");
+    if (tool.outputSchema) {
+      lines.push("### Output");
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(tool.outputSchema, null, 2));
+      lines.push("```");
+      lines.push("");
+    }
+  }
+  return lines.join("\n");
 }
 
 type ResourceUriParts = { kind: "snapshot" | "document" | "audit"; requestId: string };

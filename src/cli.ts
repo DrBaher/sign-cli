@@ -26,7 +26,7 @@ import {
   HELP_CATALOG,
 } from "./lib/help-catalog.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
-import { listMcpTools, serveMcpStdio } from "./lib/mcp-server.js";
+import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
@@ -182,6 +182,7 @@ sign db verify
 sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend; postgres is stubbed today — see MIGRATION.md)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
+sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
 sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https; --web-demo serves the bundled dashboard at /web-demo/index.html)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
@@ -1464,6 +1465,17 @@ async function main(): Promise<void> {
   }
 
   if (root === "mcp" && sub === "tools") {
+    const format = (flagValue(parsed, "format") ?? "json").toLowerCase();
+    if (format !== "json" && format !== "markdown") {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `--format must be json or markdown; got ${JSON.stringify(format)}.`,
+      });
+    }
+    if (format === "markdown") {
+      process.stdout.write(renderMcpToolsAsMarkdown());
+      return;
+    }
     console.log(JSON.stringify({ tools: listMcpTools() }, null, 2));
     return;
   }

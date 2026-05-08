@@ -214,6 +214,18 @@ test("listMcpTools shapes match the input schema contract", () => {
   }
 });
 
+test("listMcpTools exposes outputSchema for every tool so generic agents can validate responses", () => {
+  const tools = listMcpTools();
+  for (const tool of tools) {
+    assert.ok(
+      tool.outputSchema && typeof tool.outputSchema === "object",
+      `tool "${tool.name}" should expose an outputSchema`,
+    );
+    const t = (tool.outputSchema as { type?: string }).type;
+    assert.ok(t === "object" || t === "array", `tool "${tool.name}" outputSchema.type must be object or array`);
+  }
+});
+
 test("serveMcpStdio handles initialize + tools/list + tools/call over piped streams", { concurrency: false }, async () => {
   await withScopedLocalStorage(async () => {
     const ctx = await bootstrap();
