@@ -57,3 +57,76 @@ export function attachPrettyAuditPrinter(
   });
   return unsubscribe;
 }
+
+// --- Static timeline renderer -----------------------------------------------
+// Render a fixed snapshot of audit events as a multi-line timeline. Different
+// from formatAuditLine + attachPrettyAuditPrinter which run live (subscribed
+// to new events) — this one is the one-shot dump for `audit show --format
+// pretty`.
+//
+// Output shape per event:
+//
+//   2026-05-08T12:00:00.000Z  [event_type]
+//     hash: 1a2b…cdef  prev: aabb…1234
+//     key=value  key=value  …          (top-level scalar payload fields)
+//
+// No shell colors — pipe through `bat` or `less -R` for highlighting.
+
+export type PrettyAuditEvent = {
+  id: number;
+  event_type: string;
+  payload_json: string;
+  hash_prev: string | null;
+  hash_self: string;
+  created_at: string;
+};
+
+export function renderAuditChainAsPretty(events: ReadonlyArray<PrettyAuditEvent>): string {
+  if (events.length === 0) return "(no events)";
+  const lines: string[] = [];
+  for (const event of events) {
+    lines.push(`${event.created_at}  [${event.event_type}]`);
+    lines.push(`  hash: ${shortHashStatic(event.hash_self)}  prev: ${event.hash_prev === null ? "(genesis)" : shortHashStatic(event.hash_prev)}`);
+    const summary = summarizePayload(event.payload_json);
+    if (summary) lines.push(`  ${summary}`);
+  }
+  return lines.join("\n");
+}
+
+function shortHashStatic(hex: string): string {
+  if (hex.length <= 16) return hex;
+  return `${hex.slice(0, 6)}…${hex.slice(-4)}`;
+}
+
+function summarizePayload(payloadJson: string): string {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadJson);
+  } catch {
+    return abbreviate(payloadJson, 80);
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return abbreviate(payloadJson, 80);
+  }
+  const obj = payload as Record<string, unknown>;
+  const scalars: string[] = [];
+  let hasNested = false;
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      const rendered = typeof value === "string" ? `"${abbreviate(value, 40)}"` : String(value);
+      scalars.push(`${key}=${rendered}`);
+    } else {
+      hasNested = true;
+    }
+  }
+  let line = scalars.join("  ");
+  if (hasNested) {
+    line = line.length > 0 ? `${line}  …` : abbreviate(payloadJson, 80);
+  }
+  return line;
+}
+
+function abbreviate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
