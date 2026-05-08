@@ -188,6 +188,7 @@ sign db indexes-postgres --pg-url postgres://… [--schema public] [--explain "S
 sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: VACUUM + PRAGMA optimize; Postgres: VACUUM ANALYZE)
 sign db rotate-keys [--key-dir ./data/local-keys] [--re-sign-receipts true]   (re-issue the local signer keypair; --re-sign-receipts also walks every previously-issued receipt and re-signs each manifest with the new key; records request.receipt_resigned per row)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
+sign db postgres-smoke --pg-url postgres://…   (end-to-end async-against-pg integration probe — bootstrap + insert + chain extension + verify; exits 3 on any step failure)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve [--read-only true] [--tool <name> ...] [--capability tools|resources|prompts ...] [--emit-events ./mcp.ndjson [--emit-events-redact true]]  (stdio MCP server; --emit-events tees every JSON-RPC message in/out to NDJSON; --emit-events-redact masks token-shaped fields in the log; --capability/--tool/--read-only further restrict the surface)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
@@ -447,6 +448,27 @@ async function main(): Promise<void> {
       out.suggestions = suggestMissingIndexes(db, threshold ? Number(threshold) : undefined);
     }
     console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (root === "db" && sub === "postgres-smoke") {
+    const url = flagValue(parsed, "pg-url") ?? process.env.SIGN_PG_URL;
+    if (!url) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "db postgres-smoke requires --pg-url <postgres://…> (or SIGN_PG_URL env var).",
+      });
+    }
+    const { openStorageBackend } = await import("./lib/storage.js");
+    const { runPostgresSmoke } = await import("./lib/postgres-smoke.js");
+    const backend = openStorageBackend({ backend: "postgres", postgresUrl: url });
+    try {
+      const report = await runPostgresSmoke(backend);
+      console.log(JSON.stringify(report, null, 2));
+      if (!report.ok) process.exitCode = 3;
+    } finally {
+      await backend.close();
+    }
     return;
   }
 

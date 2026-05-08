@@ -537,6 +537,13 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db postgres-smoke",
+    summary: "End-to-end integration probe for the Postgres async path. Bootstraps the schema, inserts a synthetic request, extends a 3-event audit chain via appendAuditEventAsync, then verifies it via verifyAuditChainAsync + listAuditEventsAsync + searchAuditEventsAsync. Exits 3 on any step failure. Use this to confirm a fresh Postgres deployment is wired up end-to-end before pointing real workload at it.",
+    flags: [
+      { name: "--pg-url", description: "postgres://… connection string (defaults to SIGN_PG_URL)." },
+    ],
+  },
+  {
     command: "db backend",
     summary: "Report the active storage backend (sqlite | postgres).",
     flags: [{ name: "--backend", description: "Override SIGN_DB_BACKEND for this call." }],

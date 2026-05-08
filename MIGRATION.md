@@ -32,6 +32,9 @@ The stub serves three purposes:
 
 ### Postgres-readiness checklist (future PR)
 
+> **End-to-end probe**: `sign db postgres-smoke --pg-url postgres://…` exercises the bootstrap, an INSERT, three async chain extensions, verify, list, and search through `PostgresBackend`. Use it after `sign db migrate-postgres` to confirm a fresh deployment is wired up before pointing real workload at it.
+
+
 - [x] Define `DbBackend` interface with `prepare(sql) → { get, all, run }` shape. (`src/lib/db-backend.ts`)
 - [x] Wrap `DatabaseSync` in `SqliteBackend` implementing that interface. (`src/lib/db-backend.ts`)
 - [x] Stub `PostgresBackend` returning the adapter — every method throws `INTERNAL` pointing here. (`src/lib/db-backend.ts`)
