@@ -49,6 +49,7 @@ The stub serves three purposes:
   - [x] First UPDATE primitives: `updateRequestStatusAsync` and `markApprovalUsedAsync`. Sync versions now go through tiny helpers (`updateRequestStatus`, `markApprovalUsed`) that share the same SQL constants as the async siblings.
   - [x] Bulk auto-approve UPDATE + artifact INSERT: `markAllRequestApprovalsUsedAsync` (the auto-approve fast path) and `insertArtifactRowAsync` (the artifact INSERT used by export/timestamp/anchor). Sync paths route through `markAllRequestApprovalsUsed` / `insertArtifactRow` so column order stays single-source.
   - [x] Token reissue UPDATE: `reissueApprovalTokenRowAsync`. Sync `reissueSignerToken` now calls `reissueApprovalTokenRow`; both share `REISSUE_APPROVAL_TOKEN_SQL`.
+  - [x] Lifecycle multi-column UPDATE: `persistRequestProviderMetadataAsync` — the 11-placeholder CASE-based UPDATE that records provider state after a send/status-poll. Sync + async share `PERSIST_REQUEST_PROVIDER_METADATA_SQL` + `persistRequestProviderMetadataParams`.
 - [x] Postgres-flavor DDL bootstrap shipped at `src/lib/postgres-bootstrap.ts` and exposed as `sign db migrate-postgres --pg-url …`. Idempotent, includes the PL/pgSQL append-only triggers.
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.
 - [ ] Re-implement the audit-events append-only triggers as Postgres `BEFORE UPDATE/DELETE` triggers + `RAISE EXCEPTION`.

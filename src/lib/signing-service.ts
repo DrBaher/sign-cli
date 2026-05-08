@@ -491,22 +491,17 @@ function getProviderStatusValue(request: RequestRow): string | null {
   return request.provider_status ?? request.dropbox_status;
 }
 
-function persistRequestProviderMetadata(
-  db: SqliteDb,
-  input: {
-    requestId: string;
-    provider: SignProvider;
-    providerRequestId?: string | null;
-    providerStatus?: string | null;
-    signatureIds?: string[];
-    now: Date;
-  },
-): void {
-  const signatureIdsJson = input.signatureIds ? stableStringify(input.signatureIds) : null;
-  const dropboxRequestId = input.provider === "dropbox" ? input.providerRequestId ?? null : null;
-  const dropboxStatus = input.provider === "dropbox" ? input.providerStatus ?? null : null;
-  db.prepare(
-    `UPDATE requests
+type PersistRequestProviderMetadataInput = {
+  requestId: string;
+  provider: SignProvider;
+  providerRequestId?: string | null;
+  providerStatus?: string | null;
+  signatureIds?: string[];
+  now: Date;
+};
+
+const PERSIST_REQUEST_PROVIDER_METADATA_SQL =
+  `UPDATE requests
      SET provider = ?,
          provider_request_id = COALESCE(?, provider_request_id),
          provider_status = COALESCE(?, provider_status),
@@ -523,8 +518,13 @@ function persistRequestProviderMetadata(
            ELSE signature_ids_json
          END,
          updated_at = ?
-     WHERE id = ?`,
-  ).run(
+     WHERE id = ?`;
+
+function persistRequestProviderMetadataParams(input: PersistRequestProviderMetadataInput): unknown[] {
+  const signatureIdsJson = input.signatureIds ? stableStringify(input.signatureIds) : null;
+  const dropboxRequestId = input.provider === "dropbox" ? input.providerRequestId ?? null : null;
+  const dropboxStatus = input.provider === "dropbox" ? input.providerStatus ?? null : null;
+  return [
     input.provider,
     input.providerRequestId ?? null,
     input.providerStatus ?? null,
@@ -536,7 +536,21 @@ function persistRequestProviderMetadata(
     signatureIdsJson,
     nowIso(input.now),
     input.requestId,
-  );
+  ];
+}
+
+function persistRequestProviderMetadata(db: SqliteDb, input: PersistRequestProviderMetadataInput): void {
+  db.prepare(PERSIST_REQUEST_PROVIDER_METADATA_SQL).run(...persistRequestProviderMetadataParams(input) as Parameters<ReturnType<SqliteDb["prepare"]>["run"]>);
+}
+
+// Async sibling — same multi-column CASE UPDATE that records provider state
+// after a send/status-poll. 11 placeholders, every one routed through
+// prepareAsync so PostgresBackend works.
+export async function persistRequestProviderMetadataAsync(
+  backend: DbBackend,
+  input: PersistRequestProviderMetadataInput,
+): Promise<void> {
+  await backend.prepareAsync(PERSIST_REQUEST_PROVIDER_METADATA_SQL).run(...persistRequestProviderMetadataParams(input));
 }
 
 function serializeRequestRow(request: RequestRow): RequestRow & { signatureIds: string[]; documents: RequestDocument[]; fields: SignatureField[]; prefills: PrefillInput[]; normalizedProvider: SignProvider } {
