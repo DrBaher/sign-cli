@@ -97,22 +97,25 @@ type AuditEventInput = {
   now?: Date;
 };
 
-export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
+const APPEND_SELECT_PREV_SQL =
+  `SELECT hash_self
+   FROM audit_events
+   WHERE request_id = ?
+   ORDER BY id DESC
+   LIMIT 1`;
+const APPEND_INSERT_SQL =
+  `INSERT INTO audit_events (request_id, event_type, payload_json, hash_prev, hash_self, created_at)
+   VALUES (?, ?, ?, ?, ?, ?)`;
+
+// Compute the next chain entry from the previous hash. Pure — no I/O, no
+// notifications. Lifted out so the sync + async append paths share identical
+// hashing logic and can't drift.
+function buildNextChainEntry(input: AuditEventInput, prevHash: string | null): {
   hashPrev: string | null;
   hashSelf: string;
   createdAt: string;
+  payloadJson: string;
 } {
-  const previous = db
-    .prepare(
-      `SELECT hash_self
-       FROM audit_events
-       WHERE request_id = ?
-       ORDER BY id DESC
-       LIMIT 1`,
-    )
-    .get(input.requestId) as { hash_self?: string } | undefined;
-
-  const hashPrev = previous?.hash_self ?? null;
   const createdAt = nowIso(input.now);
   const payloadJson = stableStringify(input.payload);
   const hashSelf = sha256(
@@ -121,27 +124,66 @@ export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
       event_type: input.eventType,
       payload_json: payloadJson,
       created_at: createdAt,
-      hash_prev: hashPrev,
+      hash_prev: prevHash,
     }),
   );
+  return { hashPrev: prevHash, hashSelf, createdAt, payloadJson };
+}
 
-  db.prepare(
-    `INSERT INTO audit_events (request_id, event_type, payload_json, hash_prev, hash_self, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(input.requestId, input.eventType, payloadJson, hashPrev, hashSelf, createdAt);
-
+function emitPostAppendNotifications(
+  input: AuditEventInput,
+  result: { hashSelf: string; createdAt: string },
+): void {
   void maybeNotifySignerEvent({
     requestId: input.requestId,
     eventType: input.eventType,
     payload: input.payload,
-    hashSelf,
-    createdAt,
+    hashSelf: result.hashSelf,
+    createdAt: result.createdAt,
   });
-
   notifyResourceChanged(`request://${input.requestId}`);
   notifyResourceChanged(`request://${input.requestId}/audit`);
+}
 
-  return { hashPrev, hashSelf, createdAt };
+export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
+  hashPrev: string | null;
+  hashSelf: string;
+  createdAt: string;
+} {
+  const previous = db.prepare(APPEND_SELECT_PREV_SQL).get(input.requestId) as { hash_self?: string } | undefined;
+  const entry = buildNextChainEntry(input, previous?.hash_self ?? null);
+  db.prepare(APPEND_INSERT_SQL).run(
+    input.requestId,
+    input.eventType,
+    entry.payloadJson,
+    entry.hashPrev,
+    entry.hashSelf,
+    entry.createdAt,
+  );
+  emitPostAppendNotifications(input, entry);
+  return { hashPrev: entry.hashPrev, hashSelf: entry.hashSelf, createdAt: entry.createdAt };
+}
+
+// Async sibling — same chain-hashing logic, runs the SELECT + INSERT through
+// prepareAsync so it works against PostgresBackend. Sync + async share
+// buildNextChainEntry so the chain head is computed identically regardless of
+// which path appends the event.
+export async function appendAuditEventAsync(
+  backend: DbBackend,
+  input: AuditEventInput,
+): Promise<{ hashPrev: string | null; hashSelf: string; createdAt: string }> {
+  const previous = await backend.prepareAsync(APPEND_SELECT_PREV_SQL).get(input.requestId) as { hash_self?: string } | undefined;
+  const entry = buildNextChainEntry(input, previous?.hash_self ?? null);
+  await backend.prepareAsync(APPEND_INSERT_SQL).run(
+    input.requestId,
+    input.eventType,
+    entry.payloadJson,
+    entry.hashPrev,
+    entry.hashSelf,
+    entry.createdAt,
+  );
+  emitPostAppendNotifications(input, entry);
+  return { hashPrev: entry.hashPrev, hashSelf: entry.hashSelf, createdAt: entry.createdAt };
 }
 
 // Cross-request log-style search over audit_events. All filters are AND'd.
