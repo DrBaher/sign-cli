@@ -415,8 +415,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db migrate-postgres",
+    summary: "One-shot Postgres bootstrap: connects to --pg-url, creates the ported schema (CREATE TABLE IF NOT EXISTS) and the audit_events append-only triggers via PL/pgSQL. Idempotent — safe to re-run.",
+    flags: [
+      { name: "--pg-url", description: "postgres://… connection string (defaults to SIGN_PG_URL)." },
+    ],
+  },
+  {
     command: "db backend",
-    summary: "Report the active storage backend (sqlite | postgres). The Postgres backend is a documented stub today — see MIGRATION.md.",
+    summary: "Report the active storage backend (sqlite | postgres).",
     flags: [{ name: "--backend", description: "Override SIGN_DB_BACKEND for this call." }],
   },
   {
