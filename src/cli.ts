@@ -186,7 +186,7 @@ sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-ru
 sign db indexes [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (SQLite catalog: list indexes, run EXPLAIN QUERY PLAN, suggest under-indexed tables)
 sign db indexes-postgres --pg-url postgres://… [--schema public] [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (Postgres catalog: pg_indexes companion to db indexes)
 sign db vacuum [--backend sqlite|postgres] [--pg-url postgres://…]   (SQLite: VACUUM + PRAGMA optimize; Postgres: VACUUM ANALYZE)
-sign db rotate-keys [--key-dir ./data/local-keys]   (re-issue the local signer keypair; backs up the old cert+key with a timestamped suffix)
+sign db rotate-keys [--key-dir ./data/local-keys] [--re-sign-receipts true]   (re-issue the local signer keypair; --re-sign-receipts also walks every previously-issued receipt and re-signs each manifest with the new key; records request.receipt_resigned per row)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve [--read-only true] [--tool <name> ...] [--capability tools|resources|prompts ...]  (stdio Model Context Protocol server; --capability advertises only the named capabilities at initialize and refuses the matching list/read methods otherwise; --tool restricts tools/list + tools/call to the named subset; --read-only also blocks sign + signer_decline)
@@ -374,9 +374,15 @@ async function main(): Promise<void> {
 
   if (root === "db" && sub === "rotate-keys") {
     const keyDir = flagValue(parsed, "key-dir");
+    const reSign = (flagValue(parsed, "re-sign-receipts") ?? "false") === "true";
     const { rotateLocalSignerKeys } = await import("./lib/local-keys.js");
     const report = rotateLocalSignerKeys({ keyDir });
-    console.log(JSON.stringify(report, null, 2));
+    let reSignReport: unknown = null;
+    if (reSign) {
+      const { reSignAllReceipts } = await import("./lib/signing-service.js");
+      reSignReport = await reSignAllReceipts(db);
+    }
+    console.log(JSON.stringify({ ...report, reSignReceipts: reSignReport }, null, 2));
     return;
   }
 
