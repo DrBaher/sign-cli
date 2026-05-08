@@ -157,6 +157,7 @@ sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minu
 sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
+sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]   (long-running: tail the inbox + apply the policy to every new entry; exits 3 if any row failed, 4 on timeout)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
 sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
 sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
@@ -853,6 +854,55 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(outcome, null, 2));
     if (outcome.failed > 0) process.exitCode = 3;
+    return;
+  }
+
+  if (root === "signer" && sub === "policy" && action === "run-watch") {
+    const specPath = flagValue(parsed, "spec", true)!;
+    const tokensPath = flagValue(parsed, "tokens-file", true)!;
+    const signerEmail = flagValue(parsed, "signer-email");
+    const exitOnFirst = (flagValue(parsed, "exit-on-first") ?? "false") === "true";
+    const dryRun = (flagValue(parsed, "dry-run") ?? "false") === "true";
+    const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
+    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 1000 })!;
+    const fs = await import("node:fs");
+    let tokens: Record<string, string>;
+    try {
+      const raw = JSON.parse(fs.readFileSync(tokensPath, "utf8"));
+      if (Array.isArray(raw)) {
+        tokens = {};
+        for (const entry of raw as Array<{ requestId?: string; token?: string }>) {
+          if (typeof entry?.requestId === "string" && typeof entry?.token === "string") {
+            tokens[entry.requestId] = entry.token;
+          }
+        }
+      } else if (raw && typeof raw === "object") {
+        tokens = Object.fromEntries(
+          Object.entries(raw as Record<string, unknown>)
+            .filter(([, v]) => typeof v === "string") as Array<[string, string]>,
+        );
+      } else {
+        throw new Error("expected an object or an array of {requestId, token} entries");
+      }
+    } catch (error) {
+      throw new SignCliError({
+        code: "INVALID_SPEC",
+        message: `Failed to load --tokens-file ${tokensPath}: ${(error as Error).message}`,
+      });
+    }
+    const spec = loadPolicySpec(specPath);
+    const { runSignerPolicyWatch } = await import("./lib/policy-run-watch.js");
+    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""} (Ctrl+C to stop)\n`);
+    const outcome = await runSignerPolicyWatch(db, {
+      tokens, spec, signerEmail, exitOnFirst, timeoutMs, pollIntervalMs, dryRun,
+      onEntry: (entry) => {
+        const tag = entry.skipped ? "  SKIP" : entry.ok ? `+ ${entry.decision?.action?.toUpperCase()}` : "× ERROR";
+        process.stderr.write(`${tag} ${entry.requestId}${entry.error ? ` ${entry.error.code}: ${entry.error.message}` : ""}\n`);
+      },
+    });
+    console.log(JSON.stringify(outcome, null, 2));
+    if (outcome.watch.exitReason === "timeout") process.exitCode = 4;
+    else if (outcome.failed > 0) process.exitCode = 3;
     return;
   }
 
