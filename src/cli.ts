@@ -198,7 +198,7 @@ Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
-sign audit show --request-id <id> [--format json|csv|pretty] [--event-type <t> ...]   (--format pretty renders a human-readable timeline)
+sign audit show --request-id <id> [--format json|csv|pretty] [--event-type <t> ...] [--since <iso>] [--until <iso>]   (--format pretty renders a human-readable timeline; --since/--until clamp the time window)
 sign audit search [--request-id <id>] [--event-type request.signed] [--since <iso>] [--until <iso>] [--payload-contains <substr>] [--limit 1000]   (log-style filter across the full audit_events table)
 sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
@@ -1276,10 +1276,28 @@ async function main(): Promise<void> {
       });
     }
     const eventTypes = flagValues(parsed, "event-type");
+    const since = flagValue(parsed, "since");
+    const until = flagValue(parsed, "until");
+    for (const [name, value] of [["since", since], ["until", until]] as const) {
+      if (value !== undefined && Number.isNaN(Date.parse(value))) {
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: `--${name} must be an ISO 8601 timestamp; got ${JSON.stringify(value)}.`,
+        });
+      }
+    }
     let events = listAuditEvents(db, requestId);
     if (eventTypes.length > 0) {
       const allow = new Set(eventTypes);
       events = events.filter((e) => allow.has(e.event_type));
+    }
+    if (since) {
+      const cutoff = Date.parse(since);
+      events = events.filter((e) => Date.parse(e.created_at) >= cutoff);
+    }
+    if (until) {
+      const cutoff = Date.parse(until);
+      events = events.filter((e) => Date.parse(e.created_at) <= cutoff);
     }
     if (format === "csv") {
       const { renderAuditChainAsCsv } = await import("./lib/audit-csv.js");
