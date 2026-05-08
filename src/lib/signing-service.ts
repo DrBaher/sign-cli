@@ -1822,15 +1822,38 @@ export async function listAuditEventsAsync(backend: DbBackend, requestId: string
   return await backend.prepareAsync(LIST_AUDIT_EVENTS_SQL).all(requestId) as AuditEventRow[];
 }
 
+// SQLite uses INSERT OR IGNORE; Postgres uses INSERT … ON CONFLICT DO NOTHING.
+// The semantics are identical: insert wins ⇒ changes/rowCount = 1, conflict ⇒ 0.
+const CLAIM_WEBHOOK_SQL_SQLITE =
+  `INSERT OR IGNORE INTO webhook_dedupe (provider, event_key, request_id, first_seen_at)
+   VALUES (?, ?, ?, ?)`;
+const CLAIM_WEBHOOK_SQL_POSTGRES =
+  `INSERT INTO webhook_dedupe (provider, event_key, request_id, first_seen_at)
+   VALUES (?, ?, ?, ?)
+   ON CONFLICT (provider, event_key) DO NOTHING`;
+
 function tryClaimWebhookEvent(
   db: SqliteDb,
   input: { provider: "dropbox" | "signwell" | "docusign"; eventKey: string; requestId: string | null; now: Date },
 ): boolean {
-  const stmt = db.prepare(
-    `INSERT OR IGNORE INTO webhook_dedupe (provider, event_key, request_id, first_seen_at)
-     VALUES (?, ?, ?, ?)`,
+  const result = db.prepare(CLAIM_WEBHOOK_SQL_SQLITE).run(
+    input.provider, input.eventKey, input.requestId, nowIso(input.now),
   );
-  const result = stmt.run(input.provider, input.eventKey, input.requestId, nowIso(input.now));
+  return result.changes === 1;
+}
+
+// Async sibling. Picks the right INSERT dialect based on backend.kind so
+// PostgresBackend gets ON CONFLICT DO NOTHING and SqliteBackend keeps INSERT
+// OR IGNORE. Returns true exactly when this caller is the first to claim
+// (provider, event_key).
+export async function tryClaimWebhookEventAsync(
+  backend: DbBackend,
+  input: { provider: "dropbox" | "signwell" | "docusign"; eventKey: string; requestId: string | null; now: Date },
+): Promise<boolean> {
+  const sql = backend.kind === "postgres" ? CLAIM_WEBHOOK_SQL_POSTGRES : CLAIM_WEBHOOK_SQL_SQLITE;
+  const result = await backend.prepareAsync(sql).run(
+    input.provider, input.eventKey, input.requestId, nowIso(input.now),
+  );
   return result.changes === 1;
 }
 

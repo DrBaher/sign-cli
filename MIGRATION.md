@@ -44,6 +44,7 @@ The stub serves three purposes:
   - [x] Read-only audit primitives ship async variants: `verifyAuditChainAsync`, `listAuditEventsAsync`, `searchAuditEventsAsync`. SQLite + Postgres both pass the same tests via the placeholder translator.
   - [x] Read-only request primitives ship async variants: `getRequestRowAsync`, `listSigningRequestsAsync`, `scanAllAuditChainsAsync`, `verifyRequestAuditChainAsync`. Sync + async share the same SQL builders so they can't drift.
   - [x] First write primitive: `appendAuditEventAsync` — same chain-hashing logic via `buildNextChainEntry`, runs SELECT prev + INSERT through `prepareAsync`. Higher-level write paths can now compose it instead of the sync `appendAuditEvent` when targeting Postgres.
+  - [x] Second write primitive: `tryClaimWebhookEventAsync` — picks the right INSERT dialect (`OR IGNORE` for SQLite vs. `ON CONFLICT DO NOTHING` for Postgres) based on `backend.kind`. Both backends preserve the same "first claim wins" semantics.
 - [x] Postgres-flavor DDL bootstrap shipped at `src/lib/postgres-bootstrap.ts` and exposed as `sign db migrate-postgres --pg-url …`. Idempotent, includes the PL/pgSQL append-only triggers.
 - [ ] Translate the few SQLite-specific PRAGMAs (`journal_mode`, `busy_timeout`) into Postgres equivalents (`statement_timeout`, etc.) — most won't apply.
 - [ ] Re-implement the audit-events append-only triggers as Postgres `BEFORE UPDATE/DELETE` triggers + `RAISE EXCEPTION`.
