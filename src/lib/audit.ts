@@ -22,16 +22,33 @@ export function verifyAuditChain(db: SqliteDb | DbBackend, requestId: string): A
      FROM audit_events
      WHERE request_id = ?
      ORDER BY id ASC`,
-  ).all(requestId) as Array<{
-    id: number;
-    request_id: string;
-    event_type: string;
-    payload_json: string;
-    hash_prev: string | null;
-    hash_self: string;
-    created_at: string;
-  }>;
+  ).all(requestId) as Array<AuditChainRow>;
+  return verifyChainRows(rows);
+}
 
+// Async variant — same query, same verification logic, but via prepareAsync
+// so it works against the Postgres backend (whose sync prepare() throws).
+export async function verifyAuditChainAsync(backend: DbBackend, requestId: string): Promise<AuditVerificationResult> {
+  const rows = await backend.prepareAsync(
+    `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, created_at
+     FROM audit_events
+     WHERE request_id = ?
+     ORDER BY id ASC`,
+  ).all(requestId) as Array<AuditChainRow>;
+  return verifyChainRows(rows);
+}
+
+type AuditChainRow = {
+  id: number;
+  request_id: string;
+  event_type: string;
+  payload_json: string;
+  hash_prev: string | null;
+  hash_self: string;
+  created_at: string;
+};
+
+function verifyChainRows(rows: AuditChainRow[]): AuditVerificationResult {
   let previousHash: string | null = null;
   for (const row of rows) {
     if (row.hash_prev !== previousHash) {
@@ -157,6 +174,46 @@ export function searchAuditEvents(
   } = {},
 ): AuditSearchResult {
   const backend = asBackend(db);
+  const { sql, params } = buildAuditSearchQuery(opts);
+  const rows = backend.prepare(sql).all(...params) as AuditSearchSqlRow[];
+  return { total: rows.length, results: rows.map(rowToHit) };
+}
+
+// Async variant of searchAuditEvents — same query, runs through prepareAsync
+// so it works against PostgresBackend.
+export async function searchAuditEventsAsync(
+  backend: DbBackend,
+  opts: {
+    requestId?: string;
+    eventType?: string;
+    since?: string;
+    until?: string;
+    payloadContains?: string;
+    limit?: number;
+  } = {},
+): Promise<AuditSearchResult> {
+  const { sql, params } = buildAuditSearchQuery(opts);
+  const rows = await backend.prepareAsync(sql).all(...params) as AuditSearchSqlRow[];
+  return { total: rows.length, results: rows.map(rowToHit) };
+}
+
+type AuditSearchSqlRow = {
+  id: number;
+  request_id: string;
+  event_type: string;
+  payload_json: string;
+  hash_self: string;
+  created_at: string;
+};
+
+function buildAuditSearchQuery(opts: {
+  requestId?: string;
+  eventType?: string;
+  since?: string;
+  until?: string;
+  payloadContains?: string;
+  limit?: number;
+}): { sql: string; params: unknown[] } {
   for (const key of ["since", "until"] as const) {
     const value = opts[key];
     if (value !== undefined && Number.isNaN(Date.parse(value))) {
@@ -176,31 +233,23 @@ export function searchAuditEvents(
   const limit = Number.isFinite(opts.limit) && (opts.limit ?? 0) > 0
     ? Math.min(Number(opts.limit), 5000)
     : 1000;
-  const rows = backend.prepare(
-    `SELECT id, request_id, event_type, payload_json, hash_self, created_at
+  const sql = `SELECT id, request_id, event_type, payload_json, hash_self, created_at
      FROM audit_events
      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY id DESC
-     LIMIT ${limit}`,
-  ).all(...params) as Array<{
-    id: number;
-    request_id: string;
-    event_type: string;
-    payload_json: string;
-    hash_self: string;
-    created_at: string;
-  }>;
-  const results: AuditSearchHit[] = rows.map((row) => {
-    let payload: unknown;
-    try { payload = JSON.parse(row.payload_json); } catch { payload = row.payload_json; }
-    return {
-      id: row.id,
-      requestId: row.request_id,
-      eventType: row.event_type,
-      createdAt: row.created_at,
-      hashSelf: row.hash_self,
-      payload,
-    };
-  });
-  return { total: results.length, results };
+     LIMIT ${limit}`;
+  return { sql, params };
+}
+
+function rowToHit(row: AuditSearchSqlRow): AuditSearchHit {
+  let payload: unknown;
+  try { payload = JSON.parse(row.payload_json); } catch { payload = row.payload_json; }
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    eventType: row.event_type,
+    createdAt: row.created_at,
+    hashSelf: row.hash_self,
+    payload,
+  };
 }
