@@ -188,10 +188,11 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request show",
-    summary: "Enriched snapshot: request, approvals, signedBy[], nextSteps[]. With --metrics true, also returns counters (events, fetches, webhook replays, time-to-first-sign, time-to-complete).",
+    summary: "Enriched snapshot: request, approvals, signedBy[], nextSteps[]. With --metrics true, also returns counters (events, fetches, webhook replays, time-to-first-sign, time-to-complete). With --hash-only true, prints just { requestId, documentSha256, chainHead } — for diff-style scripted comparisons (jq, watch, sha256sum).",
     flags: [
       { name: "--request-id", required: true, description: "Request id." },
       { name: "--metrics", description: "true to include the metrics rollup." },
+      { name: "--hash-only", description: "true to suppress everything except the request_id, document SHA-256, and current audit-chain head. Stable across builds." },
     ],
   },
   {
