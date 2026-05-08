@@ -49,8 +49,13 @@ export async function runSignerPolicyWatch(
     dryRun?: boolean;
     now?: () => Date;
     onEntry?: (entry: PolicyRunWatchEntry) => void;
+    // ISO-8601 cutoff. Entries with createdAt < this are skipped without
+    // firing onEntry — useful when an anchor has already attested to all
+    // chains up to that point and you only want to act on what's newer.
+    sinceCreatedAt?: string;
   },
 ): Promise<PolicyRunWatchOutcome> {
+  const cutoffMs = input.sinceCreatedAt ? Date.parse(input.sinceCreatedAt) : null;
   const evaluated: PolicyRunWatchEntry[] = [];
   let succeeded = 0;
   let failed = 0;
@@ -65,6 +70,10 @@ export async function runSignerPolicyWatch(
     onEntry: (entry) => {
       // Only act on truly-new entries — the initial snapshot is informational.
       if (!entry.firstSeen || !entry.requestId) return;
+      if (cutoffMs !== null) {
+        const entryMs = Date.parse(entry.createdAt);
+        if (Number.isFinite(entryMs) && entryMs < cutoffMs) return;
+      }
       const requestId = entry.requestId;
       const token = input.tokens[requestId];
       if (!token) {
