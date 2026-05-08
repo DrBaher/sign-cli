@@ -369,6 +369,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     summary: "Append an RFC 3161 timestamp to the chain head.",
   },
   {
+    command: "audit anchor",
+    summary: "Cross-request anchor: snapshot every request's chain head and timestamp the digest of the manifest in one TSA call. Re-running over time builds a continuity proof — anyone tampering with an old chain breaks the anchor's digest. Records audit.anchored on every covered request.",
+    flags: [
+      { name: "--tsa-url", description: "RFC 3161 TSA endpoint (default DigiCert)." },
+      { name: "--out", description: "Output dir for the .tsr + manifest.json (default ./artifacts/)." },
+    ],
+  },
+  {
     command: "audit export",
     summary: "Bundle audit.json + signed.pdf + audit.tsr + manifest.json.",
   },

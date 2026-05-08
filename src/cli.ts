@@ -202,6 +202,7 @@ sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
 sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
+sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]   (anchor every request's chain head with one TSA call; produces a manifest + .tsr you can re-verify weeks later)
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
 sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
@@ -1123,6 +1124,15 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(outcome, null, 2));
     process.exitCode = outcome.exitReason === "break_detected" ? 3 : outcome.exitReason === "timeout" ? 4 : 0;
+    return;
+  }
+
+  if (root === "audit" && sub === "anchor") {
+    const tsaUrl = flagValue(parsed, "tsa-url");
+    const outDir = flagValue(parsed, "out");
+    const { anchorAllAuditChainHeads } = await import("./lib/audit-anchor.js");
+    const result = await anchorAllAuditChainHeads(db, { tsaUrl, outDir });
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 
