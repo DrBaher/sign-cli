@@ -206,7 +206,7 @@ sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]   (anchor every request's chain head with one TSA call; produces a manifest + .tsr you can re-verify weeks later)
 sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
 sign audit anchors-list [--limit 100]   (list stored anchors with digest/tsaUrl/coveredRequests so an operator can pick which one to verify)
-sign audit chain-bundle --out ./bundle/ [--request-id <id> ...]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json — self-contained for offline re-verification)
+sign audit chain-bundle --out ./bundle/ [--request-id <id> ...] [--tarball ./bundle.tar.gz]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json; --tarball writes a portable .tar.gz)
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
 sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
@@ -1244,10 +1244,12 @@ async function main(): Promise<void> {
   if (root === "audit" && sub === "chain-bundle") {
     const out = flagValue(parsed, "out", true)!;
     const requestIds = flagValues(parsed, "request-id");
+    const tarballPath = flagValue(parsed, "tarball");
     const { exportAuditChainBundle } = await import("./lib/audit-chain-bundle.js");
     const result = await exportAuditChainBundle(db, {
       outDir: out,
       requestIds: requestIds.length > 0 ? requestIds : undefined,
+      tarballPath,
     });
     console.log(JSON.stringify(result, null, 2));
     return;

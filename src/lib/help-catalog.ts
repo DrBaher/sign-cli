@@ -384,6 +384,7 @@ export const HELP_CATALOG: CommandSpec[] = [
     flags: [
       { name: "--out", required: true, description: "Output directory for the bundle." },
       { name: "--request-id", description: "Repeatable. Restrict to specific request_ids; default includes every request with audit events." },
+      { name: "--tarball", description: "Path to also write a gzipped tarball of the bundle (USTAR format, no external deps). The archive's top-level directory matches basename(--out)." },
     ],
   },
   {
