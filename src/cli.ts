@@ -203,7 +203,7 @@ sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
 sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 600]   (long-running tamper alarm; exits 3 on break, 4 on timeout)
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
-sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/]   (anchor every request's chain head with one TSA call; produces a manifest + .tsr you can re-verify weeks later)
+sign audit anchor [--tsa-url http://timestamp.digicert.com] [--out ./artifacts/] [--since 2026-05-01T00:00:00Z | --since-anchor latest|<artifactId>]   (anchor every request's chain head with one TSA call; --since/--since-anchor restricts to chains that advanced after the cutoff)
 sign audit verify-anchor --manifest ./audit-anchor-…manifest.json   (re-check a stored anchor against the current DB; exits 3 if any chain looks tampered or missing)
 sign audit anchors-list [--limit 100]   (list stored anchors with digest/tsaUrl/coveredRequests so an operator can pick which one to verify)
 sign audit chain-bundle --out ./bundle/ [--request-id <id> ...] [--tarball ./bundle.tar.gz] [--include-source-pdf true]   (compliance bundle: most-recent anchor + per-request receipts + INDEX.json; --tarball writes a portable .tar.gz; --include-source-pdf copies the unsigned source PDF into each receipt dir for reproducibility)
@@ -1257,8 +1257,27 @@ async function main(): Promise<void> {
   if (root === "audit" && sub === "anchor") {
     const tsaUrl = flagValue(parsed, "tsa-url");
     const outDir = flagValue(parsed, "out");
+    const sinceRaw = flagValue(parsed, "since");
+    const sinceAnchorRaw = flagValue(parsed, "since-anchor");
+    let since = sinceRaw;
+    if (sinceAnchorRaw) {
+      const { listStoredAnchors } = await import("./lib/audit-anchor.js");
+      const anchors = listStoredAnchors(db, { limit: 1000 });
+      const chosen = sinceAnchorRaw === "latest"
+        ? anchors[0]
+        : anchors.find((a) => a.artifactId === sinceAnchorRaw);
+      if (!chosen) {
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: sinceAnchorRaw === "latest"
+            ? "--since-anchor latest: no audit_anchor artifacts have been issued yet."
+            : `--since-anchor: anchor artifactId not found: ${JSON.stringify(sinceAnchorRaw)}.`,
+        });
+      }
+      since = chosen.createdAt;
+    }
     const { anchorAllAuditChainHeads } = await import("./lib/audit-anchor.js");
-    const result = await anchorAllAuditChainHeads(db, { tsaUrl, outDir });
+    const result = await anchorAllAuditChainHeads(db, { tsaUrl, outDir, since });
     console.log(JSON.stringify(result, null, 2));
     return;
   }

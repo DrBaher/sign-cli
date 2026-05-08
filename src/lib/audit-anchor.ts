@@ -34,7 +34,7 @@ export type AnchorReport = {
 
 export async function anchorAllAuditChainHeads(
   db: SqliteDb,
-  input: { tsaUrl?: string; outDir?: string; now?: Date } = {},
+  input: { tsaUrl?: string; outDir?: string; now?: Date; since?: string } = {},
 ): Promise<AnchorReport> {
   const path = await import("node:path");
   const fs = await import("node:fs");
@@ -42,17 +42,28 @@ export async function anchorAllAuditChainHeads(
   // For every request that has at least one audit event, take the latest
   // hash_self (the chain head). Sorting by requestId makes the digest
   // deterministic so re-anchoring identical state produces identical digests.
+  // When `since` is set, restrict to chains whose latest event is at or after
+  // that ISO timestamp — useful when you only want to anchor what's actually
+  // moved since the last anchor (smaller manifest, cheaper to verify).
+  if (input.since !== undefined && Number.isNaN(Date.parse(input.since))) {
+    throw new Error(`anchor since must be an ISO 8601 timestamp; got ${JSON.stringify(input.since)}.`);
+  }
+  const sinceClause = input.since ? `WHERE datetime(created_at) >= datetime(?)` : "";
+  const sinceParams = input.since ? [input.since] : [];
   const rows = db.prepare(
     `SELECT request_id, hash_self
      FROM (
-       SELECT request_id, hash_self, ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY id DESC) AS rn
+       SELECT request_id, hash_self, created_at, ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY id DESC) AS rn
        FROM audit_events
+       ${sinceClause}
      ) WHERE rn = 1
      ORDER BY request_id`,
-  ).all() as Array<{ request_id: string; hash_self: string }>;
+  ).all(...sinceParams) as Array<{ request_id: string; hash_self: string }>;
 
   if (rows.length === 0) {
-    throw new Error("No audit events found across any request — nothing to anchor.");
+    throw new Error(input.since
+      ? `No audit events at or after ${input.since} — nothing to anchor.`
+      : "No audit events found across any request — nothing to anchor.");
   }
 
   const manifest: AnchorManifestEntry[] = rows.map((row) => ({
