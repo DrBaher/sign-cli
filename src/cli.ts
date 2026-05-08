@@ -158,7 +158,7 @@ sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-second
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
 sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson] [--on-decision "<cmd>"] [--since-anchor latest|<artifactId>]   (long-running: tail the inbox + apply the policy; --since-anchor evaluates only entries created after the named anchor was issued; exits 3 if any row failed, 4 on timeout)
-sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
+sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json | --batch ./contexts.json)   (offline tester — single context or a JSON array of contexts; never touches state)
 sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>]) [--format json|markdown]   (preview action changes between two specs; --format markdown renders a reviewer-friendly table)
 sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
 sign request send --request-id <id> [--provider dropbox|docusign|signwell] [--test-mode true] [--force true]
@@ -780,6 +780,63 @@ async function main(): Promise<void> {
     const specPath = flagValue(parsed, "spec", true)!;
     const { evaluatePolicy, loadPolicySpec } = await import("./lib/policy-engine.js");
     const spec = loadPolicySpec(specPath);
+
+    const batchPath = flagValue(parsed, "batch");
+    if (batchPath) {
+      // Batch mode: load a JSON array of { title, documentSha256, signerEmail, label? }
+      // contexts and emit { contexts[], decisions[] }. Each decision row carries
+      // the same shape evaluatePolicy returns. Errors per-row are caught and
+      // surfaced as { decision: null, error: { code, message } } so one bad row
+      // can't poison the batch.
+      const fs = await import("node:fs");
+      let raw: unknown;
+      try {
+        raw = JSON.parse(fs.readFileSync(batchPath, "utf8"));
+      } catch (error) {
+        throw new SignCliError({
+          code: "INVALID_SPEC",
+          message: `Failed to load --batch ${batchPath}: ${(error as Error).message}`,
+        });
+      }
+      if (!Array.isArray(raw)) {
+        throw new SignCliError({
+          code: "INVALID_SPEC",
+          message: `--batch file must be a JSON array of context objects.`,
+        });
+      }
+      const decisions: Array<{
+        index: number;
+        label: string | null;
+        ctx: { title: string; documentSha256: string; signerEmail: string };
+        decision: ReturnType<typeof evaluatePolicy> | null;
+        error: { code: string; message: string } | null;
+      }> = [];
+      for (let i = 0; i < raw.length; i += 1) {
+        const entry = raw[i] as Record<string, unknown>;
+        const ctx = {
+          title: typeof entry?.title === "string" ? entry.title : "",
+          documentSha256: typeof entry?.documentSha256 === "string" ? entry.documentSha256 : "",
+          signerEmail: typeof entry?.signerEmail === "string" ? entry.signerEmail : "",
+        };
+        const label = typeof entry?.label === "string" ? entry.label : null;
+        try {
+          decisions.push({ index: i, label, ctx, decision: evaluatePolicy(spec, ctx), error: null });
+        } catch (error) {
+          const code = error instanceof SignCliError ? error.code : "INTERNAL";
+          const message = error instanceof Error ? error.message : String(error);
+          decisions.push({ index: i, label, ctx, decision: null, error: { code, message } });
+        }
+      }
+      const summary = {
+        total: decisions.length,
+        sign: decisions.filter((d) => d.decision?.action === "sign").length,
+        decline: decisions.filter((d) => d.decision?.action === "decline").length,
+        report: decisions.filter((d) => d.decision?.action === "report").length,
+        errored: decisions.filter((d) => d.error !== null).length,
+      };
+      console.log(JSON.stringify({ spec: specPath, ...summary, decisions }, null, 2));
+      return;
+    }
 
     const snapshotPath = flagValue(parsed, "snapshot");
     let title: string;
