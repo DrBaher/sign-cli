@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "sign-cli": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/sign-cli/dist/cli.js",
+        "mcp",
+        "serve",
+        "--read-only",
+        "true",
+        "--capability",
+        "tools",
+        "--tool",
+        "signer_list",
+        "--tool",
+        "signer_fetch_document",
+        "--tool",
+        "request_show",
+        "--tool",
+        "request_status",
+        "--tool",
+        "audit_verify",
+        "--tool",
+        "request_watch",
+        "--emit-events",
+        "/absolute/path/to/sign-cli-logs/mcp.ndjson",
+        "--emit-events-redact",
+        "true"
+      ],
+      "env": {
+        "SIGN_DB_PATH": "/absolute/path/to/sign-cli/data/sign.db"
+      }
+    }
+  }
+}

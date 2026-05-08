@@ -19,7 +19,8 @@ everything. No signup. No keys. About 5 seconds.
 2. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
 3. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
 4. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
-5. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
+5. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
+6. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
 
 ## Why this exists
 
