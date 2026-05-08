@@ -4,6 +4,9 @@ Self-contained deploy for a public, read-only `sign-cli` demo. Goal: someone
 with no Node, no API keys, and 10 seconds of attention can click a link and
 poke the audit chain.
 
+The reference deployment runs on Railway at
+**[sign-cli-demo-production.up.railway.app](https://sign-cli-demo-production.up.railway.app/web-demo/)**.
+
 ## What ships
 
 - `Dockerfile` — Node 22 alpine, multi-stage build of the CLI.
@@ -14,8 +17,9 @@ poke the audit chain.
   `sign serve --read-only true --web-demo true --rate-limit 5
   --rate-limit-burst 20`, then exits after `DEMO_TTL_SECONDS` so the
   platform restarts us with fresh state.
-- `fly.toml` / `render.yaml` / `railway.toml` — minimal configs for the
-  three free-ish PaaS targets we test against.
+- `fly.toml` / `render.yaml` — Fly and Render configs (Railway's lives at
+  the repo root as `railway.toml`, since Railway only auto-discovers
+  it there).
 - `docker-compose.yml` — local sanity check.
 
 ## Why read-only
@@ -75,16 +79,22 @@ itself is part of the reset — first request after a sleep wakes us
 3. The blueprint is configured for the free plan. Free instances sleep
    after 15min idle; first wake triggers a re-seed.
 
-## Deploy: Railway
+## Deploy: Railway (the reference deployment)
 
 ```bash
-cd deploy
-railway init
-railway up
+railway login
+railway init        # pick "Empty project", name it sign-cli-demo
+railway up          # uploads + builds with deploy/Dockerfile, deploys
+railway domain      # generates the public *.up.railway.app URL
 ```
 
-Railway respects `railway.toml`; `entrypoint.sh` will pick up Railway's
-`PORT` env var automatically.
+Run from the repo root, not `deploy/`. The `railway.toml` at the root
+points `dockerfilePath` at `deploy/Dockerfile`; the build context is the
+repo root so the Dockerfile's `COPY src/` and `COPY package.json` resolve
+correctly. `entrypoint.sh` honours Railway's `$PORT` automatically.
+
+Railway's free tier is gone — there's a $5 trial credit, then $5/month
+Hobby plan. For free hosting use Render or Fly.
 
 ## Deploy: anywhere else
 

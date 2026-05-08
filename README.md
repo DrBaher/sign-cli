@@ -13,8 +13,7 @@ That single command runs the entire lifecycle — create → send → sign → v
 chain → export receipt — against an offline local provider, then deletes
 everything. No signup. No keys. About 5 seconds.
 
-> Don't have Node? Self-host the read-only web demo in 5 minutes — see
-> [`deploy/README.md`](deploy/README.md) for Fly / Render / Railway configs.
+> **[Try the live demo →](https://sign-cli-demo-production.up.railway.app/web-demo/)** — read-only, resets every 4 hours. Or self-host: see [`deploy/README.md`](deploy/README.md) for Fly / Render / Railway configs.
 
 ## Read in this order
 
