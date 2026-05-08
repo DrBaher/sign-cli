@@ -182,6 +182,7 @@ sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
 sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
+sign db indexes [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (list indexes, run EXPLAIN QUERY PLAN, suggest under-indexed tables)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
@@ -331,6 +332,20 @@ async function main(): Promise<void> {
     }
     const outcome = applyPendingMigrations(db);
     console.log(JSON.stringify(outcome, null, 2));
+    return;
+  }
+
+  if (root === "db" && sub === "indexes") {
+    const { listDbIndexes, explainQueryPlan, suggestMissingIndexes } = await import("./lib/db-indexes.js");
+    const explainSql = flagValue(parsed, "explain");
+    const suggest = (flagValue(parsed, "suggest") ?? "false") === "true";
+    const out: Record<string, unknown> = { indexes: listDbIndexes(db) };
+    if (explainSql) out.queryPlan = explainQueryPlan(db, explainSql);
+    if (suggest) {
+      const threshold = flagValue(parsed, "suggest-threshold");
+      out.suggestions = suggestMissingIndexes(db, threshold ? Number(threshold) : undefined);
+    }
+    console.log(JSON.stringify(out, null, 2));
     return;
   }
 
