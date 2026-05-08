@@ -3753,6 +3753,36 @@ export type SignerPolicyOutcome = {
   result: SignerSignResult | SignerDeclineResult | null;
 };
 
+// Pure read: load the request from the DB, derive the policy-evaluation context
+// (title, documentSha256, signerEmail), and run evaluatePolicy. No state
+// mutation, no signer token required. Use case: "would this in-flight or
+// completed request still pass under my new spec?"
+//
+// signerEmail defaults to the first recipient's email if not provided. This
+// matches the implicit single-signer case the CLI's existing `policy try`
+// command uses.
+export function rerunPolicyForRequest(
+  db: SqliteDb,
+  input: { requestId: string; spec: PolicySpec; signerEmail?: string },
+): {
+  requestId: string;
+  ctx: { title: string; documentSha256: string; signerEmail: string };
+  decision: PolicyDecision;
+} {
+  const request = getRequestRow(db, input.requestId);
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
+  const signerEmail = input.signerEmail
+    ?? signers[0]?.email
+    ?? "";
+  const ctx = {
+    title: request.title,
+    documentSha256: request.document_hash ?? "",
+    signerEmail,
+  };
+  const decision = evaluatePolicy(input.spec, ctx);
+  return { requestId: request.id, ctx, decision };
+}
+
 export function runSignerPolicy(
   db: SqliteDb,
   input: {

@@ -176,6 +176,15 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "request rerun-policy",
+    summary: "Re-evaluate a stored request against a (possibly updated) policy spec. Pure read — no state mutation, no signer token required. Companion to `signer policy try` for in-flight or completed requests.",
+    flags: [
+      { name: "--request-id", required: true, description: "Request to re-evaluate." },
+      { name: "--spec", required: true, description: "Path to policy.json." },
+      { name: "--signer-email", description: "Override signer email (defaults to first recipient)." },
+    ],
+  },
+  {
     command: "request show",
     summary: "Enriched snapshot: request, approvals, signedBy[], nextSteps[]. With --metrics true, also returns counters (events, fetches, webhook replays, time-to-first-sign, time-to-complete).",
     flags: [
