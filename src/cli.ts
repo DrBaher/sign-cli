@@ -169,8 +169,8 @@ sign request status --request-id <id> [--provider dropbox|docusign|signwell] [--
 sign request watch --request-id <id> [--provider dropbox|docusign|signwell] [--interval-ms 5000|--interval-seconds 5] [--timeout-ms 600000|--timeout-seconds 600] [--fetch-final true] [--out ./artifacts/signed.pdf] [--log human|json]
 sign request remind --request-id <id> [--provider dropbox|docusign|signwell] [--email signer@example.com]
 sign request cancel --request-id <id> [--provider dropbox|docusign|signwell] [--reason "Voided"] [--yes]
-sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json]
-sign request bulk-resend --csv ./resend.csv [--token-ttl-minutes 30] [--emit-tokens ./tokens.json]   (re-issue signer tokens from a CSV roster — rows: request_id,signer_email[,token_ttl_minutes]; per-row failures are captured, exits 3 if any failed)
+sign request bulk --csv ./signers.csv --document ./file.pdf [--document ./extra.pdf] [--provider dropbox|docusign|signwell|local] [--title "Bulk for {{email}}"] [--test-mode true] [--emit-tokens ./tokens.json] [--ndjson true]
+sign request bulk-resend --csv ./resend.csv [--token-ttl-minutes 30] [--emit-tokens ./tokens.json] [--ndjson true]   (re-issue signer tokens from a CSV roster — rows: request_id,signer_email[,token_ttl_minutes]; per-row failures are captured, exits 3 if any failed)
 sign request list [--provider dropbox|docusign|signwell|local] [--status created|sent|approved|completed|canceled] [--since 2026-05-01T00:00:00Z] [--limit 100] [--format json|table]
 sign request show --request-id <id>
 sign request diff --before <id> --after <id>   (compare two requests; exits 1 on any diff, 0 on identical)
@@ -201,7 +201,7 @@ sign audit watch [--request-id <id>] [--interval-seconds 5] [--timeout-seconds 6
 sign audit timestamp --request-id <id> [--tsa-url http://timestamp.digicert.com]
 sign audit export --request-id <id> --out ./bundle/
 sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundle: audit + signed PDF + signature.bin + cert.pem)
-sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
+sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
 sign request create --spec ./request.json [--param key=value ...]   (variable substitution into the spec JSON)
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
 sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
@@ -1072,6 +1072,7 @@ async function main(): Promise<void> {
     const provider = flagValue(parsed, "provider") ? selectedProvider : undefined;
     const status = flagValue(parsed, "status");
     const limitFlag = flagValue(parsed, "limit");
+    const ndjson = (flagValue(parsed, "ndjson") ?? "false") === "true";
     const logger = createLogger({ mode: resolveLogMode(flagValue(parsed, "log")) });
     const result = await issueAuditReceiptsBulk(db, {
       outDir: out,
@@ -1080,7 +1081,12 @@ async function main(): Promise<void> {
       limit: limitFlag ? Number(limitFlag) : undefined,
       onProgress: (event) => logger.info("audit issue-receipts", event),
     });
-    console.log(JSON.stringify(result, null, 2));
+    if (ndjson) {
+      const { renderBulkResultAsNdjson } = await import("./lib/ndjson.js");
+      process.stdout.write(renderBulkResultAsNdjson(result));
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
     if (result.failed > 0) process.exitCode = 3;
     return;
   }
@@ -1209,7 +1215,12 @@ async function main(): Promise<void> {
       // Strip raw tokens from the public stdout output — the file is the canonical artifact.
       result.results = result.results.map((r) => ({ ...r, token: r.token ? "<written-to-file>" : null }));
     }
-    console.log(JSON.stringify(result, null, 2));
+    if ((flagValue(parsed, "ndjson") ?? "false") === "true") {
+      const { renderBulkResultAsNdjson } = await import("./lib/ndjson.js");
+      process.stdout.write(renderBulkResultAsNdjson(result));
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
     if (result.failed > 0) process.exitCode = 3;
     return;
   }
@@ -1250,7 +1261,12 @@ async function main(): Promise<void> {
       fs.writeFileSync(resolved, JSON.stringify(roster, null, 2));
       result.results = result.results.map((r) => ({ ...r, token: r.token ? "<written-to-file>" : null }));
     }
-    console.log(JSON.stringify(result, null, 2));
+    if ((flagValue(parsed, "ndjson") ?? "false") === "true") {
+      const { renderBulkResultAsNdjson } = await import("./lib/ndjson.js");
+      process.stdout.write(renderBulkResultAsNdjson(result));
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
     if (result.failed > 0) process.exitCode = 3;
     return;
   }

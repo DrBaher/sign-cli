@@ -145,6 +145,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--document", description: "PDF to attach (repeatable for multi-doc)." },
       { name: "--title", description: "Title template; supports {{email}}, {{name}}, {{row}}." },
       { name: "--emit-tokens", description: "Write a per-row tokens roster to this path (skipped from stdout)." },
+      { name: "--ndjson", description: "true to emit one JSON object per result row (plus a final summary line) — pipe-friendly for jq/grep/streaming consumers." },
     ],
   },
   {
@@ -154,6 +155,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--csv", required: true, description: "CSV with request_id + signer_email columns." },
       { name: "--token-ttl-minutes", description: "Default TTL for new tokens (default 30); overridable per row." },
       { name: "--emit-tokens", description: "Write a tokens roster to this path (the canonical artifact; stdout strips raw tokens)." },
+      { name: "--ndjson", description: "true to emit one JSON object per result row (plus a final summary line)." },
     ],
   },
   {
@@ -386,6 +388,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--provider", description: "Only consider requests for this provider." },
       { name: "--status", description: "Only consider requests with this status (e.g. completed)." },
       { name: "--limit", description: "Cap rows processed (default 1000, max 5000)." },
+      { name: "--ndjson", description: "true to emit one JSON object per result row (plus a final summary line)." },
     ],
   },
   // Webhooks
