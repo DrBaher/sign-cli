@@ -50,6 +50,12 @@ export async function exportAuditChainBundle(
     // top-level directory matches basename(outDir), so `tar xzf …` recreates
     // the same on-disk layout the bundle assembled.
     tarballPath?: string;
+    // When true, also copy the unsigned source PDF (requests.document_path)
+    // into each per-request receipt dir as `source.pdf`. Useful for
+    // reproducibility — auditors can re-hash the source and confirm it
+    // matches requests.document_hash without needing access to the issuing
+    // system.
+    includeSourcePdf?: boolean;
   },
 ): Promise<ChainBundleReport> {
   const fs = await import("node:fs");
@@ -86,6 +92,16 @@ export async function exportAuditChainBundle(
   for (const requestId of requestIds) {
     const receiptDir = path.join(requestsRoot, requestId);
     await exportRequestReceipt(db, { requestId, outDir: receiptDir, now: input.now });
+    if (input.includeSourcePdf) {
+      // Pull document_path from the requests table and copy as source.pdf.
+      // Skipped silently if the source file is gone (the receipt + audit chain
+      // are still self-verifying without it).
+      const row = db.prepare("SELECT document_path FROM requests WHERE id = ?")
+        .get(requestId) as { document_path: string | null } | undefined;
+      if (row?.document_path && fs.existsSync(row.document_path)) {
+        fs.copyFileSync(row.document_path, path.join(receiptDir, "source.pdf"));
+      }
+    }
     let bytes = 0;
     let files = 0;
     for (const name of fs.readdirSync(receiptDir)) {

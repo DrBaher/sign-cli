@@ -394,6 +394,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--out", required: true, description: "Output directory for the bundle." },
       { name: "--request-id", description: "Repeatable. Restrict to specific request_ids; default includes every request with audit events." },
       { name: "--tarball", description: "Path to also write a gzipped tarball of the bundle (USTAR format, no external deps). The archive's top-level directory matches basename(--out)." },
+      { name: "--include-source-pdf", description: "true to copy the unsigned source PDF (requests.document_path) into each per-request receipt dir as source.pdf — auditors can re-hash it and confirm it matches the recorded document_hash." },
     ],
   },
   {
