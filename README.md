@@ -35,6 +35,8 @@ node dist/cli.js doctor providers
 ```
 `sign init` walks you through provider selection and writes a `.env`. `doctor providers` confirms it's wired up. See [ONBOARDING.md](./ONBOARDING.md) for the longer path.
 
+End-to-end recipes (sign as Alice, weekly anchor, auditor handoff, agent loop) live in [`docs/recipes/`](./docs/recipes/README.md).
+
 ## What this gives you
 - Human approval tokens (single-use, TTL)
 - Local append-only audit chain (`hash_prev`, `hash_self`) with `audit verify`
