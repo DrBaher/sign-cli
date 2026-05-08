@@ -180,7 +180,8 @@ sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
 sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
-sign db backend [--backend sqlite|postgres]   (report the active storage backend; postgres is stubbed today — see MIGRATION.md)
+sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
+sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
 sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>]   (HTTP REST surface mirroring the MCP tools for non-MCP clients; --tls-cert/--tls-key flips the listener to https; --web-demo serves the bundled dashboard at /web-demo/index.html)
@@ -328,6 +329,26 @@ async function main(): Promise<void> {
     }
     const outcome = applyPendingMigrations(db);
     console.log(JSON.stringify(outcome, null, 2));
+    return;
+  }
+
+  if (root === "db" && sub === "migrate-postgres") {
+    const url = flagValue(parsed, "pg-url") ?? process.env.SIGN_PG_URL;
+    if (!url) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "db migrate-postgres requires --pg-url <postgres://…> (or SIGN_PG_URL env var).",
+      });
+    }
+    const { openStorageBackend } = await import("./lib/storage.js");
+    const { bootstrapPostgresSchema } = await import("./lib/postgres-bootstrap.js");
+    const backend = openStorageBackend({ backend: "postgres", postgresUrl: url });
+    try {
+      const report = await bootstrapPostgresSchema(backend);
+      console.log(JSON.stringify({ ok: true, ...report }, null, 2));
+    } finally {
+      await backend.close();
+    }
     return;
   }
 
