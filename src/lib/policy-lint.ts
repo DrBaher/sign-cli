@@ -21,7 +21,8 @@ export type PolicyLintFinding = {
     | "UNREACHABLE_RULE"
     | "REDUNDANT_RULE"
     | "DECLINE_WITHOUT_REASON"
-    | "EMPTY_RULES";
+    | "EMPTY_RULES"
+    | "CONTRADICTORY_RULES";
   ruleIndex: number | null;
   message: string;
 };
@@ -124,19 +125,31 @@ export function lintPolicySpec(spec: PolicySpec): PolicyLintReport {
       });
     }
 
-    // Redundancy: an earlier rule with the same action that already covers this matcher.
+    // Redundancy / contradiction against any earlier rule whose matcher
+    // covers this one. Same action → REDUNDANT_RULE (warning); different
+    // action → CONTRADICTORY_RULES (error). When the earlier rule is
+    // match: "any" we don't double-flag — UNREACHABLE_RULE already fires
+    // for "everything after match: any is dead", regardless of action.
     for (let j = 0; j < i; j += 1) {
       const earlier = spec.rules[j];
-      if (earlier.action !== rule.action) continue;
-      if (ruleAImpliesB(earlier, rule)) {
+      if (!ruleAImpliesB(earlier, rule)) continue;
+      if (earlier.match === "any") break;
+      if (earlier.action === rule.action) {
         warnings.push({
           severity: "warning",
           code: "REDUNDANT_RULE",
           ruleIndex: i,
           message: `rules[${i}] is redundant: rules[${j}] (action="${earlier.action}") already covers it.`,
         });
-        break;
+      } else {
+        errors.push({
+          severity: "error",
+          code: "CONTRADICTORY_RULES",
+          ruleIndex: i,
+          message: `rules[${i}] (action="${rule.action}") is unreachable: rules[${j}] (action="${earlier.action}") already matches every context that rules[${i}] would.`,
+        });
       }
+      break;
     }
   }
 

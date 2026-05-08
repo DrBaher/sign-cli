@@ -306,7 +306,7 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "signer policy lint",
-    summary: "Static checks for a policy spec: invalid regexes, unreachable rules after match: \"any\", redundant rules with the same action as a broader earlier rule, decline actions without a reason. Exits 3 if errors are present; warnings are non-fatal.",
+    summary: "Static checks for a policy spec: invalid regexes, unreachable rules after match: \"any\", redundant rules (same action as a broader earlier rule), CONTRADICTORY rules (different action than a broader earlier rule — the engine can never distinguish them, so the second is dead), decline actions without a reason. Exits 3 if errors are present; warnings are non-fatal.",
     flags: [
       { name: "--spec", required: true, description: "Path to policy.json." },
     ],
