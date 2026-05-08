@@ -335,6 +335,8 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--request-id", required: true, description: "Request to dump." },
       { name: "--format", description: "json (default), csv (RFC 4180), or pretty (human-readable timeline)." },
       { name: "--event-type", description: "Repeatable. Restrict the dump to events whose event_type matches one of the given values (e.g. --event-type request.signed --event-type request.declined)." },
+      { name: "--since", description: "ISO 8601 lower bound on created_at." },
+      { name: "--until", description: "ISO 8601 upper bound on created_at." },
     ],
   },
   {
