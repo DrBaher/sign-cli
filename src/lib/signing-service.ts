@@ -381,6 +381,54 @@ export async function markApprovalUsedAsync(
   await backend.prepareAsync(MARK_APPROVAL_USED_SQL).run(nowStamp, nowStamp, approvalId);
 }
 
+const MARK_ALL_REQUEST_APPROVALS_USED_SQL =
+  "UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?";
+
+function markAllRequestApprovalsUsed(db: SqliteDb, requestId: string, nowStamp: string): void {
+  db.prepare(MARK_ALL_REQUEST_APPROVALS_USED_SQL).run(nowStamp, nowStamp, requestId);
+}
+
+// Async sibling — auto-approve path. Flips used_at/approved_at on every
+// approval row for a request in one UPDATE.
+export async function markAllRequestApprovalsUsedAsync(
+  backend: DbBackend,
+  requestId: string,
+  nowStamp: string,
+): Promise<void> {
+  await backend.prepareAsync(MARK_ALL_REQUEST_APPROVALS_USED_SQL).run(nowStamp, nowStamp, requestId);
+}
+
+const INSERT_ARTIFACT_SQL =
+  `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?)`;
+
+export type InsertArtifactParams = {
+  id: string;
+  requestId: string;
+  kind: string;
+  path: string;
+  contentHash: string;
+  metadataJson: string;
+  createdAt: string;
+};
+
+function insertArtifactParams(input: InsertArtifactParams): unknown[] {
+  return [
+    input.id, input.requestId, input.kind, input.path,
+    input.contentHash, input.metadataJson, input.createdAt,
+  ];
+}
+
+function insertArtifactRow(db: SqliteDb, input: InsertArtifactParams): void {
+  db.prepare(INSERT_ARTIFACT_SQL).run(...insertArtifactParams(input) as Parameters<ReturnType<SqliteDb["prepare"]>["run"]>);
+}
+
+// Async sibling — same INSERT, runs through prepareAsync. Used by future
+// async-write paths (export/timestamp/anchor) when targeting Postgres.
+export async function insertArtifactRowAsync(backend: DbBackend, input: InsertArtifactParams): Promise<void> {
+  await backend.prepareAsync(INSERT_ARTIFACT_SQL).run(...insertArtifactParams(input));
+}
+
 function parseSignatureIdsJson(raw: string | null): string[] {
   if (!raw) {
     return [];
@@ -1104,7 +1152,7 @@ export function createSigningRequest(
   });
 
   if (input.autoApprove) {
-    db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE request_id = ?").run(createdAt, createdAt, requestId);
+    markAllRequestApprovalsUsed(db, requestId, createdAt);
     updateRequestStatus(db, requestId, "approved", now);
   }
 
