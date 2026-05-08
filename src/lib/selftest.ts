@@ -10,7 +10,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { openDatabase } from "./db.js";
+import { serveMcpStdio } from "./mcp-server.js";
 import {
   createSigningRequest,
   exportRequestReceipt,
@@ -133,6 +135,54 @@ trailer << /Root 1 0 R /Size 5 >>
     await step("request.verify-receipt", () => {
       const verdict = verifyRequestReceiptBundle(receiptDir);
       if (!verdict.ok) throw new Error(`verify-receipt failed: ${verdict.errors.join("; ")}`);
+    });
+
+    // MCP leg: drive the same signed request through the JSON-RPC server
+    // over piped streams. Confirms initialize → tools/list → tools/call
+    // round-trips against a real DB. Cheap (<200ms) and catches schema
+    // drift that direct library tests miss.
+    await step("mcp.handshake", async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const collected: string[] = [];
+      output.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString("utf8").split("\n")) {
+          if (line.trim()) collected.push(line);
+        }
+      });
+      const serverPromise = serveMcpStdio({ input, output, db });
+      input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`);
+      input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+      input.write(`${JSON.stringify({
+        jsonrpc: "2.0", id: 3, method: "tools/call",
+        params: { name: "request_show", arguments: { request_id: created.requestId } },
+      })}\n`);
+      input.write(`${JSON.stringify({
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "audit_verify", arguments: { request_id: created.requestId } },
+      })}\n`);
+      input.end();
+      await serverPromise;
+
+      if (collected.length !== 4) {
+        throw new Error(`mcp.handshake: expected 4 responses, got ${collected.length}`);
+      }
+      const init = JSON.parse(collected[0]);
+      if (!init.result?.protocolVersion) throw new Error("mcp.handshake: initialize missing protocolVersion");
+      const tools = JSON.parse(collected[1]);
+      if (!Array.isArray(tools.result?.tools) || tools.result.tools.length < 7) {
+        throw new Error(`mcp.handshake: tools/list returned ${tools.result?.tools?.length ?? 0} tools (expected ≥ 7)`);
+      }
+      const showResp = JSON.parse(collected[2]);
+      const showBody = JSON.parse(showResp.result.content[0].text);
+      if (showBody.request?.id !== created.requestId) {
+        throw new Error(`mcp.handshake: request_show returned wrong id (${showBody.request?.id})`);
+      }
+      const verifyResp = JSON.parse(collected[3]);
+      const verifyBody = JSON.parse(verifyResp.result.content[0].text);
+      if (verifyBody.valid !== true) {
+        throw new Error(`mcp.handshake: audit_verify returned valid=${verifyBody.valid}`);
+      }
     });
   } finally {
     db.close();
