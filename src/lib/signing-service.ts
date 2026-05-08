@@ -13,6 +13,7 @@ import {
   sendDocuSignEnvelopeFromTemplate,
   voidDocuSignEnvelope,
 } from "./docusign.js";
+import { asBackend, type DbBackend } from "./db-backend.js";
 import type { SqliteDb } from "./db.js";
 import {
   cancelDropboxSignatureRequest,
@@ -1786,7 +1787,7 @@ export async function watchSigningRequestStatus(
   }
 }
 
-export function listAuditEvents(db: SqliteDb, requestId: string): Array<{
+export function listAuditEvents(db: SqliteDb | DbBackend, requestId: string): Array<{
   id: number;
   event_type: string;
   payload_json: string;
@@ -1794,7 +1795,8 @@ export function listAuditEvents(db: SqliteDb, requestId: string): Array<{
   hash_self: string;
   created_at: string;
 }> {
-  return db.prepare(
+  const backend = asBackend(db);
+  return backend.prepare(
     `SELECT id, event_type, payload_json, hash_prev, hash_self, created_at
      FROM audit_events
      WHERE request_id = ?
