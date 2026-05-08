@@ -349,8 +349,36 @@ function listApprovalRows(db: SqliteDb, requestId: string): ApprovalRow[] {
   return db.prepare("SELECT * FROM approvals WHERE request_id = ? ORDER BY signer_order ASC").all(requestId) as ApprovalRow[];
 }
 
+const UPDATE_REQUEST_STATUS_SQL = "UPDATE requests SET status = ?, updated_at = ? WHERE id = ?";
+
 function updateRequestStatus(db: SqliteDb, requestId: string, status: string, now: Date): void {
-  db.prepare("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(now), requestId);
+  db.prepare(UPDATE_REQUEST_STATUS_SQL).run(status, nowIso(now), requestId);
+}
+
+// Async sibling — same UPDATE, runs through prepareAsync so PostgresBackend
+// works. Placeholder translator handles the ?-to-$N rewrite.
+export async function updateRequestStatusAsync(
+  backend: DbBackend,
+  requestId: string,
+  status: string,
+  now: Date,
+): Promise<void> {
+  await backend.prepareAsync(UPDATE_REQUEST_STATUS_SQL).run(status, nowIso(now), requestId);
+}
+
+const MARK_APPROVAL_USED_SQL = "UPDATE approvals SET used_at = ?, approved_at = ? WHERE id = ?";
+
+function markApprovalUsed(db: SqliteDb, approvalId: string, nowStamp: string): void {
+  db.prepare(MARK_APPROVAL_USED_SQL).run(nowStamp, nowStamp, approvalId);
+}
+
+// Async sibling — flips used_at/approved_at on one approval row.
+export async function markApprovalUsedAsync(
+  backend: DbBackend,
+  approvalId: string,
+  nowStamp: string,
+): Promise<void> {
+  await backend.prepareAsync(MARK_APPROVAL_USED_SQL).run(nowStamp, nowStamp, approvalId);
 }
 
 function parseSignatureIdsJson(raw: string | null): string[] {
@@ -1148,7 +1176,7 @@ export function approveSigningRequest(
   }
 
   const nowStamp = nowIso(now);
-  db.prepare("UPDATE approvals SET used_at = ?, approved_at = ? WHERE id = ?").run(nowStamp, nowStamp, approval.id);
+  markApprovalUsed(db, approval.id, nowStamp);
 
   const remainingCount = db
     .prepare("SELECT COUNT(*) AS count FROM approvals WHERE request_id = ? AND used_at IS NULL")
