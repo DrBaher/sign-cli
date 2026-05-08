@@ -157,7 +157,7 @@ sign signer reissue-token --request-id <id> --signer-email <e> [--token-ttl-minu
 sign signer watch [--signer-email <e>] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600]
 sign signer policy run --request-id <id> --token <token> --spec ./policy.json [--dry-run true]
 sign signer policy run-all --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true]   (apply policy to every pending request the agent has a token for)
-sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson] [--on-decision "<cmd>"]   (long-running: tail the inbox + apply the policy; --on-decision spawns <cmd> per entry with the entry JSON on stdin and SIGN_HOOK_* env vars; exits 3 if any row failed, 4 on timeout)
+sign signer policy run-watch --tokens-file ./tokens.json --spec ./policy.json [--signer-email <e>] [--dry-run true] [--exit-on-first true] [--interval-seconds 1] [--timeout-seconds 600] [--report ./out.ndjson] [--on-decision "<cmd>"] [--since-anchor latest|<artifactId>]   (long-running: tail the inbox + apply the policy; --since-anchor evaluates only entries created after the named anchor was issued; exits 3 if any row failed, 4 on timeout)
 sign signer policy try --spec ./policy.json (--title "..." --document-sha256 <hex> --signer-email <e> | --snapshot ./snap.json)   (offline tester — print the decision without touching state)
 sign signer policy diff --before ./old.json --after ./new.json (--snapshot ./snap.json | --inbox [--signer-email <e>])   (preview action changes between two specs against the same contexts)
 sign signer policy lint --spec ./policy.json   (static checks: invalid regex, unreachable rules after match: "any", redundant rules, decline-without-reason)
@@ -958,10 +958,31 @@ async function main(): Promise<void> {
       reportStream = fs.createWriteStream(resolved, { flags: "a" });
     }
     const onDecisionCmd = flagValue(parsed, "on-decision");
-    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""}${reportPath ? ` → ${reportPath}` : ""}${onDecisionCmd ? ` | hook: ${onDecisionCmd}` : ""} (Ctrl+C to stop)\n`);
+    const sinceAnchorRaw = flagValue(parsed, "since-anchor");
+    let sinceCreatedAt: string | undefined;
+    if (sinceAnchorRaw) {
+      const { listStoredAnchors } = await import("./lib/audit-anchor.js");
+      const anchors = listStoredAnchors(db, { limit: 1000 });
+      let chosen: { artifactId: string; createdAt: string } | undefined;
+      if (sinceAnchorRaw === "latest") {
+        chosen = anchors[0];
+      } else {
+        chosen = anchors.find((a) => a.artifactId === sinceAnchorRaw);
+      }
+      if (!chosen) {
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: sinceAnchorRaw === "latest"
+            ? "--since-anchor latest: no audit_anchor artifacts have been issued yet."
+            : `--since-anchor: anchor artifactId not found: ${JSON.stringify(sinceAnchorRaw)}.`,
+        });
+      }
+      sinceCreatedAt = chosen.createdAt;
+    }
+    process.stderr.write(`[signer policy run-watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""}${reportPath ? ` → ${reportPath}` : ""}${onDecisionCmd ? ` | hook: ${onDecisionCmd}` : ""}${sinceCreatedAt ? ` since ${sinceCreatedAt}` : ""} (Ctrl+C to stop)\n`);
     const { spawn } = await import("node:child_process");
     const outcome = await runSignerPolicyWatch(db, {
-      tokens, spec, signerEmail, exitOnFirst, timeoutMs, pollIntervalMs, dryRun,
+      tokens, spec, signerEmail, exitOnFirst, timeoutMs, pollIntervalMs, dryRun, sinceCreatedAt,
       onEntry: (entry) => {
         const tag = entry.skipped ? "  SKIP" : entry.ok ? `+ ${entry.decision?.action?.toUpperCase()}` : "× ERROR";
         process.stderr.write(`${tag} ${entry.requestId}${entry.error ? ` ${entry.error.code}: ${entry.error.message}` : ""}\n`);

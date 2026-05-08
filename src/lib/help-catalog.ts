@@ -285,6 +285,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--timeout-seconds", description: "Exit code 4 after this many seconds with no new entry." },
       { name: "--report", description: "Append one NDJSON line per evaluated entry to this file (plus a final {summary:true,…} line). Replay/audit-friendly." },
       { name: "--on-decision", description: "Shell command spawned per evaluated entry. Receives the entry JSON on stdin and SIGN_HOOK_REQUEST_ID/SIGN_HOOK_SIGNER_EMAIL/SIGN_HOOK_OK/SIGN_HOOK_ACTION/SIGN_HOOK_SKIPPED env vars. Fire-and-forget — child errors land on stderr but don't affect the watcher's exit code." },
+      { name: "--since-anchor", description: "`latest` or an explicit anchor `artifactId`. Skips entries created at or before the anchor's createdAt — useful when an anchor already attests to all chains up to that point and you only want to act on what's newer." },
     ],
   },
   {
