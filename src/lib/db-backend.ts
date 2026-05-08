@@ -23,11 +23,24 @@ export interface DbStatement {
   all(...params: unknown[]): DbRow[];
 }
 
+// Async variant. Postgres can only implement this — `pg` is async-only.
+// SqliteBackend implements it too (synchronously, just Promise-wrapped) so
+// new code can target the async surface uniformly.
+export interface AsyncDbStatement {
+  run(...params: unknown[]): Promise<{ changes: number }>;
+  get(...params: unknown[]): Promise<DbRow | undefined>;
+  all(...params: unknown[]): Promise<DbRow[]>;
+}
+
 export interface DbBackend {
   readonly kind: "sqlite" | "postgres";
   prepare(sql: string): DbStatement;
+  prepareAsync(sql: string): AsyncDbStatement;
   exec(sql: string): void;
-  close(): void;
+  execAsync(sql: string): Promise<void>;
+  // Async-or-sync — Postgres needs `pool.end()` (async); SQLite is sync. Caller
+  // can `await` either safely.
+  close(): void | Promise<void>;
 }
 
 // --- SQLite adapter ---------------------------------------------------------
@@ -59,7 +72,18 @@ export class SqliteBackend implements DbBackend {
   prepare(sql: string): DbStatement {
     return new SqliteStatementAdapter(this.db.prepare(sql));
   }
+  prepareAsync(sql: string): AsyncDbStatement {
+    const sync = new SqliteStatementAdapter(this.db.prepare(sql));
+    return {
+      run: async (...params) => ({ changes: sync.run(...params).changes }),
+      get: async (...params) => sync.get(...params),
+      all: async (...params) => sync.all(...params),
+    };
+  }
   exec(sql: string): void {
+    this.db.exec(sql);
+  }
+  async execAsync(sql: string): Promise<void> {
     this.db.exec(sql);
   }
   close(): void {
@@ -67,33 +91,106 @@ export class SqliteBackend implements DbBackend {
   }
 }
 
-// --- Postgres stub ----------------------------------------------------------
-// Intentionally throws on every operation. Until we wire `pg`, we want any
-// accidental `SIGN_DB_BACKEND=postgres` path to fail loudly with a pointer
-// at the migration plan instead of silently degrading.
+// --- Postgres backend -------------------------------------------------------
+// Real implementation: backed by `pg.Pool` with on-the-fly placeholder
+// translation. Sync (`prepare`/`exec`) still throws — `pg` is async-only and
+// the sync→async call-site migration is its own track tracked in MIGRATION.md.
+// `prepareAsync`/`execAsync` are the working entry points.
+
+// Minimal subset of pg's Pool we depend on. Lets tests pass a fake without
+// pulling in the real `pg` module — and matches `pg.Pool`'s real shape so
+// the live driver is just `new pg.Pool({ connectionString })`.
+export interface PgQueryable {
+  query(text: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
+  end?(): Promise<void>;
+}
+
+// Translate "?" placeholders (SQLite/sign-cli flavor) to "$1, $2, ..." (Postgres
+// flavor). Pure: doesn't peek inside string literals, but we don't use ? inside
+// literals anywhere, so the simple substitution is safe for our query corpus.
+// Single-quoted literals are skipped to avoid mangling user-supplied data.
+export function translatePlaceholders(sql: string): string {
+  let out = "";
+  let i = 0;
+  let n = 1;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch === "'") {
+      // Copy the entire single-quoted literal verbatim, including any '' escapes.
+      const end = findClosingSingleQuote(sql, i);
+      out += sql.slice(i, end + 1);
+      i = end + 1;
+      continue;
+    }
+    if (ch === "?") {
+      out += `$${n}`;
+      n += 1;
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function findClosingSingleQuote(sql: string, openIdx: number): number {
+  let i = openIdx + 1;
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      if (sql[i + 1] === "'") {
+        i += 2; // doubled quote = escaped, skip both
+        continue;
+      }
+      return i;
+    }
+    i += 1;
+  }
+  return sql.length - 1;
+}
 
 export class PostgresBackend implements DbBackend {
   readonly kind = "postgres" as const;
-  constructor(private readonly _connectionUrl?: string) {}
+  constructor(private readonly client: PgQueryable, private readonly _connectionUrl?: string) {}
   prepare(_sql: string): DbStatement {
-    throw notImplemented("DbBackend.prepare");
+    throw new SignCliError({
+      code: "INTERNAL",
+      message:
+        "PostgresBackend.prepare (sync) is not supported — pg is async-only. Use prepareAsync(). " +
+        "Sync→async call-site migration is tracked in MIGRATION.md.",
+    });
   }
   exec(_sql: string): void {
-    throw notImplemented("DbBackend.exec");
+    throw new SignCliError({
+      code: "INTERNAL",
+      message: "PostgresBackend.exec (sync) is not supported. Use execAsync().",
+    });
   }
-  close(): void {
-    // no-op — nothing to close on a stub
+  prepareAsync(sql: string): AsyncDbStatement {
+    const translated = translatePlaceholders(sql);
+    const client = this.client;
+    return {
+      async run(...params: unknown[]): Promise<{ changes: number }> {
+        const result = await client.query(translated, params);
+        return { changes: result.rowCount ?? 0 };
+      },
+      async get(...params: unknown[]): Promise<DbRow | undefined> {
+        const result = await client.query(translated, params);
+        const row = result.rows[0] as DbRow | undefined;
+        return row ? { ...row } : undefined;
+      },
+      async all(...params: unknown[]): Promise<DbRow[]> {
+        const result = await client.query(translated, params);
+        return (result.rows as DbRow[]).map((row) => ({ ...row }));
+      },
+    };
   }
-}
-
-function notImplemented(method: string): SignCliError {
-  return new SignCliError({
-    code: "INTERNAL",
-    message:
-      `${method} is not implemented for the postgres backend. ` +
-      "The DbBackend interface scaffold lives at src/lib/db-backend.ts; the next PR in the " +
-      "Postgres-readiness checklist (see MIGRATION.md) wires the `pg` driver into this stub.",
-  });
+  async execAsync(sql: string): Promise<void> {
+    await this.client.query(sql);
+  }
+  async close(): Promise<void> {
+    if (this.client.end) await this.client.end();
+  }
 }
 
 // --- Helpers ----------------------------------------------------------------

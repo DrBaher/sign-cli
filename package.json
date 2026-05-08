@@ -69,7 +69,9 @@
     "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
-    "@dropbox/sign": "^1.10.0"
+    "@dropbox/sign": "^1.10.0",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

@@ -10,9 +10,12 @@
 // Phase 2 (future PR): introduce a minimal interface (prepare/exec) that
 //   both backends implement, and migrate the call sites to it.
 
+import { createRequire } from "node:module";
 import { openDatabase, type SqliteDb } from "./db.js";
-import { type DbBackend, PostgresBackend, wrapSqliteDb } from "./db-backend.js";
+import { type DbBackend, type PgQueryable, PostgresBackend, wrapSqliteDb } from "./db-backend.js";
 import { SignCliError } from "./sign-error.js";
+
+const localRequire = createRequire(import.meta.url);
 
 export type SignBackend = "sqlite" | "postgres";
 
@@ -70,14 +73,33 @@ export function openStorage(opts: StorageOpenOptions = {}): SqliteDb {
 
 // Forward-compatible variant that returns the abstract DbBackend instead of the
 // concrete SqliteDb. New code should reach for this; existing call sites can
-// migrate one at a time. The Postgres branch is wired to the stub adapter so
-// callers see a uniform error surface (DbBackend.prepare(...) throws) instead
-// of the storage-level "implementation is a stub" envelope.
+// migrate one at a time.
+//
+// Postgres path is real now — it lazy-loads `pg`, builds a Pool, wraps it in
+// PostgresBackend. The sync surface still throws (pg is async-only); callers
+// must use `prepareAsync`/`execAsync`. Sync→async call-site migration is
+// tracked in MIGRATION.md.
 export function openStorageBackend(opts: StorageOpenOptions = {}): DbBackend {
   const backend = resolveBackend(opts.backend);
   if (backend === "postgres") {
-    return new PostgresBackend(opts.postgresUrl ?? process.env.SIGN_PG_URL);
+    const url = opts.postgresUrl ?? process.env.SIGN_PG_URL;
+    if (!url) {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: "SIGN_DB_BACKEND=postgres requires SIGN_PG_URL (or opts.postgresUrl) to be set.",
+      });
+    }
+    return openPostgresBackend(url);
   }
   const dbPath = opts.dbPath ?? process.env.SIGN_DB_PATH ?? "./data/sign.db";
   return wrapSqliteDb(openDatabase(dbPath));
+}
+
+// Separated out so tests can stub the pg-loading path. Uses createRequire so
+// SQLite-only users don't pay the import cost (and don't need `pg` installed
+// at all unless they opt into Postgres).
+function openPostgresBackend(connectionString: string): DbBackend {
+  const pgMod = localRequire("pg") as { Pool: new (config: { connectionString: string }) => unknown };
+  const pool = new pgMod.Pool({ connectionString }) as unknown as PgQueryable;
+  return new PostgresBackend(pool, connectionString);
 }
