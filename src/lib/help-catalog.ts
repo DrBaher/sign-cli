@@ -436,6 +436,17 @@ export const HELP_CATALOG: CommandSpec[] = [
     ],
   },
   {
+    command: "db indexes-postgres",
+    summary: "Postgres companion to `db indexes`. Reads pg_indexes / pg_class for the active connection, runs EXPLAIN (FORMAT JSON), and uses pg_class.reltuples for cheap row-count estimates in the suggestions heuristic.",
+    flags: [
+      { name: "--pg-url", description: "postgres://… connection string (defaults to SIGN_PG_URL)." },
+      { name: "--schema", description: "Schema to scan (default public)." },
+      { name: "--explain", description: "SQL string. Runs EXPLAIN (FORMAT JSON) and includes the plan tree." },
+      { name: "--suggest", description: "true to include a suggestions[] array of under-indexed tables (uses pg_class.reltuples; run ANALYZE first if numbers look stale)." },
+      { name: "--suggest-threshold", description: "Row-estimate threshold (default 1000)." },
+    ],
+  },
+  {
     command: "db migrate-postgres",
     summary: "One-shot Postgres bootstrap: connects to --pg-url, creates the ported schema (CREATE TABLE IF NOT EXISTS) and the audit_events append-only triggers via PL/pgSQL. Idempotent — safe to re-run.",
     flags: [

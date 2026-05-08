@@ -182,7 +182,8 @@ sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
 sign db migrate [--dry-run true]   (apply pending versioned migrations; --dry-run prints the queue without changing state)
-sign db indexes [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (list indexes, run EXPLAIN QUERY PLAN, suggest under-indexed tables)
+sign db indexes [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (SQLite catalog: list indexes, run EXPLAIN QUERY PLAN, suggest under-indexed tables)
+sign db indexes-postgres --pg-url postgres://… [--schema public] [--explain "SELECT ..."] [--suggest true [--suggest-threshold 1000]]   (Postgres catalog: pg_indexes companion to db indexes)
 sign db migrate-postgres --pg-url postgres://…   (one-shot Postgres bootstrap: create the ported schema + append-only triggers; idempotent)
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve  (stdio Model Context Protocol server; tools: signer_list, signer_fetch_document, sign, signer_decline, request_show, request_status, audit_verify)
@@ -332,6 +333,34 @@ async function main(): Promise<void> {
     }
     const outcome = applyPendingMigrations(db);
     console.log(JSON.stringify(outcome, null, 2));
+    return;
+  }
+
+  if (root === "db" && sub === "indexes-postgres") {
+    const url = flagValue(parsed, "pg-url") ?? process.env.SIGN_PG_URL;
+    if (!url) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "db indexes-postgres requires --pg-url <postgres://…> (or SIGN_PG_URL env var).",
+      });
+    }
+    const explainSql = flagValue(parsed, "explain");
+    const suggest = (flagValue(parsed, "suggest") ?? "false") === "true";
+    const schema = flagValue(parsed, "schema") ?? "public";
+    const { openStorageBackend } = await import("./lib/storage.js");
+    const { listPgIndexes, explainPgQueryPlan, suggestPgMissingIndexes } = await import("./lib/db-indexes-postgres.js");
+    const backend = openStorageBackend({ backend: "postgres", postgresUrl: url });
+    try {
+      const out: Record<string, unknown> = { indexes: await listPgIndexes(backend, schema) };
+      if (explainSql) out.queryPlan = await explainPgQueryPlan(backend, explainSql);
+      if (suggest) {
+        const threshold = flagValue(parsed, "suggest-threshold");
+        out.suggestions = await suggestPgMissingIndexes(backend, threshold ? Number(threshold) : undefined, schema);
+      }
+      console.log(JSON.stringify(out, null, 2));
+    } finally {
+      await backend.close();
+    }
     return;
   }
 
