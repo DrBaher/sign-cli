@@ -14,6 +14,7 @@
 import type { SqliteDb } from "./db.js";
 import { issueRfc3161Timestamp, inspectTimestampResponse, type TimestampInspection } from "./timestamp.js";
 import { appendAuditEvent } from "./audit.js";
+import { insertArtifactRow } from "./signing-service.js";
 import { createId, nowIso, sha256, stableStringify } from "./util.js";
 
 export type AnchorManifestEntry = {
@@ -91,24 +92,21 @@ export async function anchorAllAuditChainHeads(
   // audit log. Single artifact row per anchor (kind=audit_anchor) covers
   // the file-level reference; per-request audit_events provide the chain
   // continuity that re-verification keys off.
-  db.prepare(
-    `INSERT INTO artifacts (id, request_id, kind, path, content_hash, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    createId("art"),
-    manifest[0].requestId, // anchor is global; we attach the artifact row to the lowest-id request as a stable home
-    "audit_anchor",
-    artifactPath,
-    sha256(result.responseBuffer),
-    stableStringify({
+  insertArtifactRow(db, {
+    id: createId("art"),
+    requestId: manifest[0].requestId, // anchor is global; pin the artifact row to the lowest-id request
+    kind: "audit_anchor",
+    path: artifactPath,
+    contentHash: sha256(result.responseBuffer),
+    metadataJson: stableStringify({
       tsaUrl: result.tsaUrl,
       manifestPath,
       manifestBytes,
       digestHex,
       coveredRequests: manifest.length,
     }),
-    nowIso(now),
-  );
+    createdAt: nowIso(now),
+  });
 
   for (const entry of manifest) {
     appendAuditEvent(db, {
