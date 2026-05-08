@@ -143,7 +143,22 @@ export type HttpServerOptions = {
   // one token from the requester's bucket; over-budget requests get a 429
   // with a Retry-After header.
   rateLimit?: { capacity: number; refillPerSec: number };
+  // When true, the four request-mutating routes (sign, decline, reissue-token,
+  // request/receipt) return 403 with code FORBIDDEN_READ_ONLY. Useful for
+  // compliance read-only views or for parking a clone of production behind a
+  // dashboard without giving anyone the ability to drive lifecycle.
+  readOnly?: boolean;
 };
+
+// Routes that mutate request lifecycle state. `readOnly: true` blocks them.
+// Audit-event-only side effects (fetch-document, status polling) stay allowed
+// because they're read-style use cases — locking those out cripples ops views.
+export const READ_ONLY_BLOCKED_ROUTES: ReadonlySet<string> = new Set([
+  "POST /v1/sign",
+  "POST /v1/signer/decline",
+  "POST /v1/signer/reissue-token",
+  "POST /v1/request/receipt",
+]);
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -237,6 +252,19 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
         res.end(JSON.stringify({ ok: false, error: { code: "UNAUTHORIZED", message: "Missing or invalid Bearer token." } }));
         return;
       }
+    }
+
+    if (opts.readOnly && READ_ONLY_BLOCKED_ROUTES.has(route)) {
+      res.statusCode = 403;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({
+        ok: false,
+        error: {
+          code: "FORBIDDEN_READ_ONLY",
+          message: `Server is running with --read-only true; ${route} is disabled.`,
+        },
+      }));
+      return;
     }
 
     // Prometheus is text/plain; bypass the JSON dispatcher.
