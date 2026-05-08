@@ -546,6 +546,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--tool", description: "Repeatable. Restrict tools/list + tools/call to the named subset — anything outside returns the same UNKNOWN_TOOL envelope as a real unknown tool, so an agent can't probe for hidden capabilities. Useful for least-privilege agent loops." },
       { name: "--capability", description: "Repeatable: tools / resources / prompts. Advertises only the named capabilities at initialize; disabled capabilities answer their list/read methods with INVALID_ARGS. Useful when an agent only needs one surface (e.g. tools-only)." },
       { name: "--emit-events", description: "Append every JSON-RPC message (in/out) to this file as NDJSON ({ direction, at, message }). Compliance-grade replay log — pair with a strict file ACL." },
+      { name: "--emit-events-redact", description: "true to mask token-shaped fields (token, token_hash, token_hint, authorization, bearer, api_key) in the log before they're written. Wire bytes to the client are unchanged." },
     ],
   },
   {

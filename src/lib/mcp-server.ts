@@ -693,6 +693,38 @@ function writeMessage(out: NodeJS.WritableStream, message: JsonRpcMessage): void
   out.write(`${JSON.stringify(message)}\n`);
 }
 
+// Field names whose string values are always replaced with <REDACTED> when
+// redaction is on. Matched case-insensitively. Conservative — covers the
+// shapes our own MCP surface emits, plus the Authorization header form an
+// agent might pass through in arguments.
+const SECRET_FIELD_NAMES = new Set([
+  "token",
+  "token_hash",
+  "token_hint",
+  "authorization",
+  "bearer",
+  "api_key",
+  "apikey",
+  "x-api-key",
+]);
+
+function redactSecrets(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === "string" && SECRET_FIELD_NAMES.has(key.toLowerCase())) {
+        out[key] = "<REDACTED>";
+      } else {
+        out[key] = redactSecrets(v);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 function extractProgressToken(params: unknown): string | number | null {
   if (!params || typeof params !== "object") return null;
   const meta = (params as { _meta?: unknown })._meta;
@@ -714,6 +746,10 @@ export async function serveMcpStdio(opts: {
   // Compliance-grade replay log — pair with a strict file ACL so only the
   // operator can read/write it.
   emitEventsPath?: string;
+  // When true (with emitEventsPath), token-shaped fields anywhere in the
+  // message tree are replaced with "<REDACTED>" before being written to the
+  // log. The wire bytes going to the client are NOT touched — only the log.
+  emitEventsRedact?: boolean;
 }): Promise<void> {
   const rl = readline.createInterface({ input: opts.input, crlfDelay: Infinity });
   // Optional audit log — append every JSON-RPC message (in and out) as
@@ -725,9 +761,12 @@ export async function serveMcpStdio(opts: {
     mkdirSync(path.dirname(resolved), { recursive: true });
     emitStream = createWriteStream(resolved, { flags: "a" });
   }
+  const redactForEmit = opts.emitEventsRedact === true;
+  const renderEmit = (entry: { direction: "in" | "out"; at: string; message: JsonRpcMessage }): string =>
+    JSON.stringify(redactForEmit ? { ...entry, message: redactSecrets(entry.message) } : entry) + "\n";
   const writeMessageTeed = (out: NodeJS.WritableStream, message: JsonRpcMessage): void => {
     if (emitStream) {
-      emitStream.write(JSON.stringify({ direction: "out", at: new Date().toISOString(), message }) + "\n");
+      emitStream.write(renderEmit({ direction: "out", at: new Date().toISOString(), message }));
     }
     writeMessage(out, message);
   };
@@ -750,7 +789,7 @@ export async function serveMcpStdio(opts: {
         continue;
       }
       if (emitStream) {
-        emitStream.write(JSON.stringify({ direction: "in", at: new Date().toISOString(), message }) + "\n");
+        emitStream.write(renderEmit({ direction: "in", at: new Date().toISOString(), message }));
       }
       const id = message.id ?? null;
       const isNotification = id === null || id === undefined;
