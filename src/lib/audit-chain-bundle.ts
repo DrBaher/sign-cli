@@ -18,6 +18,7 @@
 import type { SqliteDb } from "./db.js";
 import { exportRequestReceipt } from "./signing-service.js";
 import { listStoredAnchors } from "./audit-anchor.js";
+import { buildTarGzFromDir } from "./tar.js";
 
 export type ChainBundleEntry = {
   requestId: string;
@@ -32,6 +33,11 @@ export type ChainBundleReport = {
   anchor: { tsrPath: string; manifestPath: string; digestHex: string | null } | null;
   requests: ChainBundleEntry[];
   totalBytes: number;
+  // Set when the caller passed tarballPath. The .tar.gz is produced from the
+  // assembled directory after INDEX.json is written, so the archive is a
+  // faithful copy of what's on disk.
+  tarballPath?: string;
+  tarballBytes?: number;
 };
 
 export async function exportAuditChainBundle(
@@ -40,6 +46,10 @@ export async function exportAuditChainBundle(
     outDir: string;
     requestIds?: string[];           // optional: which requests to include (default: every request that has audit events)
     now?: Date;
+    // When set, also produce a gzipped tarball at this path. The archive's
+    // top-level directory matches basename(outDir), so `tar xzf …` recreates
+    // the same on-disk layout the bundle assembled.
+    tarballPath?: string;
   },
 ): Promise<ChainBundleReport> {
   const fs = await import("node:fs");
@@ -104,5 +114,16 @@ export async function exportAuditChainBundle(
     totalBytes,
   }, null, 2));
 
-  return { outDir, indexPath, anchor, requests: entries, totalBytes };
+  const report: ChainBundleReport = { outDir, indexPath, anchor, requests: entries, totalBytes };
+
+  if (input.tarballPath) {
+    const gz = buildTarGzFromDir(outDir, path.basename(outDir));
+    const resolvedTarball = path.resolve(input.tarballPath);
+    fs.mkdirSync(path.dirname(resolvedTarball), { recursive: true });
+    fs.writeFileSync(resolvedTarball, gz);
+    report.tarballPath = resolvedTarball;
+    report.tarballBytes = gz.length;
+  }
+
+  return report;
 }

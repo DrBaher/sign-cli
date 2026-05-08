@@ -77,6 +77,34 @@ test("exportAuditChainBundle writes INDEX.json + per-request receipts that pass 
   });
 });
 
+test("exportAuditChainBundle --tarball produces a gzipped USTAR archive that extracts back to the bundle dir", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  const documentPath = createDocumentFixture("chain-bundle-tar");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "sign-chain-bundle-tar-"));
+  try {
+    createSigningRequest(db, {
+      title: "Tarball", documentPath,
+      signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
+      tokenTtlMinutes: 30, provider: "dropbox",
+    });
+    const out = path.join(dir, "bundle");
+    const tarballPath = path.join(dir, "bundle.tar.gz");
+    const report = await exportAuditChainBundle(db, { outDir: out, tarballPath });
+    assert.equal(report.tarballPath, tarballPath);
+    assert.ok((report.tarballBytes ?? 0) > 0);
+    assert.ok(existsSync(tarballPath));
+    // Magic bytes: gzip starts with 1f 8b
+    const gz = readFileSync(tarballPath);
+    assert.equal(gz[0], 0x1f);
+    assert.equal(gz[1], 0x8b);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    db.close();
+    cleanup();
+  }
+});
+
 test("exportAuditChainBundle --request-id restricts the bundle to a single request", async () => {
   const { dbPath, cleanup } = makeTempDb();
   const db = createDb(dbPath);
