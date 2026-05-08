@@ -33,9 +33,11 @@ ENV SIGN_LOCAL_AUTOCOMPLETE=true
 
 WORKDIR /app
 
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/fixtures ./fixtures
-COPY --from=build /app/package.json ./package.json
 COPY deploy/seed-demo.mjs ./deploy/seed-demo.mjs
 COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
 RUN chmod +x ./deploy/entrypoint.sh
