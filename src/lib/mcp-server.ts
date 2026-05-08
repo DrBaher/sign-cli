@@ -493,6 +493,11 @@ export type McpDispatchInput = {
   // FORBIDDEN_READ_ONLY error envelope (same code shape as the HTTP
   // --read-only path).
   readOnly?: boolean;
+  // When set, ONLY the named tools are exposed via tools/list and tools/call.
+  // Anything outside the set returns isError + UNKNOWN_TOOL — same envelope
+  // shape as a real unknown tool, so an agent can't probe the server for
+  // hidden capabilities.
+  allowedTools?: ReadonlySet<string>;
 };
 
 export type McpDispatchResult = { kind: "result"; value: unknown } | { kind: "ignored" };
@@ -521,7 +526,10 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
     };
   }
   if (method === "tools/list") {
-    return { kind: "result", value: { tools: listMcpTools() } };
+    const tools = input.allowedTools
+      ? listMcpTools().filter((t) => input.allowedTools!.has(t.name))
+      : listMcpTools();
+    return { kind: "result", value: { tools } };
   }
   if (method === "resources/list") {
     return { kind: "result", value: { resources: listMcpResources(db) } };
@@ -556,7 +564,10 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
     const toolName = typeof callParams.name === "string" ? callParams.name : "";
     const toolArgs = (callParams.arguments ?? {}) as Record<string, unknown>;
     const tool = TOOLS.find((entry) => entry.name === toolName);
-    if (!tool) {
+    // Allow-list gate: outside the allowed set, return the same envelope as
+    // a real unknown tool so an agent can't probe for hidden capabilities.
+    const allowedTools = input.allowedTools;
+    if (!tool || (allowedTools && !allowedTools.has(tool.name))) {
       return {
         kind: "result",
         value: {
@@ -674,6 +685,7 @@ export async function serveMcpStdio(opts: {
   output: NodeJS.WritableStream;
   db: SqliteDb;
   readOnly?: boolean;
+  allowedTools?: ReadonlySet<string>;
 }): Promise<void> {
   const rl = readline.createInterface({ input: opts.input, crlfDelay: Infinity });
   // Per-connection subscription registry. Each entry is the unsubscribe fn
@@ -756,6 +768,7 @@ export async function serveMcpStdio(opts: {
         db: opts.db,
         emitProgress,
         readOnly: opts.readOnly,
+        allowedTools: opts.allowedTools,
       });
       if (dispatch.kind === "ignored" || isNotification) continue;
       writeMessage(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
