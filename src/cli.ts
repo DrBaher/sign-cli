@@ -198,7 +198,7 @@ Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
-sign audit show --request-id <id> [--format json|csv]
+sign audit show --request-id <id> [--format json|csv] [--event-type <t> ...]   (filter to one or more event_type values; --event-type is repeatable)
 sign audit search [--request-id <id>] [--event-type request.signed] [--since <iso>] [--until <iso>] [--payload-contains <substr>] [--limit 1000]   (log-style filter across the full audit_events table)
 sign audit verify --request-id <id>
 sign audit scan [--provider dropbox|docusign|signwell|local] [--status <s>] [--limit 1000]   (verify every request's chain in one shot; exits 3 if any break)
@@ -1212,7 +1212,12 @@ async function main(): Promise<void> {
         message: `--format must be json or csv; got ${JSON.stringify(format)}.`,
       });
     }
-    const events = listAuditEvents(db, requestId);
+    const eventTypes = flagValues(parsed, "event-type");
+    let events = listAuditEvents(db, requestId);
+    if (eventTypes.length > 0) {
+      const allow = new Set(eventTypes);
+      events = events.filter((e) => allow.has(e.event_type));
+    }
     if (format === "csv") {
       const { renderAuditChainAsCsv } = await import("./lib/audit-csv.js");
       process.stdout.write(renderAuditChainAsCsv(events));
