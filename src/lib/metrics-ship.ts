@@ -18,6 +18,12 @@ export type MetricsShipOptions = {
   intervalMs?: number;
   // Stop after this many pushes — useful for scripted runs and tests.
   maxPushes?: number;
+  // When set to N > 1, render every interval but POST every Nth interval —
+  // the body bundles the last N rendered snapshots, separated by a
+  // "# BATCH BOUNDARY <isoTimestamp>" comment line. Net: same data volume,
+  // N× fewer HTTP round-trips. Useful for high-cardinality scrapes against
+  // metered endpoints.
+  batchSize?: number;
   // Defaults to global fetch; overridable for tests.
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -25,7 +31,8 @@ export type MetricsShipOptions = {
 };
 
 export type MetricsShipEvent =
-  | { phase: "push"; pushNumber: number; bytes: number; status: number }
+  | { phase: "render"; pushNumber: number; bytes: number; bufferedSnapshots: number }
+  | { phase: "push"; pushNumber: number; bytes: number; status: number; snapshotsInBody: number }
   | { phase: "error"; pushNumber: number; error: string }
   | { phase: "stopped"; reason: "signal" | "max-pushes" };
 
@@ -48,6 +55,9 @@ export async function shipMetricsLoop(
     ...(opts.headers ?? {}),
   };
 
+  const batchSize = Math.max(1, Math.floor(opts.batchSize ?? 1));
+  const buffer: string[] = [];
+
   let pushes = 0;
   let errors = 0;
   let consecutiveErrors = 0;
@@ -59,9 +69,9 @@ export async function shipMetricsLoop(
       break;
     }
     pushes += 1;
-    let body: string;
+    let snapshot: string;
     try {
-      body = renderPrometheusMetrics(db);
+      snapshot = renderPrometheusMetrics(db);
     } catch (error) {
       errors += 1;
       consecutiveErrors += 1;
@@ -69,28 +79,42 @@ export async function shipMetricsLoop(
       await delay(backoff(baseInterval, consecutiveErrors), opts.signal);
       continue;
     }
-    try {
-      const response = await fetchImpl(opts.url, {
-        method: "POST",
-        headers,
-        body,
-        signal: opts.signal,
-      });
-      if (!response.ok) {
+
+    // Buffer the snapshot. We POST when either the buffer is full (batchSize
+    // reached) or this is the final iteration before a max-pushes exit.
+    buffer.push(snapshot);
+    onProgress({ phase: "render", pushNumber: pushes, bytes: snapshot.length, bufferedSnapshots: buffer.length });
+
+    const reachedMaxPushes = opts.maxPushes !== undefined && pushes >= opts.maxPushes;
+    if (buffer.length >= batchSize || reachedMaxPushes) {
+      const body = buffer.length === 1
+        ? buffer[0]
+        : buffer.map((snap, i) => `# BATCH BOUNDARY ${new Date().toISOString()} part=${i + 1}/${buffer.length}\n${snap}`).join("");
+      const snapshotsInBody = buffer.length;
+      buffer.length = 0;
+      try {
+        const response = await fetchImpl(opts.url, {
+          method: "POST",
+          headers,
+          body,
+          signal: opts.signal,
+        });
+        if (!response.ok) {
+          errors += 1;
+          consecutiveErrors += 1;
+          onProgress({ phase: "error", pushNumber: pushes, error: `HTTP ${response.status}` });
+        } else {
+          consecutiveErrors = 0;
+          onProgress({ phase: "push", pushNumber: pushes, bytes: body.length, status: response.status, snapshotsInBody });
+        }
+      } catch (error) {
         errors += 1;
         consecutiveErrors += 1;
-        onProgress({ phase: "error", pushNumber: pushes, error: `HTTP ${response.status}` });
-      } else {
-        consecutiveErrors = 0;
-        onProgress({ phase: "push", pushNumber: pushes, bytes: body.length, status: response.status });
+        onProgress({ phase: "error", pushNumber: pushes, error: (error as Error).message });
       }
-    } catch (error) {
-      errors += 1;
-      consecutiveErrors += 1;
-      onProgress({ phase: "error", pushNumber: pushes, error: (error as Error).message });
     }
 
-    if (opts.maxPushes !== undefined && pushes >= opts.maxPushes) {
+    if (reachedMaxPushes) {
       stoppedReason = "max-pushes";
       break;
     }
