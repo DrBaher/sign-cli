@@ -16,5 +16,8 @@ dockerfilePath = "deploy/Dockerfile"
 [deploy]
 healthcheckPath = "/web-demo/"
 healthcheckTimeout = 30
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 5
+# entrypoint.sh exits cleanly (code 0) after DEMO_TTL_SECONDS so the platform
+# brings us back up with a fresh seed. That reset loop only works if Railway
+# restarts on *any* exit, not just non-zero ones — hence ALWAYS, not
+# ON_FAILURE. (Fly and Render restart on any exit by default.)
+restartPolicyType = "ALWAYS"
