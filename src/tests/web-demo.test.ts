@@ -35,6 +35,12 @@ test("sign serve --web-demo serves index.html same-origin without auth", { concu
     assert.equal(js.status, 200);
     assert.match(js.headers.get("content-type") ?? "", /javascript/);
 
+    // sample-signed.pdf fixture is served with application/pdf so the browser
+    // previews it inline instead of treating it as a binary download.
+    const pdf = await fetchPath(server, "/web-demo/sample-signed.pdf");
+    assert.equal(pdf.status, 200);
+    assert.match(pdf.headers.get("content-type") ?? "", /application\/pdf/);
+
     // /v1/* still gated by the auth token
     const api = await fetchPath(server, "/v1/health");
     assert.equal(api.status, 401);

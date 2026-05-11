@@ -151,6 +151,20 @@
             <div x-show="snapshot && showRaw" x-cloak>
               <pre class="json"><code x-text="rawJson(snapshot)"></code></pre>
             </div>
+
+            <!-- Example artifact: a pre-generated signed PDF with a visible
+                 SVG signature stamped *before* the PAdES envelope was sealed.
+                 Pure static download — the read-only demo doesn't generate
+                 new signed PDFs, this is the artifact one would produce. -->
+            <div class="panel-footer">
+              <div class="artifact">
+                <div class="artifact-text">
+                  <p class="artifact-title">Example: signed PDF with an embedded signature image</p>
+                  <p class="artifact-sub">SVG signature rasterized at ~300 DPI, stamped onto the page, then sealed with a per-signer PAdES envelope. Tampering with either the image or the text breaks the cryptographic verification.</p>
+                </div>
+                <a class="btn btn-ghost btn-sm" href="sample-signed.pdf" target="_blank" rel="noopener" download="sign-cli-example.pdf">↓ Download .pdf</a>
+              </div>
+            </div>
           </div>
         </div>
       </section>

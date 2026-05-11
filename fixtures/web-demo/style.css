@@ -459,6 +459,36 @@ a:hover { text-decoration: underline; }
 .kv dd { margin: 0; }
 .kv code { font-size: 0.85em; background: var(--surface-3); padding: 0.05rem 0.3rem; border-radius: 3px; }
 
+/* ── Panel footer + downloadable artifact ────────────────────── */
+.panel-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.artifact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1rem 1.25rem;
+}
+.artifact-text { min-width: 0; flex: 1; }
+.artifact-title {
+  margin: 0 0 0.2rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.artifact-sub {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 60ch;
+}
+@media (max-width: 540px) {
+  .artifact { flex-direction: column; align-items: flex-start; gap: 0.6rem; }
+}
+
 /* ── Raw JSON output ─────────────────────────────────────────── */
 .json {
   background: var(--code-bg);
