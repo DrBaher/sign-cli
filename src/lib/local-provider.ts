@@ -3,7 +3,13 @@ import { readFileSync, mkdirSync, existsSync, writeFileSync, readdirSync } from 
 import path from "node:path";
 import { loadOrCreateSignerKeyPair } from "./local-keys.js";
 import { signPdfLocally, signPdfLocallyMultiSigner } from "./local-pdf-signer.js";
-import { stampImageOnPdf, type ImageInput, type StampPosition } from "./pdf-image-stamp.js";
+import {
+  detectMimeFromBytes,
+  mimeToExt,
+  stampImageOnPdf,
+  type ImageInput,
+  type StampPosition,
+} from "./pdf-image-stamp.js";
 import { sha256 } from "./util.js";
 import type { PrefillInput, SignerInput } from "./util.js";
 import type { SignatureField } from "./field-placement.js";
@@ -501,19 +507,21 @@ export function signLocalDocument(
 
   // Persist the image bytes to disk so the eventual PDF assembly can pick them
   // up. One file per signer per document — keyed on a sha-ish slug so multiple
-  // signs across documents don't collide.
+  // signs across documents don't collide. The extension is driven by the
+  // detected mime so SVG inputs land as .svg (and get rasterized later, at
+  // stamp time, at the resolution that fits the actual PDF rectangle).
   let imagePath: string | undefined;
   if (input.signatureImage && resolvedPosition) {
     const dir = path.join(storeDir(), "signatures");
     mkdirSync(dir, { recursive: true });
     const slug = sha256(`${documentId}::${signer.email.trim().toLowerCase()}`).slice(0, 16);
-    const ext = input.signatureImage.kind === "buffer"
-      ? (input.signatureImage.mime === "image/png" ? "png" : "jpg")
-      : path.extname(input.signatureImage.path).slice(1).toLowerCase() || "bin";
-    imagePath = path.join(dir, `${slug}.${ext}`);
     const bytes = input.signatureImage.kind === "buffer"
       ? input.signatureImage.data
       : readFileSync(input.signatureImage.path);
+    const mime = input.signatureImage.kind === "buffer"
+      ? input.signatureImage.mime
+      : detectMimeFromBytes(bytes);
+    imagePath = path.join(dir, `${slug}.${mimeToExt(mime)}`);
     writeFileSync(imagePath, bytes);
   }
 

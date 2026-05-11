@@ -115,17 +115,53 @@ test("stampImageOnPdf rejects out-of-range page numbers", async () => {
   );
 });
 
-test("parseImageInput accepts file paths and data URLs", () => {
+test("parseImageInput accepts file paths and data URLs (PNG, JPEG, SVG)", () => {
   const fileInput = parseImageInput("/tmp/sig.png");
   assert.equal(fileInput.kind, "file");
   assert.equal((fileInput as { kind: "file"; path: string }).path, "/tmp/sig.png");
 
-  const dataInput = parseImageInput("data:image/png;base64,iVBORw0KGgo=");
-  assert.equal(dataInput.kind, "buffer");
-  assert.equal((dataInput as { kind: "buffer"; mime: string }).mime, "image/png");
+  const pngData = parseImageInput("data:image/png;base64,iVBORw0KGgo=");
+  assert.equal(pngData.kind, "buffer");
+  assert.equal((pngData as { kind: "buffer"; mime: string }).mime, "image/png");
+
+  const svgData = parseImageInput("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=");
+  assert.equal(svgData.kind, "buffer");
+  assert.equal((svgData as { kind: "buffer"; mime: string }).mime, "image/svg+xml");
 
   assert.throws(() => parseImageInput("data:image/png;base64,"), /zero bytes/);
+  // "image/svg" (without +xml) is rejected — must use the IETF-correct token.
   assert.throws(() => parseImageInput("data:image/svg;base64,xxxx"), /data URL must be/);
+});
+
+test("stampImageOnPdf rasterizes an SVG and embeds it into the page", async () => {
+  // Minimal valid SVG — a red square. resvg-wasm handles this without external
+  // font/image deps, so it's the cleanest input for a smoke test.
+  const svg = Buffer.from(
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">` +
+    `<rect x="0" y="0" width="100" height="100" fill="red"/></svg>`,
+    "utf8",
+  );
+  const stamped = await stampImageOnPdf(SAMPLE_PDF, { kind: "buffer", data: svg, mime: "image/svg+xml" }, {
+    page: 1, x: 50, y: 50, width: 120, height: 80,
+  });
+  assert.equal(stamped.subarray(0, 5).toString("latin1"), "%PDF-", "output starts with PDF magic");
+  const reloaded = await PDFDocument.load(stamped);
+  assert.equal(reloaded.getPageCount(), 1);
+  // Rasterizing 120×80 pt at ~300 DPI produces ~500 px PNG; the stamped PDF
+  // should grow by at least a couple of KB. (SAMPLE_PDF is ~250 bytes.)
+  assert.ok(stamped.length > SAMPLE_PDF.length + 1024, `expected stamped PDF to grow noticeably, got delta=${stamped.length - SAMPLE_PDF.length}`);
+});
+
+test("stampImageOnPdf rejects unrecognised image bytes with a clear error", async () => {
+  await assert.rejects(
+    () => stampImageOnPdf(SAMPLE_PDF, { kind: "buffer", data: Buffer.from("not an image"), mime: "image/png" }, {
+      page: 1, x: 0, y: 0, width: 10, height: 10,
+    }),
+    // pdf-lib's embedPng throws on invalid PNG bytes — exact message is internal,
+    // we just care that we don't crash silently or write a corrupt PDF.
+    /./,
+  );
 });
 
 test("signSigningRequest with --signature-image stamps the PDF and keeps the PAdES signature valid", { concurrency: false }, async () => {
