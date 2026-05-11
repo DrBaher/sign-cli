@@ -1,9 +1,9 @@
 # sign-cli
 
-**A signing CLI for AI agents and ops people who want a verifiable audit trail.**
-Per-signer tokens, declarative policies, an MCP server, RFC 3161 timestamping,
-and re-verifiable receipt bundles — all with a no-account local provider so you
-can try it in 30 seconds before pointing it at Dropbox Sign / DocuSign / SignWell.
+**Built for an agent-driven workflow: agents send, track, and verify; humans approve the signature.**
+A multi-provider e-signature CLI with per-signer approval tokens (TTL-bounded, scoped to a single signer's email), declarative policies, an MCP server, RFC 3161 timestamping, and re-verifiable receipt bundles. The asymmetry is the whole architecture — an agent can drive every step except the actual signing gesture, which stays gated behind a human.
+
+Part of a [three-CLI suite](https://drbaher-cli.vercel.app/) for end-to-end contract operations: [nda-review-cli](https://github.com/DrBaher/nda-review-cli) (drafting, reviewing, negotiating) → [docx2pdf-cli](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit trail). See the [MCP guide](https://drbaher-cli.vercel.app/mcp/) for how the suite plugs into Claude Code, Cursor, or any MCP-aware client.
 
 ```bash
 npx sign-cli demo
@@ -27,17 +27,22 @@ everything. No signup. No keys. About 5 seconds.
 
 ## Why this exists
 
-Most signing tools assume a human sits at a browser. This one assumes:
+Most signing tools assume a human at a browser, drag-and-drop fields, click-here-to-sign emails. This one assumes the operating model is shifting: an LLM agent does the operational work — sending documents, tracking status, verifying receipts, reporting back — and a human's role is to approve the gates that legitimately need a human gesture.
 
-- An **agent** wants to sign on someone's behalf with a declarative policy, not a webhook.
-- An **auditor** wants to re-verify a year-old signature without trusting that today's database is honest.
-- An **operator** wants to swap providers (or run offline) without rewriting their automation.
+| Agent does                                        | Human approves                                                  |
+|---------------------------------------------------|-----------------------------------------------------------------|
+| Sends documents to one or many signers            | The signature itself — every signer needs an explicit token     |
+| Tracks status, retries, rotates providers         | Provider configuration changes (`init`, secret writes)          |
+| Verifies signed PDFs + audit chains offline       | Audit-chain anomalies surfaced for human investigation          |
+| Anchors with RFC 3161 timestamps                  | Anything outside the declared per-signer / TTL guardrails       |
 
-What you get:
+What that gives you concretely:
 
 - **Agent-friendly**: stdio MCP server with typed input/output schemas, capability scoping, allow-list tools, NDJSON replay log.
+- **Human-gated**: per-signer approval tokens (single-use, TTL-bounded, tied to one signer's email). Tokens are emitted to the human, not the agent.
 - **Provider-agnostic**: Dropbox Sign / DocuSign / SignWell, plus a built-in local simulator that needs no signup.
-- **Verifiable**: hash-chained audit events, append-only triggers, RFC 3161 cross-request anchors, self-contained receipt bundles.
+- **Verifiable**: hash-chained audit events, append-only triggers, RFC 3161 cross-request anchors, self-contained receipt bundles. An auditor can re-verify a year-old signature without trusting today's database.
+- **Operator-friendly**: swap providers or run offline without rewriting automation; offline `--provider local` for tests and CI.
 
 ## Quick start (no clone)
 
