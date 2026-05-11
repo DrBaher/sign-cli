@@ -59,6 +59,7 @@ import {
   parseFieldSpec,
   type SignatureField,
 } from "./field-placement.js";
+import type { ImageInput, StampPosition } from "./pdf-image-stamp.js";
 import {
   cancelLocalDocument,
   checkLocalAccount,
@@ -851,7 +852,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
   }
 
   if (provider === "local") {
-    function localSendCommon(input: { request: RequestRow; signers: SignerInput[]; documents: RequestDocument[]; embedded: boolean; templateId?: string; prefills?: PrefillInput[] }) {
+    function localSendCommon(input: { request: RequestRow; signers: SignerInput[]; documents: RequestDocument[]; embedded: boolean; templateId?: string; prefills?: PrefillInput[]; fields?: SignatureField[] }) {
       const result = sendLocalDocument({
         documentPath: input.documents[0]?.path,
         documentPaths: input.documents.map((doc) => doc.path),
@@ -861,6 +862,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
         prefills: input.prefills,
         metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
         embeddedSigning: input.embedded,
+        fields: input.fields,
       });
       return {
         providerRequestId: result.documentId,
@@ -871,10 +873,10 @@ function getProviderApi(provider: SignProvider): ProviderApi {
     }
     return {
       async send(input) {
-        return localSendCommon({ request: input.request, signers: input.signers, documents: input.documents, embedded: false });
+        return localSendCommon({ request: input.request, signers: input.signers, documents: input.documents, fields: input.fields, embedded: false });
       },
       async sendEmbedded(input) {
-        return localSendCommon({ request: input.request, signers: input.signers, documents: input.documents, embedded: true });
+        return localSendCommon({ request: input.request, signers: input.signers, documents: input.documents, fields: input.fields, embedded: true });
       },
       async getEmbeddedSignUrl(input) {
         if (!input.providerRequestId) throw new Error("Local embedded sign URL requires the document id.");
@@ -3508,6 +3510,10 @@ export function signSigningRequest(
     signerName?: string;
     idempotencyKey?: string;
     now?: Date;
+    /** Visible signature image to stamp on the PDF before PAdES sealing (local provider only). */
+    signatureImage?: ImageInput;
+    /** Explicit placement for the signature image; overrides any SignatureField the sender placed. */
+    signatureImagePosition?: StampPosition;
   } & SignerSafetyChecks,
 ): SignerSignResult {
   if (input.idempotencyKey) {
@@ -3544,6 +3550,8 @@ export function signSigningRequest(
     signerEmail: signer.email,
     signerName: input.signerName ?? signer.name,
     now,
+    signatureImage: input.signatureImage,
+    signatureImagePosition: input.signatureImagePosition,
   });
 
   recordSignerSigningState(db, {

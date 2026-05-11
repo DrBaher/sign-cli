@@ -3,8 +3,10 @@ import { readFileSync, mkdirSync, existsSync, writeFileSync, readdirSync } from 
 import path from "node:path";
 import { loadOrCreateSignerKeyPair } from "./local-keys.js";
 import { signPdfLocally, signPdfLocallyMultiSigner } from "./local-pdf-signer.js";
+import { stampImageOnPdf, type ImageInput, type StampPosition } from "./pdf-image-stamp.js";
 import { sha256 } from "./util.js";
 import type { PrefillInput, SignerInput } from "./util.js";
+import type { SignatureField } from "./field-placement.js";
 
 export type LocalSendInput = {
   documentPath?: string;
@@ -15,6 +17,8 @@ export type LocalSendInput = {
   prefills?: PrefillInput[];
   metadata: Record<string, string>;
   embeddedSigning?: boolean;
+  /** Per-signer visible-signature placements, forwarded by the sender. */
+  fields?: SignatureField[];
 };
 
 function storeDir(): string {
@@ -35,12 +39,18 @@ type LocalDocumentRecord = {
   createdAt: string;
   signedAt: string | null;
   signedPdfPath: string | null;
+  /** Sender-supplied signature placements. Phase-2 visible-signature lookup. */
+  fields?: SignatureField[];
   signedBy: Array<{
     email: string;
     name: string;
     signedAt: string;
     certFingerprintSha256?: string;
     certSubjectCommonName?: string;
+    /** Path to the rasterized signature image (PNG/JPG) on disk. */
+    imagePath?: string;
+    /** Where the image should be drawn before PAdES sealing. */
+    imagePosition?: StampPosition;
   }>;
   declinedBy: string | null;
   declineReason: string | null;
@@ -117,6 +127,7 @@ export function sendLocalDocument(input: LocalSendInput): {
     createdAt: new Date().toISOString(),
     signedAt: null,
     signedPdfPath: null,
+    ...(input.fields && input.fields.length > 0 ? { fields: input.fields } : {}),
     signedBy: [],
     declinedBy: null,
     declineReason: null,
@@ -191,7 +202,7 @@ export function fetchLocalDocumentStatus(documentId: string): unknown {
   };
 }
 
-export function downloadLocalCompletedPdf(documentId: string): Buffer {
+export async function downloadLocalCompletedPdf(documentId: string): Promise<Buffer> {
   const record = readRecord(documentId);
   if (record.status !== "completed") {
     throw new Error(`Local provider: document ${documentId} is not completed yet (status=${record.status}).`);
@@ -228,6 +239,23 @@ endstream
 endobj
 trailer << /Root 1 0 R /Size 5 >>
 %%EOF`, "latin1");
+  }
+
+  // Stamp each signer's visible signature image (if any) onto the source PDF
+  // *before* PAdES sealing. The image bytes become part of the signed
+  // /ByteRange, so any post-signing tamper of the image breaks the signature.
+  for (const entry of record.signedBy) {
+    if (!entry.imagePath || !entry.imagePosition) continue;
+    if (!existsSync(entry.imagePath)) {
+      throw new Error(
+        `Local provider: signer ${entry.email} has imagePath=${entry.imagePath} but the file is missing.`,
+      );
+    }
+    sourcePdf = await stampImageOnPdf(
+      sourcePdf,
+      { kind: "file", path: entry.imagePath },
+      entry.imagePosition,
+    );
   }
 
   // Use per-signer keys for the embedded PAdES signature(s) when we have signedBy
@@ -413,7 +441,18 @@ export type SignLocalDocumentResult = {
 
 export function signLocalDocument(
   documentId: string,
-  input: { signerEmail: string; signerName?: string; now?: Date },
+  input: {
+    signerEmail: string;
+    signerName?: string;
+    now?: Date;
+    /**
+     * Optional visible signature image. When provided, the bytes are written to
+     * disk under the local store and the path is recorded on the signer's entry.
+     * `downloadLocalCompletedPdf` stamps it onto the PDF before PAdES sealing.
+     */
+    signatureImage?: ImageInput;
+    signatureImagePosition?: StampPosition;
+  },
 ): SignLocalDocumentResult {
   const record = readRecord(documentId);
   if (record.status === "canceled" || record.status === "declined") {
@@ -423,6 +462,61 @@ export function signLocalDocument(
   if (!signer) {
     throw new Error(`Local provider: ${input.signerEmail} is not a signer on document ${documentId}.`);
   }
+  // Resolve the visible-signature placement: explicit position wins; otherwise
+  // fall back to the SignatureField the sender placed for this signer (by
+  // signerOrder = the signer's index in record.signers, matching how
+  // field-placement.ts ties fields to signer ordinals).
+  let resolvedPosition: StampPosition | undefined = input.signatureImagePosition;
+  if (input.signatureImage && !resolvedPosition && record.fields && record.fields.length > 0) {
+    const signerOrder = record.signers.findIndex(
+      (s) => s.email.trim().toLowerCase() === signer.email.trim().toLowerCase(),
+    );
+    if (signerOrder >= 0) {
+      const match = record.fields.find(
+        (f) => f.signerOrder === signerOrder && f.type === "signature" &&
+          typeof f.page === "number" &&
+          typeof f.x === "number" && typeof f.y === "number" &&
+          typeof f.width === "number" && typeof f.height === "number",
+      );
+      if (match) {
+        resolvedPosition = {
+          page: match.page!,
+          x: match.x!,
+          y: match.y!,
+          width: match.width!,
+          height: match.height!,
+        };
+      }
+    }
+  }
+  if (input.signatureImage && !resolvedPosition) {
+    throw new Error(
+      `Local provider: --signature-image was provided but no position is available. ` +
+        `Pass --image-page/--image-x/--image-y/--image-width/--image-height, or have the sender ` +
+        `place a SignatureField (signerOrder=${record.signers.findIndex(
+          (s) => s.email.trim().toLowerCase() === signer.email.trim().toLowerCase(),
+        )}) at request-create time.`,
+    );
+  }
+
+  // Persist the image bytes to disk so the eventual PDF assembly can pick them
+  // up. One file per signer per document — keyed on a sha-ish slug so multiple
+  // signs across documents don't collide.
+  let imagePath: string | undefined;
+  if (input.signatureImage && resolvedPosition) {
+    const dir = path.join(storeDir(), "signatures");
+    mkdirSync(dir, { recursive: true });
+    const slug = sha256(`${documentId}::${signer.email.trim().toLowerCase()}`).slice(0, 16);
+    const ext = input.signatureImage.kind === "buffer"
+      ? (input.signatureImage.mime === "image/png" ? "png" : "jpg")
+      : path.extname(input.signatureImage.path).slice(1).toLowerCase() || "bin";
+    imagePath = path.join(dir, `${slug}.${ext}`);
+    const bytes = input.signatureImage.kind === "buffer"
+      ? input.signatureImage.data
+      : readFileSync(input.signatureImage.path);
+    writeFileSync(imagePath, bytes);
+  }
+
   const normalized = signer.email.trim().toLowerCase();
   const alreadySigned = record.signedBy.some((entry) => entry.email.trim().toLowerCase() === normalized);
   const now = input.now ?? new Date();
@@ -438,7 +532,16 @@ export function signLocalDocument(
       signedAt,
       certFingerprintSha256: signerKey.fingerprintSha256,
       certSubjectCommonName: signerKey.subjectCommonName,
+      ...(imagePath ? { imagePath } : {}),
+      ...(resolvedPosition ? { imagePosition: resolvedPosition } : {}),
     });
+  } else if (imagePath && resolvedPosition) {
+    // Re-signing with an image: update the existing entry rather than adding a duplicate.
+    const existing = record.signedBy.find((entry) => entry.email.trim().toLowerCase() === normalized);
+    if (existing) {
+      existing.imagePath = imagePath;
+      existing.imagePosition = resolvedPosition;
+    }
   }
   const totalSigners = record.signers.length;
   if (record.signedBy.length >= totalSigners) {
