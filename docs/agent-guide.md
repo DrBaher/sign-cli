@@ -432,6 +432,64 @@ overwrites in place. Safe to retry.
 
 ---
 
+### 6.4a `sign pdf detect-signature-field` + `sign sign --auto-place`
+
+Auto-detection of where to put a visible signature. Two related surfaces:
+
+**`sign pdf detect-signature-field --pdf <path>`** (stand-alone introspection):
+
+```jsonc
+{
+  "ok": true,
+  "pdf": "./nda.pdf",
+  "pageCount": 1,
+  "acroFormFields": 0,
+  "anchorMatches": 1,
+  "candidates": [
+    {
+      "page": 1, "x": 140, "y": 196, "width": 140, "height": 35,
+      "source": "anchor:Signature:",     // or "acroform"
+      "confidence": 0.95,                // 0.0–1.0
+      "adjustedFrom": "underline-snap",  // none | underline-snap | whitespace-probe | shrink-to-fit
+      "anchorText": "Signature:"         // only for anchor sources
+    }
+  ]
+}
+```
+
+Exit `0` when candidates were found, exit `2` when none. The JSON is emitted on stdout either way (empty `candidates` array on exit 2).
+
+**`sign sign --auto-place true`** consumes the same detection:
+
+| Outcome | Exit | Error code | Behavior |
+|---|---|---|---|
+| Unique candidate with confidence `≥ 0.8` | `0` | — | Uses it. Notice on stderr names source, confidence, adjustment method, rect. |
+| Multiple high-confidence candidates | non-zero | `AUTO_PLACE_AMBIGUOUS` | Errors with the full candidate list in `details.candidates`. Caller picks. |
+| No high-confidence candidates | non-zero | `AUTO_PLACE_NO_HIGH_CONFIDENCE` | Errors. Low-confidence candidates (if any) in `details.candidates`. |
+| No visible-signature flag set | non-zero | `AUTO_PLACE_REQUIRES_VISIBLE_SIG` | Pass `--signature-image` or `--name-signature`. |
+| Explicit `--image-*` coords also set | `0` | — | Explicit wins. Notice on stderr: `--auto-place ignored: explicit ... supplied`. |
+
+**Adjustment methods explained**:
+
+| Method | Confidence | When |
+|---|---|---|
+| `none` | `1.0` | AcroForm `/Sig` widget — rectangle taken verbatim from the PDF. |
+| `underline-snap` | `0.95` | Anchor immediately followed on the same baseline by an underscore run (`____`) or dashes. Snaps to the run's width. |
+| `whitespace-probe` | `0.75` (or `0.60` if narrow) | Anchor followed by empty space; uses the gap up to the next text or page edge. |
+| `shrink-to-fit` | `0.50` | Default 180×50 rect iteratively shrunk by 10% until no text overlap. Rejected entirely if width drops below 60pt. |
+
+**Safety contract**: a candidate is never emitted if its rectangle overlaps any non-whitespace text on the page. By the time the JSON reaches the caller, the rectangle is safe to stamp. This is the explicit fix for the silent-overlap-with-body-text failure mode from earlier builds.
+
+**Caveats**:
+
+- Anchor patterns are English-only (`Signature:`, `Sign here:`, `Signed by:`, `Initial:`, `X____`). Non-English documents need AcroForm `/Sig` fields or explicit `--image-*` coords.
+- Heavy dependency: pulls in `pdfjs-dist` (~35MB unpacked). The `detect` command and `--auto-place` are the only paths that need it; the rest of the CLI never imports it.
+- The detector does **not** parse PDF content streams for line operators — underline detection uses underscore-character runs in the text items (which catches the common `_______` pattern but misses underlines drawn as path operators).
+
+Side effects: read-only. Idempotent.
+
+---
+
 ### 6.5 Visible signatures on `sign sign`
 
 By default `sign sign` produces only the invisible PAdES envelope. For a visible stamp on the page, pass **one** of:

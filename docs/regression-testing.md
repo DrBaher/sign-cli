@@ -428,6 +428,71 @@ Expected: `ok=true manifestVerified=true`, exit `0`.
 
 ---
 
+## `sign pdf detect-signature-field` + `sign sign --auto-place`
+
+Auto-detection of signature-field placement. The detector ranks AcroForm `/Sig` widgets (confidence 1.0) above anchor-text matches (Signature:, Sign here, Signed by:, Initial:, X____) and adjusts proposed rectangles to avoid overlap with surrounding text.
+
+```bash
+cd "$TEST" && rm -rf db && mkdir -p db
+
+# Generate a test PDF with a "Signature: ______" anchor
+node -e "
+import('pdf-lib').then(async p => {
+  const { writeFileSync } = await import('node:fs');
+  const d = await p.PDFDocument.create();
+  const pg = d.addPage([612, 792]);
+  const f = await d.embedFont(p.StandardFonts.Helvetica);
+  pg.drawText('Signature:', { x: 72, y: 200, font: f, size: 12 });
+  pg.drawText('_____________________', { x: 140, y: 200, font: f, size: 12 });
+  writeFileSync('$PWD/anchor.pdf', Buffer.from(await d.save()));
+});"
+
+# Detect: should find one underline-snap candidate at confidence 0.95
+node "$SIGN" pdf detect-signature-field --pdf $PWD/anchor.pdf 2>&1 | \
+  jq -r '.candidates[] | "\(.source) confidence=\(.confidence) adjustedFrom=\(.adjustedFrom) rect=\(.x|tonumber|floor),\(.y|tonumber|floor),\(.width|tonumber|floor),\(.height|tonumber|floor)"'
+echo "exit: $?"
+
+# Detect on a PDF with no anchors → exit 2
+node "$SIGN" pdf detect-signature-field --pdf /path/to/sign-cli/fixtures/canonical-unsigned-v1.pdf > /dev/null 2>&1
+echo "exit: $?"
+
+# End-to-end with --auto-place
+OUT=$(SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" --provider local request create \
+  --title T --document $PWD/anchor.pdf \
+  --signer "name:Alice,email:alice@e.com,order:1" --auto-approve true 2>&1)
+REQ=$(echo "$OUT" | grep -oE 'req_[a-f0-9]+' | head -1)
+TOK=$(echo "$OUT" | python3 -c "import json,sys,re; o=json.loads(re.search(r'\{.*\}', sys.stdin.read(), re.DOTALL).group()); print(o['tokens'][0]['token'])")
+
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" --provider local request send --request-id "$REQ" > /dev/null
+
+# Sign with --auto-place: stderr should announce the choice
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign --request-id "$REQ" --token "$TOK" \
+  --name-signature "Alice" --auto-place true 2>&1 | tail -2
+echo "exit: $?"
+```
+
+| Step | Expected exit | Expected output |
+|---|---|---|
+| Detect on anchor + underline PDF | `0` | `anchor:Signature: confidence=0.95 adjustedFrom=underline-snap rect=140,196,140,35` |
+| Detect on no-anchor PDF | `2` | empty `candidates: []` on stdout |
+| Sign with `--auto-place true` | `0` | stderr: `[sign] --auto-place chose anchor:Signature: (confidence 0.95, adjustedFrom=underline-snap) at page=1 x=140 y=196 w=140 h=35` |
+
+Negative cases (each errors non-zero with the named code):
+
+```bash
+# Two anchors → AUTO_PLACE_AMBIGUOUS
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign ... --auto-place true 2>&1 | grep AUTO_PLACE_AMBIGUOUS
+
+# No anchors → AUTO_PLACE_NO_HIGH_CONFIDENCE
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign ... --auto-place true 2>&1 | grep AUTO_PLACE_NO_HIGH_CONFIDENCE
+
+# No visible-sig flag → AUTO_PLACE_REQUIRES_VISIBLE_SIG
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign --request-id "$REQ" --token "$TOK" --auto-place true 2>&1 | \
+  grep AUTO_PLACE_REQUIRES_VISIBLE_SIG
+```
+
+---
+
 ## `sign sign --name-signature` — render name as visible text
 
 For when the signer has no image but wants a visible stamp. Renders the name in italic Helvetica at the given position. Mutually exclusive with `--signature-image`.
