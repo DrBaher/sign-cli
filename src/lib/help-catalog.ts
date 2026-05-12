@@ -233,6 +233,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     example: "sign pdf stamp verify --pdf ./signed.pdf --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60",
   },
   {
+    command: "pdf detect-signature-field",
+    summary: "Auto-detect candidate signature-field placements in a PDF. Returns ranked candidates: AcroForm /Sig widgets (confidence 1.0) first, then anchor-text matches (Signature:, Sign here, X____) with overlap-adjusted rectangles (0.50–0.95). Pair with `sign sign --auto-place` for hands-off positioning. Exit 0 = candidates returned; exit 2 = no candidates found (still emits an empty array on stdout).",
+    flags: [
+      { name: "--pdf", required: true, description: "PDF to inspect." },
+    ],
+    example: "sign pdf detect-signature-field --pdf ./nda.pdf",
+  },
+  {
     command: "workflow nda",
     summary: "One-shot: render the bundled mutual-NDA template into a PDF and create the signing request. Exits 3 on validation errors (same-email, missing values, missing placeholders — all gaps surface at once).",
     flags: [
@@ -294,12 +302,13 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--image-y", description: "Stamp y in PDF points (lower-left origin)." },
       { name: "--image-width", description: "Stamp width in points." },
       { name: "--image-height", description: "Stamp height in points." },
+      { name: "--auto-place", description: "Pass `true` to auto-detect the stamp rectangle via `sign pdf detect-signature-field`. Requires a unique high-confidence (≥0.8) candidate; otherwise errors with `AUTO_PLACE_NO_HIGH_CONFIDENCE` or `AUTO_PLACE_AMBIGUOUS` and the candidate list. Explicit --image-* coords override --auto-place." },
       { name: "--idempotency-key", description: "Same key returns the cached SignerSignResult instead of double-signing on retry." },
     ],
     example:
       `sign sign --request-id req_abc --token alice-tok-... \\\n` +
       `  --name-signature "Alice Anderson" \\\n` +
-      `  --image-page 1 --image-x 360 --image-y 100 --image-width 180 --image-height 50`,
+      `  --auto-place true   # or pass --image-page/--image-x/--image-y/--image-width/--image-height`,
   },
   {
     command: "signer list",

@@ -69,6 +69,7 @@
     "test": "npm run build && node --test dist/tests/*.test.js",
     "changelog:next": "node scripts/changelog.mjs",
     "coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-lines=75 --test-coverage-functions=78 --test-coverage-branches=72 --test-coverage-exclude='**/dist/tests/**' --test-reporter=lcov --test-reporter-destination=coverage.lcov --test-reporter=spec --test-reporter-destination=stdout dist/tests/*.test.js",
+    "postinstall": "node scripts/trim-pdfjs-dist.mjs",
     "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
@@ -76,6 +77,7 @@
     "@resvg/resvg-wasm": "^2.6.2",
     "@types/pg": "^8.20.0",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.7.284",
     "pg": "^8.20.0"
   },
   "devDependencies": {
