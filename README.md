@@ -19,13 +19,14 @@ everything. No signup. No keys. About 5 seconds.
 
 1. **[Recipes](docs/recipes/README.md)** — short end-to-end guides (preflight for agents, sign as Alice, weekly anchor, auditor handoff, agent loop over MCP).
 2. **[Agent guide](docs/agent-guide.md)** — canonical reference for driving `sign-cli` from an LLM or non-interactive client (output schemas, exit-code map, per-command side effects + idempotency, decision rules). Start here if you're an agent.
-3. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
-4. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
-5. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
-6. **[Legal posture](docs/legal-posture.md)** — when a `sign-cli` signature is enforceable, by jurisdiction and use case (US ESIGN/UETA, EU eIDAS, NDA deep-dive). Read this before signing anything you care about.
-7. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
-8. **[Hosted demo](deploy/README.md)** — deploy a public read-only sandbox on Fly / Render / Railway.
-9. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
+3. **[Regression testing](docs/regression-testing.md)** — per-item manual tests for every surface in `[Unreleased]`, with expected exit codes. Use it to validate a build outside `npm test`.
+4. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
+5. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
+6. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
+7. **[Legal posture](docs/legal-posture.md)** — when a `sign-cli` signature is enforceable, by jurisdiction and use case (US ESIGN/UETA, EU eIDAS, NDA deep-dive). Read this before signing anything you care about.
+8. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
+9. **[Hosted demo](deploy/README.md)** — deploy a public read-only sandbox on Fly / Render / Railway.
+10. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
 
 ## Why this exists
 

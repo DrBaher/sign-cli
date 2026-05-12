@@ -625,6 +625,10 @@ sign pdf stamp verify --pdf out.pdf \
 - [`docs/recipes/preflight.md`](recipes/preflight.md) — pre-production
   agent recipe walking the doctor → strict → stamp-verify → bundle
   pipeline.
+- [`docs/regression-testing.md`](regression-testing.md) — per-item
+  manual regression tests for everything in this guide, with the
+  expected exit codes + output for each command. Use it to validate
+  a build before relying on the contract here.
 - [`docs/recipes/agent-loop-mcp.md`](recipes/agent-loop-mcp.md) — drive
   the same surface over MCP/stdio instead of CLI.
 - [`docs/architecture.md`](architecture.md) — what the boxes are and

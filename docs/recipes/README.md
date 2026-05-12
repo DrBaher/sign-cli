@@ -16,5 +16,6 @@ you've run `sign init` to scaffold the local provider.
 ## Quick links to reference docs
 
 - `sign --help` for the full command catalog (also: `sign help <command>`)
+- [`../regression-testing.md`](../regression-testing.md) — manual per-item tests for everything in `[Unreleased]`
 - [`MIGRATION.md`](../../MIGRATION.md) for the storage backend / async-migration roadmap
 - [`fixtures/web-demo/`](../../fixtures/web-demo) for a 1-file dashboard you can serve via `sign serve --web-demo true`

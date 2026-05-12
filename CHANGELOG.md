@@ -66,6 +66,7 @@ release.
 
 - **[`docs/agent-guide.md`](docs/agent-guide.md)** — canonical agent reference. Output conventions (stdout JSON / stderr error envelope), cross-command exit-code map, per-command schemas + side-effects + idempotency for the new surfaces (`doctor preflight`, `pdf stamp verify`, `workflow nda`, `audit export` v2, trust labels, strict-provider, `audit verify`), and the failure-mode → recovery table.
 - **[`docs/recipes/preflight.md`](docs/recipes/preflight.md)** — pre-production agent recipe: `doctor preflight` → strict-provider → `pdf stamp verify` → `audit export` for handoff. Shows exit-code branching at each step.
+- **[`docs/regression-testing.md`](docs/regression-testing.md)** — per-item manual regression tests for every surface in the `[Unreleased]` block, plus an end-to-end smoke. Exit-code-driven and copy-pasteable. Pairs with `npm test` (which covers the same surfaces automatically); use this when validating a build against expected behavior outside the suite.
 - **[`docs/profiles-design.md`](docs/profiles-design.md)** — design proposal for named provider/credential/dbPath bundles (Item 5 of the readiness feedback). No code; open for review in #162.
 - New `docs/recipes/` — sign-as-Alice, weekly anchor, auditor handoff, agent loop over MCP.
 - New `docs/architecture.md` — mermaid diagram + layer-by-layer prose.
