@@ -23,6 +23,7 @@ export type SignErrorCode =
   | "UNKNOWN_RESOURCE"
   | "RATE_LIMITED"
   | "SIGN_IMAGE_INCOMPLETE_POSITION"
+  | "STRICT_PROVIDER_MISMATCH"
   | "INTERNAL";
 
 export type SignErrorEnvelope = {

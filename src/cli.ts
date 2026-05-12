@@ -28,7 +28,13 @@ import {
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
 import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
-import { resolveSignProvider, type SignProvider } from "./lib/providers.js";
+import {
+  resolveSignProvider,
+  resolveSignProviderWithSource,
+  strictProviderEnabled,
+  type SignProvider,
+} from "./lib/providers.js";
+import { emitJsonWithProvider, printProviderBanner } from "./lib/cli-output.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
 import {
   loadDocuSignWebhookPayloadFile,
@@ -76,6 +82,7 @@ import {
   sendEmbeddedSigningRequest,
   sendSigningRequest,
   signSigningRequest,
+  getPersistedProviderForRequest,
   timestampRequestAuditChain,
   verifyRequestAuditChain,
   watchSigningRequestStatus,
@@ -210,6 +217,11 @@ sign request rerun-policy --request-id <id> --spec ./policy.json [--signer-email
 sign smoke signwell --document ./file.pdf [--signer-name Name] [--signer-email a@b] [--interval-seconds 5] [--timeout-seconds 60] [--fetch-final true] [--out ./artifacts/signed.pdf]
 sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign selftest [--keep-workspace true]   (in-process E2E smoke; exits 3 on any failure — drop-in for deploy health checks)
+
+Global flags affecting mutating commands:
+  [--provider dropbox|docusign|signwell|local]  (also via SIGN_PROVIDER env; default dropbox)
+  [--strict-provider true]                      (or SIGN_STRICT_PROVIDER=true; fails if --provider mismatches the persisted provider)
+Every mutating command (create / send / sign) prints a one-line "[sign] resolved provider: <p> (<source>)" banner to stderr and embeds the same in its JSON output under "resolved_provider".
 sign init [--out ./.env]
 sign db backup --out ./backup.db
 sign db verify
@@ -287,7 +299,12 @@ async function main(): Promise<void> {
   }
   const dbPath = process.env.SIGN_DB_PATH ?? "./data/sign.db";
   const db = openDatabase(dbPath);
-  const selectedProvider = resolveSignProvider(flagValue(parsed, "provider"));
+  // Resolve the provider AND remember how it was resolved, so mutating
+  // commands can both print a stderr banner and embed `resolved_provider`
+  // in their JSON output. See Item 1 of the product-readiness feedback.
+  const resolvedProvider = resolveSignProviderWithSource(flagValue(parsed, "provider"));
+  const selectedProvider = resolvedProvider.provider;
+  const strictProvider = strictProviderEnabled(flagValue(parsed, "strict-provider"));
 
   // Version flag — handled before any positional dispatch.
   if ((flagValue(parsed, "version") ?? "false") === "true") {
@@ -712,6 +729,7 @@ async function main(): Promise<void> {
     const fields = flagValues(parsed, "field").map(parseFieldSpec);
     validateFieldCount(fields.length);
     const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
+    printProviderBanner(resolvedProvider);
     const result = createSigningRequest(db, {
       title,
       documentPaths,
@@ -722,7 +740,7 @@ async function main(): Promise<void> {
       autoApprove: (flagValue(parsed, "auto-approve") ?? "false") === "true",
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitJsonWithProvider(result, resolvedProvider);
     return;
   }
 
@@ -747,6 +765,17 @@ async function main(): Promise<void> {
           "Pass all of --image-page, --image-x, --image-y, --image-width, --image-height, or none (and rely on the sender's SignatureField).",
       });
     }
+    printProviderBanner(resolvedProvider);
+    if (flagValue(parsed, "provider") && strictProvider) {
+      const persisted = getPersistedProviderForRequest(db, requestId);
+      if (persisted !== selectedProvider) {
+        throw new SignCliError({
+          code: "STRICT_PROVIDER_MISMATCH",
+          message: `Strict provider check failed: --provider ${selectedProvider} but request ${requestId} was created against ${persisted}.`,
+          hint: `Either rerun with --provider ${persisted}, or unset --strict-provider/SIGN_STRICT_PROVIDER to bypass.`,
+        });
+      }
+    }
     const result = signSigningRequest(db, {
       requestId,
       token,
@@ -755,11 +784,12 @@ async function main(): Promise<void> {
       requireHash: flagValue(parsed, "require-hash"),
       requireTitle: flagValue(parsed, "require-title"),
       requireSignerEmail: flagValue(parsed, "require-signer-email"),
+      ...(flagValue(parsed, "provider") ? { runtimeProvider: selectedProvider, strictProvider } : {}),
       ...(signatureImage ? { signatureImage } : {}),
       ...(imagePosition && isCompletePosition(imagePosition) ? { signatureImagePosition: imagePosition } : {}),
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitJsonWithProvider(result, resolvedProvider);
     return;
   }
 
@@ -1207,14 +1237,31 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "send") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const force = (flagValue(parsed, "force") ?? "false") === "true";
+    // Print the banner FIRST so it remains visible even when downstream
+    // resolution (API key, strict check, etc.) throws.
+    printProviderBanner(resolvedProvider);
+    // Strict-provider preflight: fail BEFORE we resolve API keys (which would
+    // throw a misleading "API key not set" error for a provider the user
+    // never intended to use against this request).
+    if (flagValue(parsed, "provider") && strictProvider) {
+      const persisted = getPersistedProviderForRequest(db, requestId);
+      if (persisted !== selectedProvider) {
+        throw new SignCliError({
+          code: "STRICT_PROVIDER_MISMATCH",
+          message: `Strict provider check failed: --provider ${selectedProvider} but request ${requestId} was created against ${persisted}.`,
+          hint: `Either rerun with --provider ${persisted}, or unset --strict-provider/SIGN_STRICT_PROVIDER to bypass.`,
+        });
+      }
+    }
     const result = await sendSigningRequest(db, {
       requestId,
       provider: selectedProvider,
       apiKey: resolveProviderApiKey(selectedProvider),
       testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
       force,
+      ...(flagValue(parsed, "provider") ? { strictProvider } : {}),
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitJsonWithProvider(result, resolvedProvider);
     return;
   }
 
