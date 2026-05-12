@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +57,27 @@ test("sign serve --web-demo serves index.html same-origin without auth", { concu
     assert.equal(inspection.signatures[0].messageDigestMatches, true, "fixture digest must match");
     const subjectBlob = inspection.signatures[0].signers.map((c) => c.subject ?? "").join(" | ");
     assert.match(subjectBlob, /@/, `fixture cert subject must include an email (got: ${subjectBlob})`);
+
+    // The embedded signature image must contain *visible* content, not just
+    // be a near-empty rectangle. Previous regressions:
+    //   - <text> SVG with no font (resvg-wasm ships zero fonts)  → ~355 B PNG
+    //   - <text> SVG with stroke flourish but no rendered glyphs → ~917 B PNG
+    // The current path-based signature produces ≥ 3 KB image XObjects.
+    // Conservative threshold of 1500 B for the largest image catches both
+    // historical regressions with margin.
+    const fixtureBytes = readFileSync(fixturePath);
+    const fixtureText = fixtureBytes.toString("latin1");
+    const imageLengths: number[] = [];
+    const imageRe = /\/Subtype\s*\/Image\b[\s\S]*?\/Length\s+(\d+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = imageRe.exec(fixtureText)) !== null) imageLengths.push(parseInt(match[1], 10));
+    assert.ok(imageLengths.length >= 1, "fixture must embed at least one image XObject");
+    const largest = Math.max(...imageLengths);
+    assert.ok(
+      largest >= 1500,
+      `fixture's largest embedded image is only ${largest} bytes — likely an empty / blank rectangle. ` +
+      `Regenerate via \`node scripts/generate-signed-fixture.mjs\` and visually verify the signature is visible.`,
+    );
 
     // /v1/* still gated by the auth token
     const api = await fetchPath(server, "/v1/health");
