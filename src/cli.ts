@@ -82,6 +82,7 @@ import {
 } from "./lib/signing-service.js";
 import { parseFieldSpec } from "./lib/field-placement.js";
 import { loadPolicySpec } from "./lib/policy-engine.js";
+import { parseImageInput, type StampPosition } from "./lib/pdf-image-stamp.js";
 import { loadRequestSpec } from "./lib/request-spec.js";
 import { parsePrefillSpec, parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
@@ -131,6 +132,35 @@ function flagValues(args: ParsedArgs, name: string): string[] {
   return args.flags.get(name) ?? [];
 }
 
+/** Read the five --image-* flags into a partial StampPosition; caller decides if the partial is acceptable. */
+function readImagePositionFlags(args: ParsedArgs): Partial<StampPosition> | undefined {
+  const page = flagValue(args, "image-page");
+  const x = flagValue(args, "image-x");
+  const y = flagValue(args, "image-y");
+  const width = flagValue(args, "image-width");
+  const height = flagValue(args, "image-height");
+  if (page === undefined && x === undefined && y === undefined && width === undefined && height === undefined) {
+    return undefined;
+  }
+  return {
+    ...(page !== undefined ? { page: Number(page) } : {}),
+    ...(x !== undefined ? { x: Number(x) } : {}),
+    ...(y !== undefined ? { y: Number(y) } : {}),
+    ...(width !== undefined ? { width: Number(width) } : {}),
+    ...(height !== undefined ? { height: Number(height) } : {}),
+  };
+}
+
+function isCompletePosition(position: Partial<StampPosition>): position is StampPosition {
+  return (
+    typeof position.page === "number" && Number.isFinite(position.page) &&
+    typeof position.x === "number" && Number.isFinite(position.x) &&
+    typeof position.y === "number" && Number.isFinite(position.y) &&
+    typeof position.width === "number" && Number.isFinite(position.width) &&
+    typeof position.height === "number" && Number.isFinite(position.height)
+  );
+}
+
 function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFlag: string; defaultMs?: number }): number | undefined {
   const msValue = flagValue(args, options.msFlag);
   if (msValue !== undefined) {
@@ -149,7 +179,7 @@ sign request create --spec ./request.json   (CLI flags --provider and --auto-app
 sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
 sign approve --request-id <id> --token <token>
-sign sign --request-id <id> --token <token> [--signer-email <e>] [--signer-name <n>] [--require-hash <sha256>] [--require-title <regex>] [--require-signer-email <e>]
+sign sign --request-id <id> --token <token> [--signer-email <e>] [--signer-name <n>] [--require-hash <sha256>] [--require-title <regex>] [--require-signer-email <e>] [--signature-image <path-or-data-url> [--image-page <n> --image-x <pt> --image-y <pt> --image-width <pt> --image-height <pt>]]
 sign signer list [--signer-email <e>]
 sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [--signer-email <e>]
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
@@ -706,6 +736,16 @@ async function main(): Promise<void> {
   if (root === "sign" && sub === undefined) {
     const requestId = flagValue(parsed, "request-id", true)!;
     const token = flagValue(parsed, "token", true)!;
+    const signatureImageFlag = flagValue(parsed, "signature-image");
+    const signatureImage = signatureImageFlag ? parseImageInput(signatureImageFlag) : undefined;
+    const imagePosition = readImagePositionFlags(parsed);
+    if (signatureImage && imagePosition && !isCompletePosition(imagePosition)) {
+      throw new SignCliError({
+        code: "SIGN_IMAGE_INCOMPLETE_POSITION",
+        message: "--signature-image was given with a partial position. " +
+          "Pass all of --image-page, --image-x, --image-y, --image-width, --image-height, or none (and rely on the sender's SignatureField).",
+      });
+    }
     const result = signSigningRequest(db, {
       requestId,
       token,
@@ -714,6 +754,8 @@ async function main(): Promise<void> {
       requireHash: flagValue(parsed, "require-hash"),
       requireTitle: flagValue(parsed, "require-title"),
       requireSignerEmail: flagValue(parsed, "require-signer-email"),
+      ...(signatureImage ? { signatureImage } : {}),
+      ...(imagePosition && isCompletePosition(imagePosition) ? { signatureImagePosition: imagePosition } : {}),
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
     console.log(JSON.stringify(result, null, 2));

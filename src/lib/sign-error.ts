@@ -22,6 +22,7 @@ export type SignErrorCode =
   | "INVALID_ARGS"
   | "UNKNOWN_RESOURCE"
   | "RATE_LIMITED"
+  | "SIGN_IMAGE_INCOMPLETE_POSITION"
   | "INTERNAL";
 
 export type SignErrorEnvelope = {

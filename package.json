@@ -72,6 +72,7 @@
   "dependencies": {
     "@dropbox/sign": "^1.10.0",
     "@types/pg": "^8.20.0",
+    "pdf-lib": "^1.17.1",
     "pg": "^8.20.0"
   },
   "devDependencies": {
