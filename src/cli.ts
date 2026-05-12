@@ -66,6 +66,7 @@ import {
   ingestSignWellWebhookPayload,
   ingestWebhookPayload,
   inspectRequestSignedPdf,
+  verifyVerdictExitCode,
   listAuditEvents,
   listSignerInbox,
   listSigningRequests,
@@ -258,6 +259,8 @@ sign request receipt --request-id <id> --out ./receipt/   (signed-manifest bundl
 sign audit issue-receipts --out ./receipts/ [--provider local] [--status completed] [--limit 1000] [--ndjson true]   (bulk-emit one receipt-bundle per matching request; exits 3 if any row failed)
 sign request create --spec ./request.json [--param key=value ...]   (variable substitution into the spec JSON)
 sign request verify-signed-pdf --request-id <id> [--path ./signed.pdf]
+  Exit codes: 0=ok, 2=warnings_only, 3=digest_mismatch, 4=no_signature, 5=signer_mismatch.
+  JSON includes a top-level "summary" with signature_present/digest_ok/signer_match/warnings_count/verdict.
 sign webhook verify [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>]
 sign webhook ingest [--provider dropbox|signwell|docusign] --payload-file ./fixtures/sample-webhook.json [--signature-header <hmac>] [--request-id <id>]
 sign webhook listen [--provider dropbox|signwell|docusign] [--port 3000] [--path /dropbox/callback] [--request-id <id>] [--pretty true]
@@ -1714,10 +1717,17 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "verify-signed-pdf") {
     const requestId = flagValue(parsed, "request-id", true)!;
     const result = await inspectRequestSignedPdf(db, { requestId, path: flagValue(parsed, "path") });
+    // One-line verdict on stderr so callers see the answer without parsing JSON.
+    // The same fields are in result.summary on stdout for programmatic use.
+    process.stderr.write(
+      `[sign] verify: ${result.summary.verdict} ` +
+      `(signatures=${result.report.signatureCount}, ` +
+      `digest_ok=${result.summary.digest_ok}, ` +
+      `signer_match=${result.summary.signer_match}, ` +
+      `warnings=${result.summary.warnings_count})\n`,
+    );
     console.log(JSON.stringify(result, null, 2));
-    const allDigestsValid = result.report.signatures.length > 0
-      && result.report.signatures.every((sig) => sig.messageDigestMatches === true);
-    process.exitCode = allDigestsValid ? 0 : 3;
+    process.exitCode = verifyVerdictExitCode(result.summary.verdict);
     return;
   }
 
