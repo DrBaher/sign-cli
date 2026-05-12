@@ -3123,6 +3123,64 @@ export async function timestampRequestAuditChain(
   };
 }
 
+// Static README text for the Item-8 extended audit bundle. The receiver-
+// facing instructions point at sign-cli commands that work without a DB.
+function renderBundleReadme(
+  requestId: string,
+  files: Array<{ name: string; sha256: string; bytes: number }>,
+  signers: SignerInput[],
+): string {
+  const fileList = files.length === 0
+    ? "(none yet)"
+    : files.map((f) => `- \`${f.name}\` — ${f.bytes} bytes, sha256 \`${f.sha256.slice(0, 16)}…\``).join("\n");
+  const signerList = signers.length === 0
+    ? "(no signers on file)"
+    : signers
+        .sort((a, b) => a.order - b.order)
+        .map((s) => `- Order ${s.order}: ${s.name} <${s.email}>${s.role ? ` (${s.role})` : ""}`)
+        .join("\n");
+  return `# Audit Bundle for ${requestId}
+
+This directory was produced by \`sign audit export\`. It is self-contained:
+you do not need access to the original sign-cli database to verify it.
+
+## What's inside
+
+${fileList}
+
+(File list is captured in \`manifest.json\` with sha256s. \`bundleVersion: 2\`
+indicates this is the extended bundle introduced in Item 8.)
+
+## Signers
+
+${signerList}
+
+## How to verify
+
+**Chain integrity** (every audit event hashes the previous one):
+
+    sign audit verify-chain-bundle --bundle ./
+
+**A per-signer receipt** (proves a specific signer signed without
+exposing the rest of the bundle):
+
+    cat receipts/<email>.json | jq .
+
+**The signed PDF** (PAdES / signer cert / byte-range coverage):
+
+    sign pdf verify --pdf ./signed.pdf --inspect
+
+(A static snapshot of that report is already in \`signatures.json\` — captured
+at export time, so no live OCSP/CRL calls. Re-run \`pdf verify --inspect\` if
+you need a fresh check.)
+
+**The document is unaltered**:
+
+    sha256sum original.pdf signed.pdf
+    # compare \`original.pdf\` sha to request.document_hash inside audit.json
+`;
+}
+
 export async function exportAuditBundle(
   db: SqliteDb,
   input: { requestId: string; outDir: string; now?: Date },
@@ -3155,11 +3213,43 @@ export async function exportAuditBundle(
   }
   recordFile(auditFile, "audit.json");
 
+  // --- Item 8 extended bundle additions ---------------------------------
+  // The bundle goes from "what you need to verify the chain" to "what a
+  // receiver needs to verify everything in isolation, without DB access."
+
+  // 1. Original (pre-sign) PDF, so verifiers can diff pre/post-sign and
+  //    independently re-hash to confirm document integrity.
+  if (request.document_path && fs.existsSync(request.document_path)) {
+    const dest = path.join(outDir, "original.pdf");
+    fs.copyFileSync(request.document_path, dest);
+    recordFile(dest, "original.pdf");
+  }
+
   const signedPdf = findSignedPdfArtifact(db, input.requestId);
   if (signedPdf && fs.existsSync(signedPdf.path)) {
     const dest = path.join(outDir, "signed.pdf");
     fs.copyFileSync(signedPdf.path, dest);
     recordFile(dest, "signed.pdf");
+
+    // 2. Signature inspection report — a static snapshot of what
+    //    `pdf verify --inspect` would say at export time. No live OCSP.
+    try {
+      const { inspectPdfSignatures } = await import("./pdf-signature.js");
+      const report = await inspectPdfSignatures(dest);
+      const sigPath = path.join(outDir, "signatures.json");
+      fs.writeFileSync(sigPath, JSON.stringify(report, null, 2));
+      recordFile(sigPath, "signatures.json");
+    } catch (err) {
+      // Inspection failures shouldn't break the export — record a stub
+      // with the error so verifiers know inspection was attempted.
+      const sigPath = path.join(outDir, "signatures.json");
+      fs.writeFileSync(sigPath, JSON.stringify({
+        path: signedPdf.path,
+        error: err instanceof Error ? err.message : String(err),
+        attempted: true,
+      }, null, 2));
+      recordFile(sigPath, "signatures.json");
+    }
   }
 
   const tsrRow = db.prepare(
@@ -3171,9 +3261,57 @@ export async function exportAuditBundle(
     recordFile(dest, "audit.tsr");
   }
 
+  // 3. Per-signer receipts. One JSON file per signer, holding their metadata,
+  //    the document hash they were asked to sign, and the subset of audit
+  //    events whose payload references their email. A receiver can hand
+  //    one signer's file to a third party without leaking the others.
+  const signers = JSON.parse(request.signers_json) as SignerInput[];
+  if (signers.length > 0) {
+    const receiptsDir = path.join(outDir, "receipts");
+    fs.mkdirSync(receiptsDir, { recursive: true });
+    for (const signer of signers) {
+      const signerEvents = audit.filter((evt) => {
+        let payload: unknown = null;
+        try { payload = JSON.parse(evt.payload_json); } catch { return false; }
+        if (payload && typeof payload === "object" && "signerEmail" in payload) {
+          return (payload as { signerEmail?: string }).signerEmail === signer.email;
+        }
+        return false;
+      });
+      const receipt = {
+        requestId: input.requestId,
+        documentHash: request.document_hash,
+        signer: {
+          name: signer.name,
+          email: signer.email,
+          order: signer.order,
+          ...(signer.role ? { role: signer.role } : {}),
+        },
+        events: signerEvents,
+        chainValid: chain.valid,
+        generatedAt: nowIso(input.now ?? new Date()),
+      };
+      // Sanitize email for filename. @ is allowed on all major filesystems
+      // and keeps `receipts/alice@example.com.json` readable; anything else
+      // outside [A-Za-z0-9._@-] becomes `_`.
+      const safeName = signer.email.replace(/[^A-Za-z0-9._@-]/g, "_");
+      const receiptPath = path.join(receiptsDir, `${safeName}.json`);
+      fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2));
+      recordFile(receiptPath, `receipts/${safeName}.json`);
+    }
+  }
+
+  // 4. README — short orientation so recipients know what to do with the
+  //    bundle. Static text; the file list is generated from `files` so it
+  //    always matches the current bundle composition.
+  const readmePath = path.join(outDir, "README.md");
+  fs.writeFileSync(readmePath, renderBundleReadme(input.requestId, files, signers));
+  recordFile(readmePath, "README.md");
+
   const manifest = {
     requestId: input.requestId,
     generatedAt: nowIso(input.now ?? new Date()),
+    bundleVersion: 2,
     chainValid: chain.valid,
     files,
   };
