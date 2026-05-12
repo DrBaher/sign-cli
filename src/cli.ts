@@ -82,7 +82,7 @@ import {
 } from "./lib/signing-service.js";
 import { parseFieldSpec } from "./lib/field-placement.js";
 import { loadPolicySpec } from "./lib/policy-engine.js";
-import { parseImageInput, type StampPosition } from "./lib/pdf-image-stamp.js";
+import { parseImageInput, stampImageOnPdf, type StampPosition } from "./lib/pdf-image-stamp.js";
 import { loadRequestSpec } from "./lib/request-spec.js";
 import { parsePrefillSpec, parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
@@ -180,6 +180,7 @@ sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.p
 sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
 sign approve --request-id <id> --token <token>
 sign sign --request-id <id> --token <token> [--signer-email <e>] [--signer-name <n>] [--require-hash <sha256>] [--require-title <regex>] [--require-signer-email <e>] [--signature-image <path-or-data-url> [--image-page <n> --image-x <pt> --image-y <pt> --image-width <pt> --image-height <pt>]]
+sign pdf stamp --pdf ./doc.pdf --image ./sig.png|sig.svg|"data:image/svg+xml;base64,..." --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60 --out ./stamped.pdf   (standalone — no signing request involved; SVG is rasterized at ~300 DPI of the target rectangle)
 sign signer list [--signer-email <e>]
 sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [--signer-email <e>]
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
@@ -759,6 +760,26 @@ async function main(): Promise<void> {
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "pdf" && sub === "stamp") {
+    const pdfPath = flagValue(parsed, "pdf", true)!;
+    const imageFlag = flagValue(parsed, "image", true)!;
+    const outPath = flagValue(parsed, "out", true)!;
+    const position = readImagePositionFlags(parsed);
+    if (!position || !isCompletePosition(position)) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message:
+          "sign pdf stamp requires --image-page, --image-x, --image-y, --image-width, and --image-height (all in PDF points; origin = bottom-left).",
+      });
+    }
+    const fs = await import("node:fs");
+    const pdfBytes = fs.readFileSync(pdfPath);
+    const stamped = await stampImageOnPdf(pdfBytes, parseImageInput(imageFlag), position);
+    fs.writeFileSync(outPath, stamped);
+    console.log(JSON.stringify({ ok: true, pdf: pdfPath, out: outPath, position, bytes: stamped.length }, null, 2));
     return;
   }
 
