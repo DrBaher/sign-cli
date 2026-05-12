@@ -183,6 +183,7 @@ function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFla
 
 function printUsage(): void {
   console.log(`sign request create --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell]
+  (Quick-start: use the bundled real PDF fixture at fixtures/canonical-unsigned-v1.pdf as --document to drive an end-to-end demo without sourcing your own file.)
 sign request create --spec ./request.json   (CLI flags --provider and --auto-approve still apply on top of the spec)
 sign request run-email --title "Doc" --document ./file.pdf [--document ./extra.pdf] --signer name:Alice,email:alice@example.com,order:1 [--field signer:1,doc:0,page:1,x:100,y:200,type:signature] [--provider dropbox|docusign|signwell] [--test-mode true]
 sign request from-template --template-id <id> --signer role:Buyer,name:Alice,email:alice@example.com,order:1 [--prefill name:purchase_price,value:1000] [--title "..."] [--provider dropbox|docusign|signwell] [--auto-approve true]
