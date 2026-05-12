@@ -2917,22 +2917,104 @@ function findSignedPdfArtifact(db: SqliteDb, requestId: string): { id: string; p
   return row ?? null;
 }
 
+/** A one-shot verdict over a signed PDF + the persisted signer list. Drives
+ *  the verify-summary line and the CLI exit code (Item 2 of the product-
+ *  readiness feedback). Verdicts are ordered by severity in `verdictRank`. */
+export type VerifyVerdict =
+  | "ok"
+  | "warnings"
+  | "digest_mismatch"
+  | "no_signature"
+  | "signer_mismatch";
+
+export type VerifySummary = {
+  signature_present: boolean;
+  digest_ok: boolean;
+  signer_match: boolean;
+  warnings_count: number;
+  verdict: VerifyVerdict;
+};
+
+function emailMatchesSubject(subject: string | null, email: string): boolean {
+  if (!subject) return false;
+  return subject.toLowerCase().includes(email.toLowerCase());
+}
+
+/** @internal Exposed for unit testing — call sites should use the higher-level
+ *  inspectRequestSignedPdf which also handles persistence + auditing. */
+export function computeVerifySummary(
+  report: PdfSignatureReport,
+  persistedSigners: SignerInput[],
+): VerifySummary {
+  const signature_present = report.hasSignature;
+  // digest_ok requires that there's at least one signature AND every signature
+  // we could parse cleanly matches its embedded message digest.
+  const digest_ok = signature_present
+    && report.signatures.every((sig) => sig.messageDigestMatches === true);
+  // signer_match: every persisted signer must appear as the subject of at
+  // least one signature (Persisted ⊆ PDF — catches missing signers, tolerates
+  // extras per the design choice for Item 2).
+  const signer_match = signature_present
+    && persistedSigners.every((persisted) =>
+      report.signatures.some((sig) =>
+        sig.signers.some((s) => emailMatchesSubject(s.subject, persisted.email)),
+      ),
+    );
+  const warnings_count = report.warnings.length
+    + report.signatures.reduce((sum, sig) => sum + sig.parseWarnings.length, 0);
+  // Precedence: most-severe wins. no_signature > digest_mismatch > signer_mismatch > warnings > ok.
+  let verdict: VerifyVerdict;
+  if (!signature_present) verdict = "no_signature";
+  else if (!digest_ok) verdict = "digest_mismatch";
+  else if (!signer_match) verdict = "signer_mismatch";
+  else if (warnings_count > 0) verdict = "warnings";
+  else verdict = "ok";
+  return { signature_present, digest_ok, signer_match, warnings_count, verdict };
+}
+
+/** Map a verify verdict to the CLI exit code. Distinct codes per failure
+ *  class so CI scripts can branch. */
+export function verifyVerdictExitCode(verdict: VerifyVerdict): 0 | 2 | 3 | 4 | 5 {
+  switch (verdict) {
+    case "ok":               return 0;
+    case "warnings":         return 2;
+    case "digest_mismatch":  return 3;
+    case "no_signature":     return 4;
+    case "signer_mismatch":  return 5;
+  }
+}
+
 export async function inspectRequestSignedPdf(
   db: SqliteDb,
   input: { requestId: string; path?: string; now?: Date },
-): Promise<{ source: "request" | "path"; report: PdfSignatureReport }> {
+): Promise<{ source: "request" | "path"; report: PdfSignatureReport; summary: VerifySummary }> {
   let pdfPath = input.path;
   let source: "request" | "path" = "path";
+  let persistedSigners: SignerInput[] = [];
   if (!pdfPath) {
-    getRequestRow(db, input.requestId);
+    const row = getRequestRow(db, input.requestId);
+    persistedSigners = JSON.parse(row.signers_json) as SignerInput[];
     const artifact = findSignedPdfArtifact(db, input.requestId);
     if (!artifact) {
       throw new Error("No signed PDF artifact found for this request. Run `request fetch-final` first or pass --path.");
     }
     pdfPath = artifact.path;
     source = "request";
+  } else {
+    // Path was explicit, but we still want the persisted signer list for the
+    // signer_match check — the whole point of verifying against a request is
+    // checking that the PDF came from the people we expected.
+    try {
+      const row = getRequestRow(db, input.requestId);
+      persistedSigners = JSON.parse(row.signers_json) as SignerInput[];
+    } catch {
+      // Request not found in DB — skip signer_match (will be true by vacuous-
+      // truth: zero persisted signers means everyone in PDF is acceptable).
+      persistedSigners = [];
+    }
   }
   const report = await inspectPdfSignatures(pdfPath);
+  const summary = computeVerifySummary(report, persistedSigners);
   const now = input.now ?? new Date();
   appendAuditEvent(db, {
     requestId: input.requestId,
@@ -2942,10 +3024,11 @@ export async function inspectRequestSignedPdf(
       hasSignature: report.hasSignature,
       signatureCount: report.signatureCount,
       digestMatchAll: report.signatures.every((sig) => sig.messageDigestMatches === true),
+      verdict: summary.verdict,
     },
     now,
   });
-  return { source, report };
+  return { source, report, summary };
 }
 
 export async function timestampRequestAuditChain(
