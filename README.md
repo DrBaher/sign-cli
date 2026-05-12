@@ -17,14 +17,15 @@ everything. No signup. No keys. About 5 seconds.
 
 ## Read in this order
 
-1. **[Recipes](docs/recipes/README.md)** — short end-to-end guides (sign as Alice, weekly anchor, auditor handoff, agent loop over MCP).
-2. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
-3. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
-4. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
-5. **[Legal posture](docs/legal-posture.md)** — when a `sign-cli` signature is enforceable, by jurisdiction and use case (US ESIGN/UETA, EU eIDAS, NDA deep-dive). Read this before signing anything you care about.
-6. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
-7. **[Hosted demo](deploy/README.md)** — deploy a public read-only sandbox on Fly / Render / Railway.
-8. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
+1. **[Recipes](docs/recipes/README.md)** — short end-to-end guides (preflight for agents, sign as Alice, weekly anchor, auditor handoff, agent loop over MCP).
+2. **[Agent guide](docs/agent-guide.md)** — canonical reference for driving `sign-cli` from an LLM or non-interactive client (output schemas, exit-code map, per-command side effects + idempotency, decision rules). Start here if you're an agent.
+3. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
+4. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
+5. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
+6. **[Legal posture](docs/legal-posture.md)** — when a `sign-cli` signature is enforceable, by jurisdiction and use case (US ESIGN/UETA, EU eIDAS, NDA deep-dive). Read this before signing anything you care about.
+7. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
+8. **[Hosted demo](deploy/README.md)** — deploy a public read-only sandbox on Fly / Render / Railway.
+9. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
 
 ## Why this exists
 
@@ -80,13 +81,24 @@ node dist/cli.js doctor providers
 - Provider capability matrix via `doctor providers`
 - PDF signature inspection (`request verify-signed-pdf`) — parses `/ByteRange`, recomputes the digest, extracts X.509 signer cert
 - RFC 3161 timestamping (`audit timestamp`) — anchors the audit head against a public TSA
-- Tamper-evident bundle export (`audit export`) — writes `audit.json` + `signed.pdf` + `audit.tsr` + `manifest.json`
+- Tamper-evident bundle export (`audit export`) — bundleVersion 2 writes `audit.json` + `signed.pdf` + `original.pdf` + `manifest.json` + `README.md` + `receipts/<signer-email>.json` (per-signer event subsets, isolated — Bob's receipt never contains Alice's events)
 - HTTP retry with `Retry-After`-aware 429 handling on every provider call
 - Structured logging for `request watch` (`--log json` / `--log human`)
 - Live SignWell smoke test (`smoke signwell` / `scripts/smoke-signwell.sh`)
 - Persisted provider, provider request ID, and signer IDs on requests
 
 For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVIDER_SELECTION.md](./PROVIDER_SELECTION.md), [CHECKLIST.md](./CHECKLIST.md), and [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+
+## For agents (TL;DR)
+
+`sign-cli` treats agents as a first-class client. The canonical agent reference is **[`docs/agent-guide.md`](docs/agent-guide.md)**. Highlights:
+
+- **Introspection.** `sign --catalog json` returns every command + flag in one document. `sign mcp tools` returns the MCP tool catalog (with `inputSchema` + `outputSchema` per tool).
+- **Output contract.** Successful commands print JSON to stdout. Errors print `{ ok: false, error: { code, message, hint?, details? } }` to stderr (toggleable to plain text via `SIGN_ERROR_FORMAT=text`). Stable error codes — see `TROUBLESHOOTING.md`.
+- **Exit codes** carry meaning across every command: `0` ok, `2` invalid input, `3` policy / chain / verification failure, `4` not found / out of range. `request watch` adds the same `0/2/3/4` semantics for terminal vs. timeout.
+- **Preflight.** Run `sign doctor` first. Output is `{ ok, checks[] }` with `status: "ok"|"warn"|"fail"` + a `hint` per check. Branch on `checks[].name` for self-recovery.
+- **Provider banner.** Every provider-touching command prints `[sign] resolved provider: <p> (<source>)` to stderr. Pass `--strict-provider true` to refuse mismatches between flag/env and the request's persisted provider (error code `STRICT_PROVIDER_MISMATCH`).
+- **Recipes for agents.** [`docs/recipes/preflight.md`](docs/recipes/preflight.md), [`docs/recipes/agent-loop-mcp.md`](docs/recipes/agent-loop-mcp.md).
 
 ## Commands
 - `request create`
@@ -112,9 +124,12 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `SIGN_LOCAL_NOTIFY_URL=https://...` (fires a fire-and-forget JSON POST on `request.signed_by_signer` / `request.signer_declined` / `request.final_pdf_downloaded` / `request.receipt_signed` / `request.signer_token_reissued` / `request.signer_policy_evaluated` / `request.canceled`)
 - `init` (interactive `.env` wizard)
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
-- `doctor`
+- `doctor` (preflight: `node`, `sqlite`, `provider`, `dbPath`, `writable`, `localSignerKey`; exit `0` on all-ok/warn, `3` on any fail; output `{ ok, checks[] }`)
 - `doctor account-check`
 - `doctor providers` (capability + config matrix)
+- `workflow nda` (one-shot: render bundled mutual-NDA template → PDF → request; see [`docs/recipes/eu-nda.md`](docs/recipes/eu-nda.md))
+- `pdf stamp` (stamp an image onto a PDF without a signing request)
+- `pdf stamp verify` (confirm a stamp is at the expected position ±1pt; exit `0` ok, `3` wrong position, `4` missing or page out-of-range)
 - `audit show`
 - `audit verify` (walks `hash_prev`/`hash_self` chain; exits 3 on tamper)
 - `audit timestamp` (RFC 3161 — issues + verifies a TSA token over the chain head)
@@ -160,7 +175,9 @@ DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
 DOCUSIGN_PRIVATE_KEY_PATH=./keys/docusign-private.key
 ```
 
-`SIGN_PROVIDER` defaults to `dropbox`. Every request command that talks to a remote provider also accepts `--provider dropbox|docusign|signwell`, and the CLI uses that flag over the env var when both are present.
+`SIGN_PROVIDER` defaults to `dropbox`. Every request command that talks to a remote provider also accepts `--provider dropbox|docusign|signwell`, and the CLI uses that flag over the env var when both are present. **Resolution order** is `--provider flag > SIGN_PROVIDER env > default`. Every provider-touching command echoes the resolved provider + source to stderr as `[sign] resolved provider: <p> (<source>)` so you never sign against the wrong account by accident.
+
+**Strict provider mode.** Pass `--strict-provider true` (or set `SIGN_STRICT_PROVIDER=true`) to refuse mismatches between the resolved provider and the request's persisted provider. This catches the "I created the request as `dropbox` but I'm about to sign with `--provider local`" footgun. Error code: `STRICT_PROVIDER_MISMATCH`, with a hint pointing at the flag to use instead. Off by default — opt in for production scripts and CI.
 
 ## 4) Build
 ```bash

@@ -60,6 +60,19 @@ The HTTP and MCP surfaces dispatch to the **same handlers** in the library
 core — there's no behavior that's only available in one. That's intentional:
 it means a fix lands once and reaches every client.
 
+**Preflight.** `sign doctor` is the canonical "is this environment healthy?"
+entry point — it does not touch any client surface, only the local
+environment (node + sqlite versions, provider config, DB path, writability,
+local signer key). Agents should call it first; humans can run it whenever
+something feels off. Output is `{ ok, checks[] }` with stable check names and
+hints. See [`docs/agent-guide.md`](agent-guide.md) for the per-check schema.
+
+**Provider banner.** Every command that resolves a provider prints
+`[sign] resolved provider: <p> (<source>)` to stderr on start. With
+`--strict-provider true` (or `SIGN_STRICT_PROVIDER=true`), a mismatch
+between the resolved provider and a request's persisted provider fails
+with `STRICT_PROVIDER_MISMATCH` before any state mutation.
+
 ### 2. Library core
 
 Everything below the entry points is plain async TypeScript: no globals,
@@ -114,6 +127,29 @@ over the digest. Re-running over time produces a continuity proof:
 tampering with any old chain breaks the digest in every later anchor that
 covered it. `audit verify-anchor` and `audit chain-bundle verify` do the
 re-check.
+
+### 6. Bundles + receipts
+
+`audit export` produces a self-contained handoff bundle. As of
+**bundleVersion 2** the layout is:
+
+```
+<out>/
+├─ audit.json                       request + full event chain
+├─ signed.pdf                       the signed PDF (when available)
+├─ original.pdf                     unsigned source, byte-identical to input
+├─ manifest.json                    every file's sha256 + bytes
+├─ README.md                        human-readable handoff + verify commands
+└─ receipts/
+   ├─ <signer-a-email>.json         only A's events (B's are not included)
+   └─ <signer-b-email>.json         only B's events (A's are not included)
+```
+
+Per-signer receipts are isolated by construction (filtered by
+`payload.signerEmail` before serialization), so one signer's bundle can be
+shared without leaking another's. `request export-receipt` /
+`request verify-receipt` continue to emit + consume the older
+**bundleVersion 1** for backward compatibility.
 
 ## Where to read next
 

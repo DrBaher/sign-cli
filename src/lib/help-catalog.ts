@@ -198,7 +198,52 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request verify-signed-pdf",
-    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF.",
+    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF. `--inspect` adds per-signer `trust` labels (trusted / untrusted-self-signed / unverified / expired / unknown) and a top-level `worstTrust` to the summary.",
+  },
+  {
+    command: "pdf stamp",
+    summary: "Stamp an image (PNG / JPG / SVG / data URL) onto a PDF without a signing request. Shares the renderer with the integrated sign-flow.",
+    flags: [
+      { name: "--pdf", required: true, description: "Source PDF path." },
+      { name: "--image", required: true, description: "Image path or `data:image/...;base64,...`." },
+      { name: "--image-page", required: true, description: "1-indexed page number to stamp." },
+      { name: "--image-x", required: true, description: "X coordinate in PDF points from the lower-left." },
+      { name: "--image-y", required: true, description: "Y coordinate in PDF points from the lower-left." },
+      { name: "--image-width", required: true, description: "Stamp width in points." },
+      { name: "--image-height", required: true, description: "Stamp height in points." },
+      { name: "--out", required: true, description: "Output PDF path." },
+    ],
+  },
+  {
+    command: "pdf stamp verify",
+    summary: "Confirm a previously-stamped image is at the expected position + size within ±1pt. Pairs with `pdf stamp` for CI tamper checks.",
+    flags: [
+      { name: "--pdf", required: true, description: "PDF to inspect." },
+      { name: "--image-page", required: true, description: "Expected page (1-indexed)." },
+      { name: "--image-x", required: true, description: "Expected X (points)." },
+      { name: "--image-y", required: true, description: "Expected Y (points)." },
+      { name: "--image-width", required: true, description: "Expected width (points)." },
+      { name: "--image-height", required: true, description: "Expected height (points)." },
+    ],
+    example: "sign pdf stamp verify --pdf ./signed.pdf --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60",
+  },
+  {
+    command: "workflow nda",
+    summary: "One-shot: render the bundled mutual-NDA template into a PDF and create the signing request. Exits 3 on validation errors (same-email, missing values, missing placeholders — all gaps surface at once).",
+    flags: [
+      { name: "--values", description: "JSON map of {{PLACEHOLDER}} → value." },
+      { name: "--value", description: "Inline override `KEY=VALUE` (repeatable; wins over --values)." },
+      { name: "--party-a-email", required: true, description: "Signer A email (must differ from party-b)." },
+      { name: "--party-b-email", required: true, description: "Signer B email." },
+      { name: "--template", description: "Override the bundled template path." },
+      { name: "--out", required: true, description: "Output PDF path." },
+      { name: "--token-ttl-minutes", description: "Token lifetime (default 60)." },
+      { name: "--auto-approve", description: "true to skip the approval gate." },
+    ],
+    example:
+      `sign workflow nda --values fixtures/templates/mutual-nda.example.json \\\n` +
+      `  --party-a-email alice@example.com --party-b-email bob@example.com \\\n` +
+      `  --out ./nda.pdf`,
   },
   {
     command: "request receipt",
