@@ -8,7 +8,7 @@ bottom; agents should grep to the section they need.
 If you're new, run this first:
 
 ```bash
-sign doctor             # is the environment healthy?
+sign doctor preflight   # is the environment healthy? (exits 0 ok / 1 fail)
 sign --catalog json     # what commands + flags exist?
 sign mcp tools          # what MCP tools + schemas?
 ```
@@ -72,12 +72,14 @@ Stable across **every** command unless noted. Branch on these in your loop.
 | `3` | provider error or invalid remote status |
 | `4` | timeout before any terminal status |
 
-`sign doctor`:
+`sign doctor preflight`:
 
 | Code | Meaning |
 |---|---|
-| `0` | every check is `ok` or `warn` |
-| `3` | one or more checks are `fail` |
+| `0` | `summary.verdict == "ok"` (every check passed or was skipped) |
+| `1` | `summary.verdict == "failed"` (at least one check failed) |
+
+(Bare `sign doctor` always exits 0 — it's a human-readable env report, not a structured check.)
 
 ---
 
@@ -97,52 +99,84 @@ isn't there, it isn't a stable surface. The catalog is regenerated from
 
 ---
 
-## 4. Preflight — `sign doctor`
+## 4. Preflight — `sign doctor preflight`
 
-**Always your first call** in a fresh environment.
+**Always your first call** in a fresh environment. (Note: it's `doctor preflight`, the subcommand — bare `sign doctor` is the legacy env-report and does not return a structured check list.)
 
 ```bash
-sign doctor                                    # default
-SIGN_CLI_DB=./prod.db sign doctor              # check a specific DB path
+sign doctor preflight                              # uses resolved provider
+sign doctor preflight --provider local             # force a specific provider
+SIGN_DB_PATH=./prod.db sign doctor preflight       # check a specific DB path
 ```
 
 ### Output
 
 ```jsonc
 {
-  "ok": false,
+  "provider": "local" | "dropbox" | "signwell" | "docusign",
+  "summary": {
+    "passed":  <int>,
+    "failed":  <int>,
+    "skipped": <int>,
+    "verdict": "ok" | "failed"
+  },
   "checks": [
     {
-      "name": "node" | "sqlite" | "provider" | "dbPath" | "writable" | "localSignerKey",
-      "status": "ok" | "warn" | "fail",
-      "message": "human-readable summary",
-      "hint": "what to do if not ok"      // present when status != ok
+      "name":   "<category>:<specific>",        // see check reference below
+      "status": "ok" | "failed" | "skipped",
+      "detail": "human-readable summary",
+      "hint":   "what to do if not ok"          // present when status != ok
     }
   ]
 }
 ```
 
+Also prints a one-line stderr summary: `[sign] preflight: <verdict> (provider=<p>, N ok, N failed, N skipped)`.
+
 ### Check reference
 
-| `name` | Verifies | Common fail/hint |
+Env-health checks run **on every provider** (they gate the basic ability to use the CLI):
+
+| `name` | Verifies | On fail |
 |---|---|---|
-| `node` | Node ≥ 22 | `hint: "upgrade Node to 22 or later"` |
-| `sqlite` | `node:sqlite` available | `hint: "rebuild Node with sqlite support"` |
-| `provider` | `SIGN_PROVIDER` resolves to a supported value | `hint: "set SIGN_PROVIDER or pass --provider"` |
-| `dbPath` | `SIGN_CLI_DB` resolves to a path | `hint: "set SIGN_CLI_DB or use --db"` |
-| `writable` | The DB parent dir is writable | `hint: "chmod the directory, or pick a different SIGN_CLI_DB"` |
-| `localSignerKey` | `data/local-keys/` cert + key exist & parse | `hint: "run sign demo once to generate them, or sign db rotate-keys"` |
+| `runtime:node_version` | Node ≥ 22 (node:sqlite requirement) | `hint: "Upgrade Node to 22 or later..."` |
+| `storage:db_path` | `SIGN_DB_PATH` (default `./data/sign.db`) parent dir is writable | `hint: "...set SIGN_DB_PATH to a writable location."` |
+
+Provider-scoped checks layer on top:
+
+| Provider | Check name | Verifies |
+|---|---|---|
+| `local` | `permissions:key_dir` | `SIGN_LOCAL_KEY_DIR` (default `./data/local-keys`) writable |
+| `local` | `permissions:store_dir` | `SIGN_LOCAL_STORE_DIR` (default `./data/local-provider`) writable |
+| `local` | `fixture:canonical_unsigned` | `fixtures/canonical-unsigned-v1.pdf` present + non-corrupt |
+| `dropbox` | `env:DROPBOX_SIGN_API_KEY` | env var set |
+| `dropbox` | `connectivity:dropbox_account` | API call to Dropbox account endpoint succeeds (skipped if env missing) |
+| `signwell` | `env:SIGNWELL_API_KEY` | env var set |
+| `signwell` | `connectivity:signwell_account` | `/me` endpoint reachable |
+| `docusign` | `env:DOCUSIGN_INTEGRATION_KEY` / `_USER_ID` / `_ACCOUNT_ID` / `_BASE_PATH` / `_PRIVATE_KEY_PATH` | env vars set |
+| `docusign` | `permissions:docusign_private_key` | The JWT RSA key file exists on disk |
+
+### Exit codes
+
+| Code | Condition |
+|---|---|
+| `0` | `summary.verdict == "ok"` (every check passed or was skipped) |
+| `1` | `summary.verdict == "failed"` (at least one check failed) |
 
 ### Decision rule
 
 ```text
 exit 0 → proceed
-exit 3 → for each check where status == "fail":
-           apply hint, then re-run `sign doctor`
+exit 1 → for each check where status == "failed":
+           apply `hint`, then re-run `sign doctor preflight`
          if a check keeps failing after one retry: surface to a human
 ```
 
-Side effects: reads filesystem + env. **No writes. Idempotent.**
+Side effects: reads env + filesystem. The `storage:db_path` check writes (and removes) a probe file in the DB parent dir. Otherwise read-only. Idempotent.
+
+### Legacy `sign doctor`
+
+`sign doctor` (no subcommand) prints an unstructured env + key-detection report and **always exits 0**. It's kept for human glanceability. Use `sign doctor preflight` whenever you want a machine-readable result.
 
 ---
 
@@ -199,13 +233,13 @@ check is zero; the cost of signing against the wrong account is not.
 
 ## 6. New commands — per-command reference
 
-### 6.1 `sign verify` / `sign audit verify`
+### 6.1 `sign audit verify`
 
 Walks the request's hash chain, emits a summary, exits with the verdict
-class.
+class. There is no top-level `sign verify` alias — the canonical command is `sign audit verify`.
 
 ```bash
-sign verify --request-id req_abc...
+sign audit verify --request-id req_abc...
 ```
 
 **Stdout** (single JSON document):
@@ -380,34 +414,28 @@ Side effects: **writes** the bundle directory. Idempotent **per output
 path** — re-running over the same `--out` regenerates the bundle and
 overwrites in place. Safe to retry.
 
-**Backward compat**: `request export-receipt` + `request verify-receipt`
-still emit/consume the older `bundleVersion: 1`. Use it if a downstream
-consumer hasn't upgraded.
+**Cryptographically-signed receipt (separate command)**: `sign request receipt --request-id <id> --out ./receipt/` produces a different bundle — `bundleVersion: 1`, with a detached `manifest.sig` + `manifest.cert.pem` so the manifest itself is openssl-verifiable. `sign request verify-receipt --bundle ./receipt/` re-verifies it. This is the right command when a downstream party wants to validate the bundle's integrity **without trusting your DB or your CLI**. The v2 `audit export` bundle has no detached signature; its integrity is the audit chain + file sha256s inside the bundle.
 
 ---
 
-### 6.5 Trust labels — `request verify-signed-pdf --inspect`
+### 6.5 Trust labels — `request verify-signed-pdf`
 
-The `--inspect` flag's per-signer report now carries a `trust` label and
-the summary carries a `worstTrust` so an agent can branch on a single
-field.
+The output's per-signer report carries a `trust` label classifying the certificate so an agent can branch without a trust-store lookup. The label is **descriptive, not enforced** — it tells you what kind of cert produced the signature, not whether to accept it.
 
 ```bash
-sign request verify-signed-pdf --pdf ./signed.pdf --inspect
+sign request verify-signed-pdf --pdf ./signed.pdf
 ```
 
-**Label values** (every `signatures[].signers[].trust`):
+**Label values** (every `signatures[].signers[].trust`, defined in `src/lib/pdf-signature.ts:128`):
 
-| Value | Meaning | Decision |
+| Value | Meaning | Typical decision |
 |---|---|---|
-| `trusted` | cert chains to a trusted root in `data/local-trust-store/` | accept |
-| `untrusted-self-signed` | valid signature, but no trust chain to a known root | accept ONLY if your policy says self-signed is OK |
-| `unverified` | chain validation failed (broken intermediate, etc.) | reject |
-| `expired` | cert was expired at signing time | reject |
+| `self_signed_local` | issuer == subject AND issuer contains "Sign CLI Local Provider" / "Sign CLI Local Signer" — produced by this CLI's built-in PAdES signer | accept iff your policy allows the local provider (production typically rejects unless you've enrolled the local-key fingerprint) |
+| `self_signed_other` | issuer == subject, but not from this CLI's local signer | almost always reject — this is "someone else's self-signed cert" |
+| `ca_signed` | issuer != subject — cert chains to a different issuer | accept; verify the chain separately if your policy requires |
 | `unknown` | cert parse error or no cert present | reject |
 
-**Summary field**: `worstTrust` is the lowest-trust label across every
-signer. Branch on `worstTrust === "trusted"` for a single-line policy.
+Note: the label is **purely structural** (issuer vs subject + issuer-string matching) — there is no live trust-store lookup, expiry check, or chain validation built into the label. For expiry, use `validTo` on the signer entry. For chain validation, run an external verifier.
 
 Side effects: **read-only**. Idempotent.
 
@@ -417,24 +445,35 @@ Side effects: **read-only**. Idempotent.
 
 Short "if X then Y" rules covering the common branching points.
 
-### After `sign doctor`
+### After `sign doctor preflight`
 
 ```text
-checks[].status == "fail" with name == "writable"
-  → permission/disk problem in the calling environment.
-    Apply hint; do NOT mutate the user's filesystem unprompted.
+checks[].status == "failed" with name == "runtime:node_version"
+  → Node version too old. Surface to operator; do NOT attempt to upgrade
+    Node unprompted.
 
-checks[].status == "fail" with name == "localSignerKey"
-  → safe to run `sign demo` once on a scratch DB to generate keys,
-    then `sign doctor` again. NEVER run `sign db rotate-keys`
-    without explicit human approval.
+checks[].status == "failed" with name == "storage:db_path"
+  → SIGN_DB_PATH parent dir is not writable. Apply `hint`; do NOT mutate
+    the user's filesystem unprompted.
 
-checks[].status == "fail" with name == "provider"
-  → resolve --provider or SIGN_PROVIDER per §5. Do not pick one
-    silently; ask the operator.
+checks[].status == "failed" with name starting "env:"
+  → A provider env var is missing. Apply `hint`; ask the operator before
+    setting credentials.
+
+checks[].status == "failed" with name starting "connectivity:"
+  → Provider API unreachable / auth failed. Read `detail` for the upstream
+    error. Surface; retry only after the operator confirms the credential
+    fix.
+
+checks[].status == "failed" with name starting "permissions:"
+  → Filesystem permission issue on a provider-specific path. Apply `hint`.
+
+checks[].status == "skipped"
+  → Means a prerequisite earlier in the list failed. Fix the prereq first,
+    then re-run preflight.
 ```
 
-### After `sign verify` / `audit verify`
+### After `sign audit verify`
 
 ```text
 exit 0  → trust the chain, proceed.
@@ -458,13 +497,30 @@ verdict "out_of_range"   → bad caller input (page number too high).
                            Fix the caller; this isn't a stamping bug.
 ```
 
-### After `request verify-signed-pdf --inspect`
+### After `request verify-signed-pdf`
 
 ```text
-summary.worstTrust == "trusted"               → accept.
-summary.worstTrust == "untrusted-self-signed" → accept iff policy allows
-                                                self-signed; flag otherwise.
-otherwise                                     → reject + surface.
+For each signer in signatures[*].signers[*]:
+
+  trust == "ca_signed"           → accept (chain validates structurally;
+                                   verify chain to trusted root separately
+                                   if your policy requires).
+  trust == "self_signed_local"   → accept iff policy allows this CLI's
+                                   built-in local signer (typically only
+                                   in dev / test).
+  trust == "self_signed_other"   → almost always reject — unknown
+                                   self-signed cert from outside.
+  trust == "unknown"             → reject — cert couldn't be parsed.
+```
+
+There is no `worstTrust` field on the summary. To get the equivalent in jq:
+
+```bash
+jq -r '[.signatures[].signers[].trust] | min_by(
+  if . == "ca_signed" then 3
+  elif . == "self_signed_local" then 2
+  elif . == "self_signed_other" then 1
+  else 0 end)'
 ```
 
 ### After `workflow nda` error
@@ -486,10 +542,12 @@ Quick reference for "is it safe to retry?"
 
 | Command | Reads | Writes | Idempotent? |
 |---|---|---|---|
-| `doctor` | env, fs | — | yes |
-| `verify` / `audit verify` | DB | — | yes |
+| `doctor preflight` | env, fs | write probe under DB parent dir | yes |
+| `audit verify` | DB | — | yes |
 | `pdf stamp verify` | PDF | — | yes |
-| `audit export` | DB, PDFs | `<out>/` | yes (overwrites in place) |
+| `audit export` | DB, PDFs | `<out>/` (bundleVersion 2) | yes (overwrites in place) |
+| `request receipt` | DB, PDFs, local signer key | `<out>/` with detached `manifest.sig` + `manifest.cert.pem` (bundleVersion 1) | yes (overwrites in place) |
+| `request verify-receipt` | bundle | — | yes |
 | `request verify-signed-pdf` | PDF | — | yes |
 | `workflow nda` | template, values | PDF, DB rows, audit events | **no** — use `--idempotency-key` on `request create` if you build your own variant |
 | `pdf stamp` | PDF, image | output PDF | yes per output path |
@@ -509,11 +567,12 @@ render) is safe to re-run.
 ### Pattern A — pre-flight gate before any mutation
 
 ```bash
-sign doctor > /tmp/doctor.json
-DOCTOR_EXIT=$?
-if [ $DOCTOR_EXIT -ne 0 ]; then
-  # Surface to operator, do not proceed.
-  exit $DOCTOR_EXIT
+sign doctor preflight > /tmp/doctor.json
+PRE_EXIT=$?
+if [ $PRE_EXIT -ne 0 ]; then
+  jq -r '.checks[] | select(.status=="failed") | "[FAIL] \(.name): \(.detail)\n  hint: \(.hint)"' \
+    /tmp/doctor.json
+  exit $PRE_EXIT
 fi
 ```
 
@@ -528,8 +587,14 @@ export SIGN_PROVIDER=dropbox          # canonical for this script
 ### Pattern C — verify trust, fail closed
 
 ```bash
-sign request verify-signed-pdf --pdf "$PDF" --inspect > /tmp/inspect.json
-if [ "$(jq -r '.summary.worstTrust' /tmp/inspect.json)" != "trusted" ]; then
+sign request verify-signed-pdf --pdf "$PDF" > /tmp/inspect.json
+# Reject anything that isn't a CA-signed cert (adjust to your policy).
+WORST=$(jq -r '[.signatures[].signers[].trust] | min_by(
+  if . == "ca_signed" then 3
+  elif . == "self_signed_local" then 2
+  elif . == "self_signed_other" then 1
+  else 0 end)' /tmp/inspect.json)
+if [ "$WORST" != "ca_signed" ]; then
   jq '.' /tmp/inspect.json    # surface for review
   exit 3
 fi

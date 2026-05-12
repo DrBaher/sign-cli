@@ -120,6 +120,58 @@ function checkCanonicalFixture(): PreflightCheck {
   return { name, status: "ok", detail: `${p} (${size} bytes)` };
 }
 
+/** Node ≥ 22 is required by package.json engines and by node:sqlite. Checked
+ *  every run (env-health, not provider-scoped) since older Node will pass the
+ *  CLI's first few checks then crash at the first DB call. */
+function checkNodeVersion(): PreflightCheck {
+  const name = "runtime:node_version";
+  const raw = process.versions.node;
+  const major = Number(raw.split(".")[0] ?? "0");
+  if (Number.isNaN(major) || major < 22) {
+    return {
+      name,
+      status: "failed",
+      detail: `node ${raw} (requires >= 22 per package.json engines + node:sqlite availability)`,
+      hint: "Upgrade Node to 22 or later. The CLI uses node:sqlite which only exists on >= 22.",
+    };
+  }
+  return { name, status: "ok", detail: `node ${raw}` };
+}
+
+/** The SQLite-backed audit chain lives at SIGN_DB_PATH (default ./data/sign.db).
+ *  Catch unwritable parent dirs / read-only mounts before the first CLI op
+ *  fails partway through. Env-health, runs on every provider. */
+function checkDbPath(): PreflightCheck {
+  const name = "storage:db_path";
+  const dbPath = path.resolve(process.env.SIGN_DB_PATH ?? "./data/sign.db");
+  const parent = path.dirname(dbPath);
+  try {
+    mkdirSync(parent, { recursive: true });
+  } catch (err) {
+    return {
+      name,
+      status: "failed",
+      detail: `Cannot create ${parent}: ${err instanceof Error ? err.message : String(err)}`,
+      hint: "Ensure the parent directory exists and is writable, or set SIGN_DB_PATH to a writable location.",
+    };
+  }
+  // Round-trip a probe file to confirm the parent dir actually accepts
+  // writes (catches read-only mounts that pass mkdir() but fail open()).
+  const probe = path.join(parent, `.preflight-db-probe-${process.pid}`);
+  try {
+    writeFileSync(probe, "ok");
+    unlinkSync(probe);
+  } catch (err) {
+    return {
+      name,
+      status: "failed",
+      detail: `Write probe failed on ${parent}: ${err instanceof Error ? err.message : String(err)}`,
+      hint: "Filesystem may be read-only or out of space. Set SIGN_DB_PATH to a writable path.",
+    };
+  }
+  return { name, status: "ok", detail: `${dbPath} is writable` };
+}
+
 function checkEnvVar(varName: string, required: boolean): PreflightCheck {
   const name = `env:${varName}`;
   const value = process.env[varName];
@@ -226,13 +278,18 @@ async function checkDocuSignProvider(): Promise<PreflightCheck[]> {
 }
 
 export async function runPreflight(provider: SignProvider): Promise<PreflightReport> {
-  let checks: PreflightCheck[];
+  // Env-health checks run first on every provider — these gate the basic
+  // ability to use the CLI at all, independent of which provider you pick.
+  const envChecks: PreflightCheck[] = [checkNodeVersion(), checkDbPath()];
+
+  let providerChecks: PreflightCheck[];
   switch (provider) {
-    case "local":    checks = await checkLocalProvider(); break;
-    case "dropbox":  checks = await checkDropboxProvider(); break;
-    case "signwell": checks = await checkSignWellProvider(); break;
-    case "docusign": checks = await checkDocuSignProvider(); break;
+    case "local":    providerChecks = await checkLocalProvider(); break;
+    case "dropbox":  providerChecks = await checkDropboxProvider(); break;
+    case "signwell": providerChecks = await checkSignWellProvider(); break;
+    case "docusign": providerChecks = await checkDocuSignProvider(); break;
   }
+  const checks = [...envChecks, ...providerChecks];
   const passed = checks.filter((c) => c.status === "ok").length;
   const failed = checks.filter((c) => c.status === "failed").length;
   const skipped = checks.filter((c) => c.status === "skipped").length;

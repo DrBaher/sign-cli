@@ -60,12 +60,16 @@ The HTTP and MCP surfaces dispatch to the **same handlers** in the library
 core — there's no behavior that's only available in one. That's intentional:
 it means a fix lands once and reaches every client.
 
-**Preflight.** `sign doctor` is the canonical "is this environment healthy?"
-entry point — it does not touch any client surface, only the local
-environment (node + sqlite versions, provider config, DB path, writability,
-local signer key). Agents should call it first; humans can run it whenever
-something feels off. Output is `{ ok, checks[] }` with stable check names and
-hints. See [`docs/agent-guide.md`](agent-guide.md) for the per-check schema.
+**Preflight.** `sign doctor preflight` (the subcommand) is the canonical
+"is this environment healthy?" entry point. It checks env-health (node
+version, `SIGN_DB_PATH` writability) on every provider, then layers
+provider-scoped checks (env vars, API connectivity, RSA key file existence)
+on top. Agents should call it first; humans can run it whenever something
+feels off. Output is `{ provider, summary, checks[] }` with stable check
+names (`runtime:*`, `storage:*`, `env:*`, `connectivity:*`, `permissions:*`)
+and hints. Bare `sign doctor` (no subcommand) is the legacy unstructured
+env-report — always exits 0. See [`docs/agent-guide.md`](agent-guide.md)
+for the per-check schema.
 
 **Provider banner.** Every command that resolves a provider prints
 `[sign] resolved provider: <p> (<source>)` to stderr on start. With
@@ -147,9 +151,16 @@ re-check.
 
 Per-signer receipts are isolated by construction (filtered by
 `payload.signerEmail` before serialization), so one signer's bundle can be
-shared without leaking another's. `request export-receipt` /
-`request verify-receipt` continue to emit + consume the older
-**bundleVersion 1** for backward compatibility.
+shared without leaking another's. The per-signer event arrays populate
+only from signer-action events (`request.signed_by_signer`,
+`request.signer_declined`, `request.signer_fetched_document`) — an
+auto-approved-but-never-signed request has empty per-signer arrays.
+
+`sign request receipt` (separate command) produces a **cryptographically
+signed** receipt bundle (`bundleVersion: 1`) with detached `manifest.sig`
++ `manifest.cert.pem` — use it when a third party needs to validate the
+manifest itself without trusting your DB. `sign request verify-receipt`
+re-verifies that bundle.
 
 ## Where to read next
 

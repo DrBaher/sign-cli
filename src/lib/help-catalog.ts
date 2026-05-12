@@ -29,7 +29,12 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "doctor",
-    summary: "Print environment + key-detection report.",
+    summary: "Print an unstructured environment + key-detection report. Always exits 0 — for a machine-readable per-check result, use `doctor preflight`.",
+  },
+  {
+    command: "doctor preflight",
+    summary: "Structured per-check preflight. Env-health checks (`runtime:node_version`, `storage:db_path`) run on every provider; provider-scoped checks (env vars, API connectivity, RSA key file presence, canonical fixture for `local`) layer on top. Output: `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name, status:\"ok\"|\"failed\"|\"skipped\", detail, hint?}] }`. Exit `0` if verdict is `ok`, `1` if any check failed.",
+    flags: [{ name: "--provider", description: "Override resolved provider (dropbox | docusign | signwell | local)." }],
   },
   {
     command: "doctor account-check",
@@ -198,7 +203,7 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request verify-signed-pdf",
-    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF. `--inspect` adds per-signer `trust` labels (trusted / untrusted-self-signed / unverified / expired / unknown) and a top-level `worstTrust` to the summary.",
+    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF. Per signer, the output includes a structural `trust` label: `self_signed_local` (this CLI's built-in signer), `self_signed_other` (issuer==subject, but not from this CLI), `ca_signed` (issuer!=subject), or `unknown` (parse error). Labels are descriptive, not enforced — no trust-store lookup or chain validation.",
   },
   {
     command: "pdf stamp",

@@ -96,7 +96,7 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - **Introspection.** `sign --catalog json` returns every command + flag in one document. `sign mcp tools` returns the MCP tool catalog (with `inputSchema` + `outputSchema` per tool).
 - **Output contract.** Successful commands print JSON to stdout. Errors print `{ ok: false, error: { code, message, hint?, details? } }` to stderr (toggleable to plain text via `SIGN_ERROR_FORMAT=text`). Stable error codes — see `TROUBLESHOOTING.md`.
 - **Exit codes** carry meaning across every command: `0` ok, `2` invalid input, `3` policy / chain / verification failure, `4` not found / out of range. `request watch` adds the same `0/2/3/4` semantics for terminal vs. timeout.
-- **Preflight.** Run `sign doctor` first. Output is `{ ok, checks[] }` with `status: "ok"|"warn"|"fail"` + a `hint` per check. Branch on `checks[].name` for self-recovery.
+- **Preflight.** Run `sign doctor preflight` first (the subcommand — bare `sign doctor` is the legacy env-report). Output is `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name,status:"ok"|"failed"|"skipped",detail,hint?}] }`. Exit `0` ok / `1` any failed. Branch on `checks[].name` for self-recovery — env-health (`runtime:node_version`, `storage:db_path`) runs on every provider, then provider-scoped checks layer on.
 - **Provider banner.** Every provider-touching command prints `[sign] resolved provider: <p> (<source>)` to stderr. Pass `--strict-provider true` to refuse mismatches between flag/env and the request's persisted provider (error code `STRICT_PROVIDER_MISMATCH`).
 - **Recipes for agents.** [`docs/recipes/preflight.md`](docs/recipes/preflight.md), [`docs/recipes/agent-loop-mcp.md`](docs/recipes/agent-loop-mcp.md).
 
@@ -124,7 +124,8 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - `SIGN_LOCAL_NOTIFY_URL=https://...` (fires a fire-and-forget JSON POST on `request.signed_by_signer` / `request.signer_declined` / `request.final_pdf_downloaded` / `request.receipt_signed` / `request.signer_token_reissued` / `request.signer_policy_evaluated` / `request.canceled`)
 - `init` (interactive `.env` wizard)
 - `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
-- `doctor` (preflight: `node`, `sqlite`, `provider`, `dbPath`, `writable`, `localSignerKey`; exit `0` on all-ok/warn, `3` on any fail; output `{ ok, checks[] }`)
+- `doctor` (unstructured env + key-detection report; always exits 0; for a machine-readable check use `doctor preflight`)
+- `doctor preflight` (per-check status. Env-health: `runtime:node_version`, `storage:db_path`. Provider-scoped: `env:*`, `connectivity:*`, `permissions:*`, `fixture:canonical_unsigned`. Output `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name,status:"ok"|"failed"|"skipped",detail,hint?}] }`. Exit `0` ok / `1` any failed.)
 - `doctor account-check`
 - `doctor providers` (capability + config matrix)
 - `workflow nda` (one-shot: render bundled mutual-NDA template → PDF → request; see [`docs/recipes/eu-nda.md`](docs/recipes/eu-nda.md))

@@ -7,14 +7,13 @@ adapt the flags, branch on the exit codes.
 The pipeline:
 
 ```
-  ┌──────────┐    ┌────────────────────┐    ┌──────────────────────┐    ┌───────────────┐
-  │  doctor  │ →  │  strict-provider   │ →  │  pdf stamp verify    │ →  │  audit export │
-  │          │    │  banner check      │    │  (between sender +   │    │  (handoff)    │
-  │          │    │                    │    │   signer)            │    │               │
-  └──────────┘    └────────────────────┘    └──────────────────────┘    └───────────────┘
-       │                   │                          │                         │
-   exit 0/3            exit 0 +                   exit 0 / 3 / 4             exit 0 / 2 / 4
-                       known banner
+  ┌──────────────────┐    ┌────────────────────┐    ┌──────────────────────┐    ┌───────────────┐
+  │ doctor preflight │ →  │  strict-provider   │ →  │  pdf stamp verify    │ →  │  audit export │
+  │ (env + provider) │    │  banner check      │    │  (between sender +   │    │  (handoff)    │
+  │                  │    │                    │    │   signer)            │    │               │
+  └──────────────────┘    └────────────────────┘    └──────────────────────┘    └───────────────┘
+       │                          │                          │                         │
+   exit 0/1                  exit 0 + known banner       exit 0 / 3 / 4             exit 0 / 2 / 4
 ```
 
 Each step is read-only **except** the last one (`audit export`), which is
@@ -23,15 +22,18 @@ idempotent per output path. Safe to re-run.
 ## 0. Environment
 
 ```bash
-export SIGN_CLI_DB=/var/lib/sign-cli/prod.db
+export SIGN_DB_PATH=/var/lib/sign-cli/prod.db          # NOT SIGN_CLI_DB
 export SIGN_PROVIDER=dropbox
-export SIGN_STRICT_PROVIDER=true                 # required for the §2 check
+export SIGN_STRICT_PROVIDER=true                       # required for the §2 check
 ```
 
-## 1. `sign doctor` — fail fast on environment problems
+## 1. `sign doctor preflight` — fail fast on environment problems
+
+Note: it's the `doctor preflight` **subcommand**. Bare `sign doctor` is the
+legacy env-report and always exits 0.
 
 ```bash
-sign doctor > /tmp/doctor.json
+sign doctor preflight > /tmp/doctor.json
 DOCTOR_EXIT=$?
 ```
 
@@ -39,39 +41,37 @@ Branch:
 
 ```bash
 if [ $DOCTOR_EXIT -ne 0 ]; then
-  # Surface every failing check + its hint.
-  jq -r '.checks[] | select(.status=="fail") | "[FAIL] \(.name): \(.message)\n  hint: \(.hint)"' \
+  # Surface every failing check + its hint. Note the field is `detail`
+  # (not `message`), and the failure status is `failed` (not `fail`).
+  jq -r '.checks[] | select(.status=="failed") | "[FAIL] \(.name): \(.detail)\n  hint: \(.hint)"' \
     /tmp/doctor.json
   exit $DOCTOR_EXIT       # stop the pipeline; do NOT auto-repair
 fi
 ```
 
-What you get for free:
+What you get:
 
-- `node` and `sqlite` versions confirmed before any DB work
-- `provider` resolution made explicit (so step 2's banner check is meaningful)
-- `dbPath` + `writable` confirmed before anything tries to insert
-- `localSignerKey` confirmed (relevant only for `--provider local`; warn-not-fail otherwise)
+- **Env-health checks** (every provider): `runtime:node_version` (Node ≥ 22), `storage:db_path` (`SIGN_DB_PATH` parent writable; default `./data/sign.db`).
+- **Provider-specific checks** (scoped to `SIGN_PROVIDER`):
+  - `dropbox`: `env:DROPBOX_SIGN_API_KEY`, `connectivity:dropbox_account`
+  - `signwell`: `env:SIGNWELL_API_KEY`, `connectivity:signwell_account`
+  - `docusign`: env vars for integration key/user/account/base path + `permissions:docusign_private_key`
+  - `local`: `permissions:key_dir`, `permissions:store_dir`, `fixture:canonical_unsigned`
 
-**Decision rule**: never proceed past doctor on `exit 3`. Surface and stop.
+**Decision rule**: never proceed past preflight on `exit 1`. Surface and stop.
 
 ## 2. Strict-provider sanity check
 
 The banner is printed on stderr by every provider-touching command. With
 `SIGN_STRICT_PROVIDER=true`, a mismatch fails before any state mutation.
 
-```bash
-# Capture the banner to confirm what the next command will resolve to.
-sign request list 2>/tmp/banner.txt > /dev/null
-grep -F "[sign] resolved provider: dropbox" /tmp/banner.txt \
-  || { echo "banner mismatch — check SIGN_PROVIDER" ; exit 2 ; }
-```
-
-For a signing call against an existing request:
+The banner does **not** print on read-only inbox queries like `signer list`
+— it prints on commands that resolve a provider for an action (`request
+send`, `sign sign`, `request status`, `workflow nda`, etc.).
 
 ```bash
 # This will error with STRICT_PROVIDER_MISMATCH if the request was
-# created against a different provider.
+# created against a different provider — and the banner prints either way.
 sign sign --request-id "$REQ" --token "$TOK" 2>/tmp/err.json
 SIGN_EXIT=$?
 
@@ -139,17 +139,6 @@ sign audit export --request-id "$REQ" --out "./bundles/$REQ"
 EXPORT_EXIT=$?
 ```
 
-Branch:
-
-```bash
-case $EXPORT_EXIT in
-  0) ;;
-  2) echo "bad flags" ; exit 2 ;;
-  4) echo "request id $REQ not found in DB" ; exit 4 ;;
-  *) echo "unexpected export failure" ; exit $EXPORT_EXIT ;;
-esac
-```
-
 Confirm the bundle integrity (manifest hashes match the files on disk):
 
 ```bash
@@ -166,9 +155,27 @@ print("manifest verified")
 PY
 ```
 
-The bundle is **bundleVersion 2** — per-signer receipts under
-`receipts/<email>.json` are isolated by construction, so you can hand
-one signer's file to that signer without leaking another's events.
+The bundle is **bundleVersion 2**. Per-signer receipts under
+`receipts/<email>.json` are filtered by `payload.signerEmail`, so each
+signer's file contains only their events.
+
+Important caveat: per-signer event arrays are only populated by
+signer-action events (`request.signed_by_signer`, `request.signer_declined`,
+`request.signer_fetched_document`). If the request was auto-approved but
+never actually signed (e.g. you ran `--auto-approve true` and stopped),
+the per-signer receipts will be empty — that's correct, not a bug.
+
+**Want a cryptographically-signed bundle that a third party can re-verify
+without trusting your DB?** Use `sign request receipt` instead (or in
+addition). That produces a v1 bundle with detached `manifest.sig` +
+`manifest.cert.pem`:
+
+```bash
+sign request receipt --request-id "$REQ" --out ./receipt/
+sign request verify-receipt --bundle ./receipt/
+# → exits 0 with `manifestVerified: true` when the manifest's RSA
+#   signature verifies against the embedded cert
+```
 
 ## 5. Putting it together
 
@@ -179,31 +186,27 @@ something actually goes wrong:
 #!/usr/bin/env bash
 set -euo pipefail
 
-export SIGN_CLI_DB="${SIGN_CLI_DB:-/var/lib/sign-cli/prod.db}"
+export SIGN_DB_PATH="${SIGN_DB_PATH:-/var/lib/sign-cli/prod.db}"
 export SIGN_PROVIDER="${SIGN_PROVIDER:-dropbox}"
 export SIGN_STRICT_PROVIDER=true
 
 REQ="$1"; TOK="$2"; PDF="$3"
 
-# 1. doctor
-sign doctor > /tmp/doctor.json || {
-  jq '.checks[] | select(.status=="fail")' /tmp/doctor.json
-  exit 3
+# 1. preflight (env-health + provider-config)
+sign doctor preflight > /tmp/doctor.json || {
+  jq '.checks[] | select(.status=="failed")' /tmp/doctor.json
+  exit 1
 }
 
-# 2. banner sanity
-sign request list 2>/tmp/banner.txt > /dev/null
-grep -qF "[sign] resolved provider: $SIGN_PROVIDER" /tmp/banner.txt
-
-# 3. stamp verify (coords come from the sender's stamping step)
+# 2. stamp verify (coords come from the sender's stamping step)
 sign pdf stamp verify --pdf "$PDF" \
   --image-page 1 --image-x 100 --image-y 200 \
   --image-width 150 --image-height 60
 
-# 4. sign (strict-provider will surface mismatches as exit 3)
+# 3. sign — strict-provider surfaces account mismatches as non-zero
 sign sign --request-id "$REQ" --token "$TOK"
 
-# 5. bundle for handoff
+# 4. bundle for handoff
 sign audit export --request-id "$REQ" --out "./bundles/$REQ"
 ```
 
