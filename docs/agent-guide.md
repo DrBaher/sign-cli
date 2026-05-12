@@ -242,27 +242,41 @@ class. There is no top-level `sign verify` alias — the canonical command is `s
 sign audit verify --request-id req_abc...
 ```
 
-**Stdout** (single JSON document):
+**Stdout** (single JSON document — happy / tampered):
 
 ```jsonc
 {
-  "ok": true | false,
   "requestId": "req_abc...",
+  "valid": true | false,
   "events": 12,
-  "signers": 2,
-  "chainValid": true | false,
-  "anchorVerified": true | false   // when an anchor is present on the chain
+  "break": null | {
+    "kind": "hash_self_mismatch" | "hash_prev_mismatch",
+    "eventId": 1,
+    "expected": "<sha256>",
+    "actual": "<sha256>"
+  }
 }
 ```
 
+**Stderr** (only when the request id is not found in the DB — generic
+error envelope, exit 1):
+
+```jsonc
+{ "ok": false, "error": { "code": "INTERNAL", "message": "Request not found: req_..." } }
+```
+
+The happy/tampered shape and the missing-request shape are deliberately
+different — **exit code is the primary verdict, JSON is secondary**.
+Branch on `$?`, then parse stdout (happy/tampered) or stderr (missing).
+Do not assume a top-level `ok` key is present on the happy path.
+
 **Exit codes**
 
-| Code | Condition | Meaning for agent |
-|---|---|---|
-| `0` | `chainValid: true`, request found | proceed |
-| `2` | missing `--request-id` or malformed | fix flags |
-| `3` | `chainValid: false` — chain was tampered | escalate, do NOT auto-repair |
-| `4` | request id not found in DB | check `request list` or accept upstream input is stale |
+| Code | Condition | Where verdict lives | Meaning for agent |
+|---|---|---|---|
+| `0` | request found, chain intact | stdout: `valid: true`, `break: null` | proceed |
+| `3` | request found, chain tampered | stdout: `valid: false`, `break.kind` names the mismatch | escalate, do **not** auto-repair |
+| `1` | request id not found in DB *or* CLI usage error | stderr: `{ ok: false, error.code }` | check `request list`, or fix flags |
 
 Side effects: **read-only**. Idempotent.
 
