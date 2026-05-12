@@ -73,7 +73,7 @@ const stamped = await stampImageOnPdf(
 console.log(`[fixture] applying PAdES envelope (single signer: alice@example.com)`);
 const keyPair = loadOrCreateSignerKeyPair({ email: "alice@example.com", name: "Alice Anderson" });
 const signed = signPdfLocally(stamped, {
-  keyPair,
+  signerKeyPair: keyPair,
   signerLabel: "alice@example.com",
   signingTime: new Date("2026-01-15T14:30:00Z"),  // deterministic timestamp
 });
