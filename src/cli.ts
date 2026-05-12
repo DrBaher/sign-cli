@@ -951,10 +951,12 @@ async function main(): Promise<void> {
 
   if (root === "pdf" && sub === "detect-signature-field") {
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    const verboseFlag = flagValue(parsed, "verbose");
+    const verbose = verboseFlag === "true" || verboseFlag === "yes" || verboseFlag === "1";
     const fs = await import("node:fs");
     const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
     const pdfBytes = fs.readFileSync(pdfPath);
-    const result = await detectSignatureFields(pdfBytes);
+    const result = await detectSignatureFields(pdfBytes, { verbose });
     const payload = { ok: true, pdf: pdfPath, ...result };
     console.log(JSON.stringify(payload, null, 2));
     // Exit 2 when no candidates were found so scripts can branch without
