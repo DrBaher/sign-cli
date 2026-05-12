@@ -191,6 +191,9 @@ sign request from-template --template-id <id> --signer role:Buyer,name:Alice,ema
 sign approve --request-id <id> --token <token>
 sign sign --request-id <id> --token <token> [--signer-email <e>] [--signer-name <n>] [--require-hash <sha256>] [--require-title <regex>] [--require-signer-email <e>] [--signature-image <path-or-data-url> [--image-page <n> --image-x <pt> --image-y <pt> --image-width <pt> --image-height <pt>]]
 sign pdf stamp --pdf ./doc.pdf --image ./sig.png|sig.svg|"data:image/svg+xml;base64,..." --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60 --out ./stamped.pdf   (standalone — no signing request involved; SVG is rasterized at ~300 DPI of the target rectangle)
+sign pdf stamp verify --pdf ./stamped.pdf --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60
+  Confirms an image is drawn at the expected box within ±1pt. Exit 0=ok, 3=wrong_position, 4=missing.
+  Limitation: only matches stamps with unrotated transforms (the shape stampImageOnPdf itself produces).
 sign signer list [--signer-email <e>]
 sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [--signer-email <e>]
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
@@ -810,6 +813,29 @@ async function main(): Promise<void> {
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
     emitJsonWithProvider(result, resolvedProvider);
+    return;
+  }
+
+  if (root === "pdf" && sub === "stamp" && action === "verify") {
+    const pdfPath = flagValue(parsed, "pdf", true)!;
+    const position = readImagePositionFlags(parsed);
+    if (!position || !isCompletePosition(position)) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message:
+          "sign pdf stamp verify requires --image-page, --image-x, --image-y, --image-width, and --image-height (all in PDF points; origin = bottom-left).",
+      });
+    }
+    const fs = await import("node:fs");
+    const pdfBytes = fs.readFileSync(pdfPath);
+    const { verifyPdfStamp, stampVerifyExitCode } = await import("./lib/pdf-stamp-verify.js");
+    const report = await verifyPdfStamp(pdfBytes, position);
+    process.stderr.write(
+      `[sign] pdf stamp verify: ${report.verdict} ` +
+      `(page=${position.page}, ${report.candidates.length} draw${report.candidates.length === 1 ? "" : "s"} found)\n`,
+    );
+    console.log(JSON.stringify({ pdf: pdfPath, ...report }, null, 2));
+    process.exitCode = stampVerifyExitCode(report.verdict);
     return;
   }
 
