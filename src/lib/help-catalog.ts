@@ -278,16 +278,28 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "sign",
-    summary: "Sign a local-provider request as the holder of --token.",
+    summary: "Sign a local-provider request as the holder of --token. Without a visible-signature flag the PAdES envelope is invisible; pass --signature-image OR --name-signature to add a visible stamp.",
     flags: [
       { name: "--request-id", required: true, description: "Request id." },
       { name: "--token", required: true, description: "Per-signer token." },
+      { name: "--signer-email", description: "Optional: must match the token's signer (typo catch)." },
+      { name: "--signer-name", description: "Override the signer name on this signature. When used with `--name-signature true` this is the text rendered." },
       { name: "--require-hash", description: "Pre-sign safety: expected document SHA-256." },
       { name: "--require-title", description: "Pre-sign safety: regex the title must match." },
       { name: "--require-signer-email", description: "Pre-sign safety: expected signer email." },
+      { name: "--signature-image", description: "Visible signature: PNG/JPG/SVG file path or `data:image/...;base64,...`. Mutually exclusive with --name-signature." },
+      { name: "--name-signature", description: "Visible signature: render the signer name as italic text (no image asset needed). Pass `true` (use --signer-name as the text) or a literal string like `--name-signature \"Baher Al Hakim\"`. Mutually exclusive with --signature-image." },
+      { name: "--image-page", description: "Stamp position (1-indexed). Required when a visible-signature flag is set and the sender didn't already place a SignatureField for this signer." },
+      { name: "--image-x", description: "Stamp x in PDF points (lower-left origin)." },
+      { name: "--image-y", description: "Stamp y in PDF points (lower-left origin)." },
+      { name: "--image-width", description: "Stamp width in points." },
+      { name: "--image-height", description: "Stamp height in points." },
       { name: "--idempotency-key", description: "Same key returns the cached SignerSignResult instead of double-signing on retry." },
     ],
-    example: `sign sign --request-id req_abc --token alice-tok-... \\\n  --require-hash 9c2b... --require-title "^Mutual NDA$"`,
+    example:
+      `sign sign --request-id req_abc --token alice-tok-... \\\n` +
+      `  --name-signature "Alice Anderson" \\\n` +
+      `  --image-page 1 --image-x 360 --image-y 100 --image-width 180 --image-height 50`,
   },
   {
     command: "signer list",

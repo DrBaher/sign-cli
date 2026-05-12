@@ -368,6 +368,68 @@ Expected: `ok=true manifestVerified=true`, exit `0`.
 
 ---
 
+## `sign sign --name-signature` — render name as visible text
+
+For when the signer has no image but wants a visible stamp. Renders the name in italic Helvetica at the given position. Mutually exclusive with `--signature-image`.
+
+```bash
+cd "$TEST" && rm -rf db && mkdir -p db
+cp /path/to/sign-cli/fixtures/canonical-unsigned-v1.pdf doc.pdf
+
+OUT=$(SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" --provider local request create \
+  --title "Name-sig test" --document doc.pdf \
+  --signer "name:Baher Al Hakim,email:baher@e.com,order:1" \
+  --auto-approve true 2>&1)
+REQ=$(echo "$OUT" | grep -oE 'req_[a-f0-9]+' | head -1)
+TOK=$(echo "$OUT" | python3 -c "import json,sys,re; o=json.loads(re.search(r'\{.*\}', sys.stdin.read(), re.DOTALL).group()); print(o['tokens'][0]['token'])")
+
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" --provider local request send --request-id "$REQ" > /dev/null
+
+# Render the name as a visible italic signature in the lower-right corner.
+# (Adjust coords to fit your document — these are points from the lower-left.)
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign --request-id "$REQ" --token "$TOK" \
+  --name-signature "Baher Al Hakim" \
+  --image-page 1 --image-x 360 --image-y 100 --image-width 180 --image-height 50
+echo "exit: $?"
+
+# Negative: both flags set → SIGN_VISIBLE_SIG_BOTH
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign --request-id "$REQ" --token bogus \
+  --signature-image ./tiny.png --name-signature "X" \
+  --image-page 1 --image-x 100 --image-y 200 --image-width 100 --image-height 50 2>&1 | tail -5
+echo "(should contain SIGN_VISIBLE_SIG_BOTH)"
+
+# Negative: --name-signature with no position → useful error with hint
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign --request-id "$REQ" --token bogus \
+  --name-signature "X" 2>&1 | tail -5
+echo "(should mention --image-page/--image-x/...)"
+```
+
+| Step | Expected |
+|---|---|
+| Happy path | exit `0`; visible italic "Baher Al Hakim" rendered on page 1 |
+| Both flags | non-zero exit, error code `SIGN_VISIBLE_SIG_BOTH` |
+| No position | non-zero exit, error mentions the position flags |
+
+To verify the text actually rendered into the signed PDF (pdf-lib hex-encodes content stream text, so a raw `grep` won't find it):
+
+```bash
+node -e "
+import('./dist/lib/pdf-image-stamp.js').then(async () => {
+  const { readFileSync } = await import('node:fs');
+  const { PDFDocument, decodePDFRawStream } = await import('pdf-lib');
+  const pdf = await PDFDocument.load(readFileSync('./signed.pdf'));
+  const Contents = pdf.getPage(0).node.Contents();
+  let s = '';
+  for (const ref of Contents.asArray()) {
+    s += Buffer.from(decodePDFRawStream(pdf.context.lookup(ref)).decode()).toString('latin1');
+  }
+  const hex = Buffer.from('Baher Al Hakim','latin1').toString('hex').toUpperCase();
+  console.log('rendered:', s.includes(hex));
+});"
+```
+
+---
+
 ## Item 10 — trust labels
 
 The enum has 4 values, defined at `src/lib/pdf-signature.ts:128`:

@@ -418,7 +418,35 @@ overwrites in place. Safe to retry.
 
 ---
 
-### 6.5 Trust labels — `request verify-signed-pdf`
+### 6.5 Visible signatures on `sign sign`
+
+By default `sign sign` produces only the invisible PAdES envelope. For a visible stamp on the page, pass **one** of:
+
+| Flag | Visible result | When to use |
+|---|---|---|
+| `--signature-image <path \| data-url>` | The image (PNG/JPG/SVG/data-URL) drawn at the resolved position | You have a real handwritten-signature image |
+| `--name-signature <text>` | The text rendered in italic + underline (pdf-lib StandardFonts.HelveticaOblique) | You don't have an image; just want the name as a signature |
+| `--name-signature true` | Same as above, but uses `--signer-name <text>` as the rendered string | Agent flows where the signer name is already a flag |
+
+Both paths use the **same position resolution**:
+1. `--image-page/--image-x/--image-y/--image-width/--image-height` (explicit), OR
+2. The `--field signer:N,page,x,y,width,height,type:signature` placement the sender set at `request create` time
+
+If neither resolves a position and a visible-signature flag was passed, the command errors with a hint explaining both options.
+
+Mutual exclusion: passing **both** `--signature-image` and `--name-signature` errors with `code: "SIGN_VISIBLE_SIG_BOTH"`. Pick one.
+
+**Important caveats**:
+
+- Neither produces a "cursive forged-handwriting" look. `--name-signature` renders in italic Helvetica — recognizable as a signature stamp, not a forgery of someone's hand. For a real cursive look, prepare an SVG/PNG of the signature and pass it via `--signature-image`.
+- The stamp is part of the **signed bytes** (placed before PAdES sealing), so any post-signing tamper breaks the cryptographic verification.
+- Default placement may overlap existing text on a pre-formatted document. The CLI does **not** auto-detect a safe rectangle — pass explicit `--image-*` coords, or have the sender place a SignatureField with `--field` at create time.
+
+Side effects: writes to the signed PDF (the same write the rest of `sign sign` does). Per-signer state: each token signs at most once, so this is **not** idempotent — use `--idempotency-key` if you need retry safety.
+
+---
+
+### 6.6 Trust labels — `request verify-signed-pdf`
 
 The output's per-signer report carries a `trust` label classifying the certificate so an agent can branch without a trust-store lookup. The label is **descriptive, not enforced** — it tells you what kind of cert produced the signature, not whether to accept it.
 
