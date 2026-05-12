@@ -53,7 +53,7 @@ import {
   verifyDocuSignCallback,
   type DocuSignWebhookPayload,
 } from "./docusign-webhook.js";
-import { inspectPdfSignatures, type PdfSignatureReport } from "./pdf-signature.js";
+import { inspectPdfSignatures, type PdfSignatureReport, type TrustLabel } from "./pdf-signature.js";
 import { digestForChainHead, inspectTimestampResponse, issueRfc3161Timestamp, type TimestampInspection } from "./timestamp.js";
 import {
   parseFieldSpec,
@@ -2932,8 +2932,39 @@ export type VerifySummary = {
   digest_ok: boolean;
   signer_match: boolean;
   warnings_count: number;
+  /** Worst (least trustworthy) trust label across all signers in the PDF.
+   *  Purely descriptive — does NOT affect the verdict. Useful for spotting
+   *  "I expected a real-provider signature but got a self-signed local cert."
+   *  Ordering (best → worst): ca_signed > self_signed_local > self_signed_other > unknown. */
+  trust: TrustLabel;
   verdict: VerifyVerdict;
 };
+
+const TRUST_RANK: Record<TrustLabel, number> = {
+  ca_signed: 3,
+  self_signed_local: 2,
+  self_signed_other: 1,
+  unknown: 0,
+};
+
+function worstTrust(report: PdfSignatureReport): TrustLabel {
+  let worst: TrustLabel = "ca_signed";
+  let worstRank = TRUST_RANK.ca_signed;
+  for (const sig of report.signatures) {
+    for (const s of sig.signers) {
+      if (TRUST_RANK[s.trust] < worstRank) {
+        worst = s.trust;
+        worstRank = TRUST_RANK[s.trust];
+      }
+    }
+  }
+  // No signatures means nothing to rate — leave the default "ca_signed"
+  // (verdict will already be no_signature in that case, so this field is
+  // irrelevant), but report "unknown" so a downstream "trust good?" check
+  // can't accidentally pass on an unsigned file.
+  if (!report.hasSignature) return "unknown";
+  return worst;
+}
 
 function emailMatchesSubject(subject: string | null, email: string): boolean {
   if (!subject) return false;
@@ -2969,7 +3000,7 @@ export function computeVerifySummary(
   else if (!signer_match) verdict = "signer_mismatch";
   else if (warnings_count > 0) verdict = "warnings";
   else verdict = "ok";
-  return { signature_present, digest_ok, signer_match, warnings_count, verdict };
+  return { signature_present, digest_ok, signer_match, warnings_count, trust: worstTrust(report), verdict };
 }
 
 /** Map a verify verdict to the CLI exit code. Distinct codes per failure

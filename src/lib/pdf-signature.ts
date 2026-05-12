@@ -17,6 +17,7 @@ export type PdfSignatureFinding = {
     validTo: string | null;
     serialNumber: string | null;
     fingerprintSha256: string | null;
+    trust: TrustLabel;
   }>;
   rawSignatureBytes: number;
   parseWarnings: string[];
@@ -118,6 +119,30 @@ function extractCertificates(signedData: Asn1Node): Buffer[] {
   return certs;
 }
 
+/** Structural trust label for a certificate. We do NOT validate against a
+ *  trust store — these labels are descriptive, not enforced. They tell the
+ *  user at a glance whether the signature is "our local provider's self-
+ *  signed cert" vs "someone else's self-signed cert" vs "a CA-rooted chain"
+ *  so they don't mistake a dev-only signature for a production one. */
+export type TrustLabel =
+  | "self_signed_local"
+  | "self_signed_other"
+  | "ca_signed"
+  | "unknown";
+
+function classifyTrust(subject: string | null, issuer: string | null): TrustLabel {
+  if (subject === null || issuer === null) return "unknown";
+  // CN+O format on local certs always contains "Sign CLI Local Provider" in
+  // the organization — see local-keys.ts loadOrCreateSignerKeyPair /
+  // loadOrCreateLocalSigner. Match against that.
+  const isLocal = issuer.includes("Sign CLI Local Provider")
+    || issuer.includes("Sign CLI Local Signer");
+  if (issuer === subject) {
+    return isLocal ? "self_signed_local" : "self_signed_other";
+  }
+  return "ca_signed";
+}
+
 function describeCertificate(cert: Buffer): {
   subject: string | null;
   issuer: string | null;
@@ -125,16 +150,20 @@ function describeCertificate(cert: Buffer): {
   validTo: string | null;
   serialNumber: string | null;
   fingerprintSha256: string | null;
+  trust: TrustLabel;
 } {
   try {
     const x509 = new X509Certificate(cert);
+    const subject = x509.subject ?? null;
+    const issuer = x509.issuer ?? null;
     return {
-      subject: x509.subject ?? null,
-      issuer: x509.issuer ?? null,
+      subject,
+      issuer,
       validFrom: x509.validFrom ?? null,
       validTo: x509.validTo ?? null,
       serialNumber: x509.serialNumber ?? null,
       fingerprintSha256: x509.fingerprint256 ?? null,
+      trust: classifyTrust(subject, issuer),
     };
   } catch {
     return {
@@ -144,6 +173,7 @@ function describeCertificate(cert: Buffer): {
       validTo: null,
       serialNumber: null,
       fingerprintSha256: digestBuffer("sha256", cert),
+      trust: "unknown",
     };
   }
 }

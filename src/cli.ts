@@ -1722,6 +1722,7 @@ async function main(): Promise<void> {
     process.stderr.write(
       `[sign] verify: ${result.summary.verdict} ` +
       `(signatures=${result.report.signatureCount}, ` +
+      `trust=${result.summary.trust}, ` +
       `digest_ok=${result.summary.digest_ok}, ` +
       `signer_match=${result.summary.signer_match}, ` +
       `warnings=${result.summary.warnings_count})\n`,
