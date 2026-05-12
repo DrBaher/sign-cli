@@ -64,6 +64,7 @@
     "start": "node dist/cli.js",
     "webhook:listen": "node dist/cli.js webhook listen",
     "typecheck": "tsc --noEmit",
+    "lint:legal-claims": "node scripts/lint-legal-claims.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "changelog:next": "node scripts/changelog.mjs",
     "coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-lines=75 --test-coverage-functions=78 --test-coverage-branches=72 --test-coverage-exclude='**/dist/tests/**' --test-reporter=lcov --test-reporter-destination=coverage.lcov --test-reporter=spec --test-reporter-destination=stdout dist/tests/*.test.js",
