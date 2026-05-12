@@ -79,7 +79,7 @@ import {
 } from "./local-provider.js";
 import { evaluatePolicy, type PolicyDecision, type PolicySpec } from "./policy-engine.js";
 import { lookupIdempotencyKey, persistIdempotencyKey } from "./idempotency.js";
-import { resolveSignProvider, type SignProvider } from "./providers.js";
+import { assertProviderMatchesPersisted, resolveSignProvider, type SignProvider } from "./providers.js";
 import { SignCliError } from "./sign-error.js";
 import {
   createId,
@@ -482,6 +482,13 @@ function extractRemoteSignatureIds(remoteStatus: unknown): string[] {
 
 function getPersistedProvider(request: RequestRow): SignProvider {
   return resolveSignProvider(undefined, request.provider ?? (request.dropbox_signature_request_id || request.dropbox_status ? "dropbox" : null));
+}
+
+/** Public helper used by the CLI's strict-provider preflight: looks up the
+ *  provider a request was created against without exposing the whole request
+ *  row. Throws if the request doesn't exist. */
+export function getPersistedProviderForRequest(db: SqliteDb, requestId: string): SignProvider {
+  return getPersistedProvider(getRequestRow(db, requestId));
 }
 
 function getProviderRequestId(request: RequestRow): string | null {
@@ -1302,6 +1309,10 @@ export async function sendSigningRequest(
     now?: Date;
     providerSend?: () => Promise<ProviderSendResult>;
     sendRequest?: typeof sendSignatureRequest;
+    /** When true and `provider` is supplied, fail loudly if it doesn't match
+     *  the provider the request was created against. Drives the strict-mode
+     *  feature from Item 1 of the product-readiness feedback. */
+    strictProvider?: boolean;
   },
 ): Promise<{
   provider: SignProvider;
@@ -1330,7 +1341,11 @@ export async function sendSigningRequest(
       idempotent: true,
     };
   }
-  const provider = input.provider ?? getPersistedProvider(request);
+  const persistedProvider = getPersistedProvider(request);
+  if (input.provider !== undefined && input.strictProvider) {
+    assertProviderMatchesPersisted(input.provider, persistedProvider, true);
+  }
+  const provider = input.provider ?? persistedProvider;
   const signers = JSON.parse(request.signers_json) as SignerInput[];
   const documents = getRequestDocuments(request);
   const fields = getRequestFields(request);
@@ -3510,6 +3525,12 @@ export function signSigningRequest(
     signerName?: string;
     idempotencyKey?: string;
     now?: Date;
+    /** When supplied with `strictProvider: true`, fail loudly if the request
+     *  was created against a different provider than what's being asked to
+     *  sign it now. Drives the strict-mode feature from Item 1 of the
+     *  product-readiness feedback. */
+    runtimeProvider?: SignProvider;
+    strictProvider?: boolean;
     /** Visible signature image to stamp on the PDF before PAdES sealing (local provider only). */
     signatureImage?: ImageInput;
     /** Explicit placement for the signature image; overrides any SignatureField the sender placed. */
@@ -3522,6 +3543,9 @@ export function signSigningRequest(
   }
   const request = getRequestRow(db, input.requestId);
   const provider = getPersistedProvider(request);
+  if (input.runtimeProvider !== undefined && input.strictProvider) {
+    assertProviderMatchesPersisted(input.runtimeProvider, provider, true);
+  }
   ensureLocalProvider(request, provider);
   const now = input.now ?? new Date();
   const { signer } = resolveSignerFromToken(db, request, input.token, now);
