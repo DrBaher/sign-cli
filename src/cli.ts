@@ -194,6 +194,8 @@ sign pdf stamp --pdf ./doc.pdf --image ./sig.png|sig.svg|"data:image/svg+xml;bas
 sign pdf stamp verify --pdf ./stamped.pdf --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60
   Confirms an image is drawn at the expected box within ±1pt. Exit 0=ok, 3=wrong_position, 4=missing.
   Limitation: only matches stamps with unrotated transforms (the shape stampImageOnPdf itself produces).
+sign workflow nda --values ./values.json --party-a-email alice@... --party-b-email bob@... --out ./nda.pdf [--template ./custom.md] [--title "..."] [--auto-approve] [--provider local|...]
+  One-shot: renders the bundled mutual-NDA template (or --template) with --values, writes the PDF, and creates a 2-signer request. --auto-approve sends immediately.
 sign signer list [--signer-email <e>]
 sign signer fetch-document --request-id <id> --token <token> [--out ./doc.pdf] [--signer-email <e>]
 sign signer decline --request-id <id> --token <token> [--signer-email <e>] [--reason "..."]
@@ -856,6 +858,55 @@ async function main(): Promise<void> {
     const stamped = await stampImageOnPdf(pdfBytes, parseImageInput(imageFlag), position);
     fs.writeFileSync(outPath, stamped);
     console.log(JSON.stringify({ ok: true, pdf: pdfPath, out: outPath, position, bytes: stamped.length }, null, 2));
+    return;
+  }
+
+  if (root === "workflow" && sub === "nda") {
+    const valuesPath = flagValue(parsed, "values");
+    const valuesFromFile: Record<string, string> = valuesPath
+      ? JSON.parse((await import("node:fs")).readFileSync(valuesPath, "utf8"))
+      : {};
+    const valuesFromFlags: Record<string, string> = {};
+    for (const raw of flagValues(parsed, "value")) {
+      const eq = raw.indexOf("=");
+      if (eq <= 0) {
+        throw new SignCliError({
+          code: "MISSING_FLAG",
+          message: `--value must be of the form KEY=VALUE, got "${raw}".`,
+        });
+      }
+      valuesFromFlags[raw.slice(0, eq).trim()] = raw.slice(eq + 1);
+    }
+    const values = { ...valuesFromFile, ...valuesFromFlags };
+    if (Object.keys(values).length === 0) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "sign workflow nda requires --values <path.json> and/or --value KEY=VALUE flags.",
+      });
+    }
+    const partyAEmail = flagValue(parsed, "party-a-email", true)!;
+    const partyBEmail = flagValue(parsed, "party-b-email", true)!;
+    validateEmail(partyAEmail, "Party A email");
+    validateEmail(partyBEmail, "Party B email");
+    const outPath = flagValue(parsed, "out", true)!;
+    const templatePath = flagValue(parsed, "template");
+    const title = flagValue(parsed, "title");
+    const autoApprove = (flagValue(parsed, "auto-approve") ?? "false") === "true";
+    const tokenTtlMinutes = Number(flagValue(parsed, "token-ttl-minutes") ?? "60");
+    printProviderBanner(resolvedProvider);
+    const { runNdaWorkflow } = await import("./lib/workflow-nda.js");
+    const result = await runNdaWorkflow(db, {
+      values,
+      partyAEmail,
+      partyBEmail,
+      outPath,
+      ...(templatePath ? { templatePath } : {}),
+      ...(title ? { title } : {}),
+      autoApprove,
+      provider: selectedProvider,
+      tokenTtlMinutes,
+    });
+    emitJsonWithProvider(result, resolvedProvider);
     return;
   }
 
