@@ -1,0 +1,15 @@
+{
+  "EFFECTIVE_DATE": "15 January 2026",
+  "PARTY_A_NAME": "Alpha Inc.",
+  "PARTY_A_ADDRESS": "100 Main St, Wilmington, Delaware 19801, USA",
+  "PARTY_A_SIGNATORY": "Carol Adams",
+  "PARTY_A_TITLE": "Chief Operating Officer",
+  "PARTY_B_NAME": "Beta GmbH",
+  "PARTY_B_ADDRESS": "Friedrichstraße 100, 10117 Berlin, Germany",
+  "PARTY_B_SIGNATORY": "Dieter Becker",
+  "PARTY_B_TITLE": "Geschäftsführer",
+  "TERM_YEARS": "3",
+  "SURVIVAL_YEARS": "5",
+  "GOVERNING_LAW": "Germany",
+  "JURISDICTION": "Berlin, Germany"
+}
