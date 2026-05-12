@@ -35,6 +35,7 @@ import {
   type SignProvider,
 } from "./lib/providers.js";
 import { emitJsonWithProvider, printProviderBanner } from "./lib/cli-output.js";
+import { runPreflight, preflightExitCode } from "./lib/preflight.js";
 import { requireSignWellApiKey, resolveSignWellTestMode } from "./lib/signwell.js";
 import {
   loadDocuSignWebhookPayloadFile,
@@ -244,6 +245,9 @@ Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_
 sign doctor
 sign doctor account-check [--provider dropbox|docusign|signwell]
 sign doctor providers
+sign doctor preflight [--provider dropbox|docusign|signwell|local]
+  Cheap pre-run checks (env vars, dir permissions, lightweight provider connectivity).
+  Exit 0 if all checks pass, 1 if any fail. Use to gate CI before running create/send.
 sign audit show --request-id <id> [--format json|csv|pretty] [--event-type <t> ...] [--since <iso>] [--until <iso>]   (--format pretty renders a human-readable timeline; --since/--until clamp the time window)
 sign audit search [--request-id <id>] [--event-type request.signed] [--since <iso>] [--until <iso>] [--payload-contains <substr>] [--limit 1000]   (log-style filter across the full audit_events table)
 sign audit verify --request-id <id>
@@ -611,6 +615,18 @@ async function main(): Promise<void> {
           : undefined,
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (root === "doctor" && sub === "preflight") {
+    const report = await runPreflight(selectedProvider);
+    process.stderr.write(
+      `[sign] preflight: ${report.summary.verdict} ` +
+      `(provider=${report.provider}, ` +
+      `${report.summary.passed} ok, ${report.summary.failed} failed, ${report.summary.skipped} skipped)\n`,
+    );
+    console.log(JSON.stringify(report, null, 2));
+    process.exitCode = preflightExitCode(report.summary.verdict);
     return;
   }
 
