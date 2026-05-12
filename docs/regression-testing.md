@@ -544,15 +544,22 @@ SIGN_DB_PATH=$PWD/s.db node "$SIGN" request receipt   --request-id "$REQ" --out 
 SIGN_DB_PATH=$PWD/s.db node "$SIGN" request verify-receipt --bundle ./bundle-v1 | \
   jq -r '"v1: ok=\(.ok) manifestVerified=\(.manifestVerified)"'
 
-SIGN_DB_PATH=$PWD/s.db node "$SIGN" audit verify --request-id "$REQ" | jq -r '"chain: ok=\(.ok)"'
+SIGN_DB_PATH=$PWD/s.db node "$SIGN" audit verify --request-id "$REQ" | \
+  jq -r '"chain: valid=\(.valid) break=\(.break.kind // "none")"'
 ```
 
 Expected final two lines:
 
 ```
 v1: ok=true manifestVerified=true
-chain: ok=true
+chain: valid=true break=none
 ```
+
+> Note: `audit verify` produces `{requestId, valid, events, break}` —
+> there is **no** top-level `ok` key on the happy path (the `ok` key
+> lives on the error envelope only, which writes to **stderr** with
+> exit 1). Earlier versions of this E2E smoke grep'd for `.ok` and got
+> `null` — that was a doc bug, fixed here.
 
 ---
 
