@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { initWasm, Resvg } from "@resvg/resvg-wasm";
 
 export type ImageMime = "image/png" | "image/jpeg" | "image/svg+xml";
@@ -210,6 +210,88 @@ export async function stampImageOnPdf(
     y: position.y,
     width: position.width,
     height: position.height,
+  });
+
+  const saved = await pdf.save({ useObjectStreams: false });
+  return Buffer.from(saved);
+}
+
+/**
+ * Draw `text` (typically a signer name) onto the given page+rectangle as a
+ * visible signature. Used when the signer wants their name rendered as a
+ * signature but doesn't have an image to upload — closes the UX gap where
+ * `--signature-image` was the only path to a visible stamp.
+ *
+ * Renders via pdf-lib's built-in StandardFonts.HelveticaOblique (italic),
+ * sized to fit width within the rectangle. No external font assets — works
+ * everywhere the rest of the CLI works. The text is placed inside the same
+ * /ByteRange that PAdES then seals, so any post-signing tamper breaks the
+ * cryptographic verification just like an image stamp would.
+ *
+ * Throws on missing page, empty text, or zero-size rectangle.
+ */
+export async function stampTextOnPdf(
+  pdfBytes: Buffer,
+  text: string,
+  position: StampPosition,
+): Promise<Buffer> {
+  if (position.page < 1) {
+    throw new Error(`stampTextOnPdf: page is 1-indexed; got ${position.page}`);
+  }
+  if (position.width <= 0 || position.height <= 0) {
+    throw new Error(
+      `stampTextOnPdf: width and height must be > 0 (got ${position.width} x ${position.height})`,
+    );
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`stampTextOnPdf: text is empty`);
+  }
+
+  const pdf = await PDFDocument.load(pdfBytes);
+  const pages = pdf.getPages();
+  if (position.page > pages.length) {
+    throw new Error(
+      `stampTextOnPdf: page ${position.page} is out of range (PDF has ${pages.length})`,
+    );
+  }
+  const page = pages[position.page - 1];
+  const font = await pdf.embedFont(StandardFonts.HelveticaOblique);
+
+  // Auto-size to fit the rectangle: start large, shrink until both width and
+  // height fit. Cap at 90% of rectangle height to leave room for the
+  // underline + breathing room.
+  const maxHeight = position.height * 0.6;
+  let fontSize = Math.min(maxHeight, 72);
+  const minFontSize = 6;
+  while (fontSize > minFontSize) {
+    const w = font.widthOfTextAtSize(trimmed, fontSize);
+    if (w <= position.width * 0.95) break;
+    fontSize -= 1;
+  }
+
+  const textWidth = font.widthOfTextAtSize(trimmed, fontSize);
+  const textHeight = font.heightAtSize(fontSize);
+  // Center horizontally; vertically place text baseline near the underline.
+  const textX = position.x + (position.width - textWidth) / 2;
+  const textY = position.y + (position.height - textHeight) / 2 + fontSize * 0.2;
+
+  page.drawText(trimmed, {
+    x: textX,
+    y: textY,
+    size: fontSize,
+    font,
+    color: rgb(0.04, 0.23, 0.57), // signature-ish blue, matches the demo fixture's color
+  });
+
+  // Underline to signal "this is a signature, not body text".
+  const underlineY = position.y + position.height * 0.18;
+  const underlinePad = position.width * 0.05;
+  page.drawLine({
+    start: { x: position.x + underlinePad, y: underlineY },
+    end: { x: position.x + position.width - underlinePad, y: underlineY },
+    thickness: 1.2,
+    color: rgb(0.04, 0.23, 0.57),
   });
 
   const saved = await pdf.save({ useObjectStreams: false });

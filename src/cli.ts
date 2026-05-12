@@ -782,11 +782,38 @@ async function main(): Promise<void> {
     const token = flagValue(parsed, "token", true)!;
     const signatureImageFlag = flagValue(parsed, "signature-image");
     const signatureImage = signatureImageFlag ? parseImageInput(signatureImageFlag) : undefined;
+    const nameSignatureFlag = flagValue(parsed, "name-signature");
+    // Accept either `--name-signature true` (rendering signer-name) or
+    // `--name-signature "Custom Text"` (explicit text override).
+    const nameSignatureText = (() => {
+      if (nameSignatureFlag === undefined) return undefined;
+      const lower = nameSignatureFlag.trim().toLowerCase();
+      if (lower === "true" || lower === "yes" || lower === "1") {
+        const overrideName = flagValue(parsed, "signer-name");
+        if (!overrideName) {
+          throw new SignCliError({
+            code: "NAME_SIGNATURE_MISSING_TEXT",
+            message: "--name-signature true requires --signer-name <text> (or pass --name-signature <text> directly).",
+            hint: "Either pass --signer-name \"Your Name\" alongside --name-signature true, or use --name-signature \"Your Name\".",
+          });
+        }
+        return overrideName;
+      }
+      if (lower === "false" || lower === "no" || lower === "0") return undefined;
+      return nameSignatureFlag;
+    })();
+    if (signatureImage && nameSignatureText) {
+      throw new SignCliError({
+        code: "SIGN_VISIBLE_SIG_BOTH",
+        message: "--signature-image and --name-signature are mutually exclusive.",
+        hint: "Pick one path: an image for a real handwritten signature, or --name-signature for a rendered-name italic stamp.",
+      });
+    }
     const imagePosition = readImagePositionFlags(parsed);
-    if (signatureImage && imagePosition && !isCompletePosition(imagePosition)) {
+    if ((signatureImage || nameSignatureText) && imagePosition && !isCompletePosition(imagePosition)) {
       throw new SignCliError({
         code: "SIGN_IMAGE_INCOMPLETE_POSITION",
-        message: "--signature-image was given with a partial position. " +
+        message: "A visible-signature flag was given with a partial position. " +
           "Pass all of --image-page, --image-x, --image-y, --image-width, --image-height, or none (and rely on the sender's SignatureField).",
       });
     }
@@ -811,6 +838,7 @@ async function main(): Promise<void> {
       requireSignerEmail: flagValue(parsed, "require-signer-email"),
       ...(flagValue(parsed, "provider") ? { runtimeProvider: selectedProvider, strictProvider } : {}),
       ...(signatureImage ? { signatureImage } : {}),
+      ...(nameSignatureText ? { nameSignatureText } : {}),
       ...(imagePosition && isCompletePosition(imagePosition) ? { signatureImagePosition: imagePosition } : {}),
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });

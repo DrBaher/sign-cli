@@ -29,7 +29,12 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "doctor",
-    summary: "Print environment + key-detection report.",
+    summary: "Print an unstructured environment + key-detection report. Always exits 0 — for a machine-readable per-check result, use `doctor preflight`.",
+  },
+  {
+    command: "doctor preflight",
+    summary: "Structured per-check preflight. Env-health checks (`runtime:node_version`, `storage:db_path`) run on every provider; provider-scoped checks (env vars, API connectivity, RSA key file presence, canonical fixture for `local`) layer on top. Output: `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name, status:\"ok\"|\"failed\"|\"skipped\", detail, hint?}] }`. Exit `0` if verdict is `ok`, `1` if any check failed.",
+    flags: [{ name: "--provider", description: "Override resolved provider (dropbox | docusign | signwell | local)." }],
   },
   {
     command: "doctor account-check",
@@ -198,7 +203,52 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request verify-signed-pdf",
-    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF.",
+    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF. Per signer, the output includes a structural `trust` label: `self_signed_local` (this CLI's built-in signer), `self_signed_other` (issuer==subject, but not from this CLI), `ca_signed` (issuer!=subject), or `unknown` (parse error). Labels are descriptive, not enforced — no trust-store lookup or chain validation.",
+  },
+  {
+    command: "pdf stamp",
+    summary: "Stamp an image (PNG / JPG / SVG / data URL) onto a PDF without a signing request. Shares the renderer with the integrated sign-flow.",
+    flags: [
+      { name: "--pdf", required: true, description: "Source PDF path." },
+      { name: "--image", required: true, description: "Image path or `data:image/...;base64,...`." },
+      { name: "--image-page", required: true, description: "1-indexed page number to stamp." },
+      { name: "--image-x", required: true, description: "X coordinate in PDF points from the lower-left." },
+      { name: "--image-y", required: true, description: "Y coordinate in PDF points from the lower-left." },
+      { name: "--image-width", required: true, description: "Stamp width in points." },
+      { name: "--image-height", required: true, description: "Stamp height in points." },
+      { name: "--out", required: true, description: "Output PDF path." },
+    ],
+  },
+  {
+    command: "pdf stamp verify",
+    summary: "Confirm a previously-stamped image is at the expected position + size within ±1pt. Pairs with `pdf stamp` for CI tamper checks.",
+    flags: [
+      { name: "--pdf", required: true, description: "PDF to inspect." },
+      { name: "--image-page", required: true, description: "Expected page (1-indexed)." },
+      { name: "--image-x", required: true, description: "Expected X (points)." },
+      { name: "--image-y", required: true, description: "Expected Y (points)." },
+      { name: "--image-width", required: true, description: "Expected width (points)." },
+      { name: "--image-height", required: true, description: "Expected height (points)." },
+    ],
+    example: "sign pdf stamp verify --pdf ./signed.pdf --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60",
+  },
+  {
+    command: "workflow nda",
+    summary: "One-shot: render the bundled mutual-NDA template into a PDF and create the signing request. Exits 3 on validation errors (same-email, missing values, missing placeholders — all gaps surface at once).",
+    flags: [
+      { name: "--values", description: "JSON map of {{PLACEHOLDER}} → value." },
+      { name: "--value", description: "Inline override `KEY=VALUE` (repeatable; wins over --values)." },
+      { name: "--party-a-email", required: true, description: "Signer A email (must differ from party-b)." },
+      { name: "--party-b-email", required: true, description: "Signer B email." },
+      { name: "--template", description: "Override the bundled template path." },
+      { name: "--out", required: true, description: "Output PDF path." },
+      { name: "--token-ttl-minutes", description: "Token lifetime (default 60)." },
+      { name: "--auto-approve", description: "true to skip the approval gate." },
+    ],
+    example:
+      `sign workflow nda --values fixtures/templates/mutual-nda.example.json \\\n` +
+      `  --party-a-email alice@example.com --party-b-email bob@example.com \\\n` +
+      `  --out ./nda.pdf`,
   },
   {
     command: "request receipt",
@@ -228,16 +278,28 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "sign",
-    summary: "Sign a local-provider request as the holder of --token.",
+    summary: "Sign a local-provider request as the holder of --token. Without a visible-signature flag the PAdES envelope is invisible; pass --signature-image OR --name-signature to add a visible stamp.",
     flags: [
       { name: "--request-id", required: true, description: "Request id." },
       { name: "--token", required: true, description: "Per-signer token." },
+      { name: "--signer-email", description: "Optional: must match the token's signer (typo catch)." },
+      { name: "--signer-name", description: "Override the signer name on this signature. When used with `--name-signature true` this is the text rendered." },
       { name: "--require-hash", description: "Pre-sign safety: expected document SHA-256." },
       { name: "--require-title", description: "Pre-sign safety: regex the title must match." },
       { name: "--require-signer-email", description: "Pre-sign safety: expected signer email." },
+      { name: "--signature-image", description: "Visible signature: PNG/JPG/SVG file path or `data:image/...;base64,...`. Mutually exclusive with --name-signature." },
+      { name: "--name-signature", description: "Visible signature: render the signer name as italic text (no image asset needed). Pass `true` (use --signer-name as the text) or a literal string like `--name-signature \"Baher Al Hakim\"`. Mutually exclusive with --signature-image." },
+      { name: "--image-page", description: "Stamp position (1-indexed). Required when a visible-signature flag is set and the sender didn't already place a SignatureField for this signer." },
+      { name: "--image-x", description: "Stamp x in PDF points (lower-left origin)." },
+      { name: "--image-y", description: "Stamp y in PDF points (lower-left origin)." },
+      { name: "--image-width", description: "Stamp width in points." },
+      { name: "--image-height", description: "Stamp height in points." },
       { name: "--idempotency-key", description: "Same key returns the cached SignerSignResult instead of double-signing on retry." },
     ],
-    example: `sign sign --request-id req_abc --token alice-tok-... \\\n  --require-hash 9c2b... --require-title "^Mutual NDA$"`,
+    example:
+      `sign sign --request-id req_abc --token alice-tok-... \\\n` +
+      `  --name-signature "Alice Anderson" \\\n` +
+      `  --image-page 1 --image-x 360 --image-y 100 --image-width 180 --image-height 50`,
   },
   {
     command: "signer list",

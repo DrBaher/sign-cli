@@ -7,6 +7,7 @@ import {
   detectMimeFromBytes,
   mimeToExt,
   stampImageOnPdf,
+  stampTextOnPdf,
   type ImageInput,
   type StampPosition,
 } from "./pdf-image-stamp.js";
@@ -57,6 +58,10 @@ type LocalDocumentRecord = {
     imagePath?: string;
     /** Where the image should be drawn before PAdES sealing. */
     imagePosition?: StampPosition;
+    /** When set, render this text (typically the signer's name) as a visible
+     *  signature using a built-in italic font instead of an image. Mutually
+     *  exclusive with imagePath. */
+    nameSignatureText?: string;
   }>;
   declinedBy: string | null;
   declineReason: string | null;
@@ -247,21 +252,30 @@ trailer << /Root 1 0 R /Size 5 >>
 %%EOF`, "latin1");
   }
 
-  // Stamp each signer's visible signature image (if any) onto the source PDF
-  // *before* PAdES sealing. The image bytes become part of the signed
-  // /ByteRange, so any post-signing tamper of the image breaks the signature.
+  // Stamp each signer's visible signature (image or rendered-name text) onto
+  // the source PDF *before* PAdES sealing. The stamp bytes become part of
+  // the signed /ByteRange, so any post-signing tamper of the stamp breaks
+  // the cryptographic verification.
   for (const entry of record.signedBy) {
-    if (!entry.imagePath || !entry.imagePosition) continue;
-    if (!existsSync(entry.imagePath)) {
-      throw new Error(
-        `Local provider: signer ${entry.email} has imagePath=${entry.imagePath} but the file is missing.`,
+    if (!entry.imagePosition) continue;
+    if (entry.imagePath) {
+      if (!existsSync(entry.imagePath)) {
+        throw new Error(
+          `Local provider: signer ${entry.email} has imagePath=${entry.imagePath} but the file is missing.`,
+        );
+      }
+      sourcePdf = await stampImageOnPdf(
+        sourcePdf,
+        { kind: "file", path: entry.imagePath },
+        entry.imagePosition,
+      );
+    } else if (entry.nameSignatureText) {
+      sourcePdf = await stampTextOnPdf(
+        sourcePdf,
+        entry.nameSignatureText,
+        entry.imagePosition,
       );
     }
-    sourcePdf = await stampImageOnPdf(
-      sourcePdf,
-      { kind: "file", path: entry.imagePath },
-      entry.imagePosition,
-    );
   }
 
   // Use per-signer keys for the embedded PAdES signature(s) when we have signedBy
@@ -458,6 +472,13 @@ export function signLocalDocument(
      */
     signatureImage?: ImageInput;
     signatureImagePosition?: StampPosition;
+    /**
+     * Alternative to `signatureImage`: render the given text (typically the
+     * signer name) as a visible signature using a built-in italic font.
+     * Mutually exclusive with `signatureImage` — both set is a caller bug
+     * and will throw.
+     */
+    nameSignatureText?: string;
   },
 ): SignLocalDocumentResult {
   const record = readRecord(documentId);
@@ -468,12 +489,20 @@ export function signLocalDocument(
   if (!signer) {
     throw new Error(`Local provider: ${input.signerEmail} is not a signer on document ${documentId}.`);
   }
+  // Reject the caller bug of asking for both at once before doing any work.
+  if (input.signatureImage && input.nameSignatureText) {
+    throw new Error(
+      `Local provider: --signature-image and --name-signature are mutually exclusive. ` +
+        `Pass one or the other.`,
+    );
+  }
   // Resolve the visible-signature placement: explicit position wins; otherwise
   // fall back to the SignatureField the sender placed for this signer (by
   // signerOrder = the signer's index in record.signers, matching how
   // field-placement.ts ties fields to signer ordinals).
+  const wantsVisibleStamp = Boolean(input.signatureImage || input.nameSignatureText);
   let resolvedPosition: StampPosition | undefined = input.signatureImagePosition;
-  if (input.signatureImage && !resolvedPosition && record.fields && record.fields.length > 0) {
+  if (wantsVisibleStamp && !resolvedPosition && record.fields && record.fields.length > 0) {
     const signerOrder = record.signers.findIndex(
       (s) => s.email.trim().toLowerCase() === signer.email.trim().toLowerCase(),
     );
@@ -495,9 +524,10 @@ export function signLocalDocument(
       }
     }
   }
-  if (input.signatureImage && !resolvedPosition) {
+  if (wantsVisibleStamp && !resolvedPosition) {
+    const which = input.signatureImage ? "--signature-image" : "--name-signature";
     throw new Error(
-      `Local provider: --signature-image was provided but no position is available. ` +
+      `Local provider: ${which} was provided but no position is available. ` +
         `Pass --image-page/--image-x/--image-y/--image-width/--image-height, or have the sender ` +
         `place a SignatureField (signerOrder=${record.signers.findIndex(
           (s) => s.email.trim().toLowerCase() === signer.email.trim().toLowerCase(),
@@ -541,13 +571,21 @@ export function signLocalDocument(
       certFingerprintSha256: signerKey.fingerprintSha256,
       certSubjectCommonName: signerKey.subjectCommonName,
       ...(imagePath ? { imagePath } : {}),
+      ...(input.nameSignatureText ? { nameSignatureText: input.nameSignatureText } : {}),
       ...(resolvedPosition ? { imagePosition: resolvedPosition } : {}),
     });
-  } else if (imagePath && resolvedPosition) {
-    // Re-signing with an image: update the existing entry rather than adding a duplicate.
+  } else if ((imagePath || input.nameSignatureText) && resolvedPosition) {
+    // Re-signing with a new visible-signature spec: update the existing entry
+    // rather than adding a duplicate.
     const existing = record.signedBy.find((entry) => entry.email.trim().toLowerCase() === normalized);
     if (existing) {
-      existing.imagePath = imagePath;
+      if (imagePath) {
+        existing.imagePath = imagePath;
+        delete existing.nameSignatureText;
+      } else if (input.nameSignatureText) {
+        existing.nameSignatureText = input.nameSignatureText;
+        delete existing.imagePath;
+      }
       existing.imagePosition = resolvedPosition;
     }
   }

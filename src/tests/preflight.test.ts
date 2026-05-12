@@ -127,3 +127,71 @@ test("docusign preflight: env vars set + bad key path → permissions check repo
   assert.equal(keyCheck?.status, "failed");
   assert.ok(keyCheck?.detail.includes("does not exist"));
 });
+
+test("env-health: runtime:node_version + storage:db_path run on every provider, before provider checks", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "preflight-env-"));
+  try {
+    const r = await withEnv(
+      {
+        SIGN_DB_PATH: path.join(tmp, "sign.db"),
+        SIGN_LOCAL_KEY_DIR: path.join(tmp, "keys"),
+        SIGN_LOCAL_STORE_DIR: path.join(tmp, "store"),
+      },
+      () => runPreflight("local"),
+    );
+    // Both env-health checks present.
+    const node = r.checks.find((c) => c.name === "runtime:node_version");
+    const db = r.checks.find((c) => c.name === "storage:db_path");
+    assert.ok(node, "runtime:node_version must be in checks[]");
+    assert.ok(db, "storage:db_path must be in checks[]");
+    // Node version passes (CI runs Node >= 22 since that's the package engine).
+    assert.equal(node?.status, "ok");
+    assert.equal(db?.status, "ok");
+    // Ordering: env-health checks come before provider checks.
+    const nodeIdx = r.checks.findIndex((c) => c.name === "runtime:node_version");
+    const firstProviderIdx = r.checks.findIndex((c) => c.name.startsWith("permissions:"));
+    assert.ok(nodeIdx < firstProviderIdx, "env-health checks should come before provider checks");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("env-health: storage:db_path failed when SIGN_DB_PATH points at an unwritable parent", async () => {
+  if (process.getuid && process.getuid() === 0) return; // root bypasses permission denials
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "preflight-db-ro-"));
+  const roDir = path.join(tmp, "ro");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(roDir, { recursive: true });
+  chmodSync(roDir, 0o500);
+  try {
+    const r = await withEnv(
+      {
+        SIGN_DB_PATH: path.join(roDir, "sign.db"),
+      },
+      () => runPreflight("dropbox"), // any provider — env-health runs first
+    );
+    const db = r.checks.find((c) => c.name === "storage:db_path");
+    assert.equal(db?.status, "failed");
+    assert.ok(db?.hint && db.hint.includes("SIGN_DB_PATH"), "hint should mention the env var to set");
+    assert.equal(r.summary.verdict, "failed");
+  } finally {
+    chmodSync(roDir, 0o700);
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("env-health: storage:db_path passes for every provider (not just local)", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "preflight-env-allprov-"));
+  try {
+    for (const provider of ["dropbox", "signwell", "docusign"] as const) {
+      const r = await withEnv(
+        { SIGN_DB_PATH: path.join(tmp, `${provider}.db`) },
+        () => runPreflight(provider),
+      );
+      const db = r.checks.find((c) => c.name === "storage:db_path");
+      assert.equal(db?.status, "ok", `storage:db_path should be ok for ${provider}, got ${JSON.stringify(db)}`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

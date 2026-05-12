@@ -3787,6 +3787,10 @@ export function signSigningRequest(
     signatureImage?: ImageInput;
     /** Explicit placement for the signature image; overrides any SignatureField the sender placed. */
     signatureImagePosition?: StampPosition;
+    /** Render the signer name (or this override) as a visible signature using
+     *  a built-in italic font instead of an image (local provider only).
+     *  Mutually exclusive with signatureImage. */
+    nameSignatureText?: string;
   } & SignerSafetyChecks,
 ): SignerSignResult {
   if (input.idempotencyKey) {
@@ -3828,6 +3832,7 @@ export function signSigningRequest(
     now,
     signatureImage: input.signatureImage,
     signatureImagePosition: input.signatureImagePosition,
+    nameSignatureText: input.nameSignatureText,
   });
 
   recordSignerSigningState(db, {

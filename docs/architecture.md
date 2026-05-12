@@ -60,6 +60,23 @@ The HTTP and MCP surfaces dispatch to the **same handlers** in the library
 core — there's no behavior that's only available in one. That's intentional:
 it means a fix lands once and reaches every client.
 
+**Preflight.** `sign doctor preflight` (the subcommand) is the canonical
+"is this environment healthy?" entry point. It checks env-health (node
+version, `SIGN_DB_PATH` writability) on every provider, then layers
+provider-scoped checks (env vars, API connectivity, RSA key file existence)
+on top. Agents should call it first; humans can run it whenever something
+feels off. Output is `{ provider, summary, checks[] }` with stable check
+names (`runtime:*`, `storage:*`, `env:*`, `connectivity:*`, `permissions:*`)
+and hints. Bare `sign doctor` (no subcommand) is the legacy unstructured
+env-report — always exits 0. See [`docs/agent-guide.md`](agent-guide.md)
+for the per-check schema.
+
+**Provider banner.** Every command that resolves a provider prints
+`[sign] resolved provider: <p> (<source>)` to stderr on start. With
+`--strict-provider true` (or `SIGN_STRICT_PROVIDER=true`), a mismatch
+between the resolved provider and a request's persisted provider fails
+with `STRICT_PROVIDER_MISMATCH` before any state mutation.
+
 ### 2. Library core
 
 Everything below the entry points is plain async TypeScript: no globals,
@@ -114,6 +131,36 @@ over the digest. Re-running over time produces a continuity proof:
 tampering with any old chain breaks the digest in every later anchor that
 covered it. `audit verify-anchor` and `audit chain-bundle verify` do the
 re-check.
+
+### 6. Bundles + receipts
+
+`audit export` produces a self-contained handoff bundle. As of
+**bundleVersion 2** the layout is:
+
+```
+<out>/
+├─ audit.json                       request + full event chain
+├─ signed.pdf                       the signed PDF (when available)
+├─ original.pdf                     unsigned source, byte-identical to input
+├─ manifest.json                    every file's sha256 + bytes
+├─ README.md                        human-readable handoff + verify commands
+└─ receipts/
+   ├─ <signer-a-email>.json         only A's events (B's are not included)
+   └─ <signer-b-email>.json         only B's events (A's are not included)
+```
+
+Per-signer receipts are isolated by construction (filtered by
+`payload.signerEmail` before serialization), so one signer's bundle can be
+shared without leaking another's. The per-signer event arrays populate
+only from signer-action events (`request.signed_by_signer`,
+`request.signer_declined`, `request.signer_fetched_document`) — an
+auto-approved-but-never-signed request has empty per-signer arrays.
+
+`sign request receipt` (separate command) produces a **cryptographically
+signed** receipt bundle (`bundleVersion: 1`) with detached `manifest.sig`
++ `manifest.cert.pem` — use it when a third party needs to validate the
+manifest itself without trusting your DB. `sign request verify-receipt`
+re-verifies that bundle.
 
 ## Where to read next
 

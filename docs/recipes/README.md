@@ -6,6 +6,7 @@ you've run `sign init` to scaffold the local provider.
 
 | Recipe | When you'd reach for it |
 |---|---|
+| [Pre-production preflight (for agents)](preflight.md) | Production-ready pipeline: `doctor` → strict-provider banner check → `pdf stamp verify` → `audit export`. Fail-closed, exit-code-driven, no human in the loop until something goes wrong. |
 | [Sign as Alice (local provider)](signer-flow-local.md) | First-time walkthrough: create a request, send it, sign it, verify it, hand off the receipt. |
 | [Weekly audit anchor](weekly-anchor.md) | Periodic continuity proof — anchor every chain head, store the .tsr, re-verify next week. |
 | [Auditor handoff bundle](auditor-handoff.md) | Compliance review: package the anchor + per-request receipts into a single self-contained bundle. |
@@ -15,5 +16,6 @@ you've run `sign init` to scaffold the local provider.
 ## Quick links to reference docs
 
 - `sign --help` for the full command catalog (also: `sign help <command>`)
+- [`../regression-testing.md`](../regression-testing.md) — manual per-item tests for everything in `[Unreleased]`
 - [`MIGRATION.md`](../../MIGRATION.md) for the storage backend / async-migration roadmap
 - [`fixtures/web-demo/`](../../fixtures/web-demo) for a 1-file dashboard you can serve via `sign serve --web-demo true`
