@@ -17,7 +17,7 @@ const finding = (overrides: Partial<PdfSignatureFinding> = {}): PdfSignatureFind
   messageDigest: "abcd",
   digestAlgorithm: "sha256",
   signatureAlgorithm: "rsa-sha256",
-  signers: [{ subject: "CN=alice@example.com,O=Sign CLI", issuer: null, validFrom: null, validTo: null, serialNumber: null, fingerprintSha256: null }],
+  signers: [{ subject: "CN=alice@example.com,O=Sign CLI", issuer: null, validFrom: null, validTo: null, serialNumber: null, fingerprintSha256: null, trust: "unknown" }],
   rawSignatureBytes: 1024,
   parseWarnings: [],
   ...overrides,
@@ -52,6 +52,7 @@ test("computeVerifySummary: clean signed PDF → verdict=ok, exit=0", () => {
     digest_ok: true,
     signer_match: true,
     warnings_count: 0,
+    trust: "unknown",
     verdict: "ok",
   });
 });
@@ -91,7 +92,7 @@ test("computeVerifySummary: extra PDF signers are tolerated (Persisted ⊆ PDF)"
   const summary = computeVerifySummary(
     report([
       finding(),
-      finding({ signers: [{ subject: "CN=bob@example.com", issuer: null, validFrom: null, validTo: null, serialNumber: null, fingerprintSha256: null }] }),
+      finding({ signers: [{ subject: "CN=bob@example.com", issuer: null, validFrom: null, validTo: null, serialNumber: null, fingerprintSha256: null, trust: "unknown" }] }),
     ]),
     [signer("alice@example.com")],
   );
@@ -132,7 +133,7 @@ test("computeVerifySummary: zero persisted signers → signer_match vacuously tr
 
 test("computeVerifySummary: email match is case-insensitive", () => {
   const summary = computeVerifySummary(
-    report([finding({ signers: [{ subject: "CN=ALICE@EXAMPLE.COM", issuer: null, validFrom: null, validTo: null, serialNumber: null, fingerprintSha256: null }] })]),
+    report([finding({ signers: [{ subject: "CN=ALICE@EXAMPLE.COM", issuer: null, validFrom: null, validTo: null, serialNumber: null, fingerprintSha256: null, trust: "unknown" }] })]),
     [signer("alice@example.com")],
   );
   assert.equal(summary.signer_match, true);
