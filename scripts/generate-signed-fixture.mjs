@@ -71,10 +71,13 @@ const SIGNATURE_SVG = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 </svg>`, "utf8");
 
 console.log(`[fixture] stamping SVG signature onto source PDF`);
+// Position the stamp so the SVG's internal underline (at viewBox y=62/70)
+// lands on the same baseline as the "Signed:" text (PDF y=592). With a 50pt
+// stamp height: y_stamp + 50 * (1 - 62/70) ≈ y_stamp + 5.7 → y_stamp = 586.
 const stamped = await stampImageOnPdf(
   SOURCE_PDF,
   { kind: "buffer", data: SIGNATURE_SVG, mime: "image/svg+xml" },
-  { page: 1, x: 120, y: 600, width: 180, height: 50 },
+  { page: 1, x: 110, y: 586, width: 180, height: 50 },
 );
 
 console.log(`[fixture] applying PAdES envelope (single signer: alice@example.com)`);
