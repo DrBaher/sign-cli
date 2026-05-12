@@ -2,8 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { startHttpApiServer } from "../lib/http-api.js";
+import { inspectPdfSignatures } from "../lib/pdf-signature.js";
 import { createDb, makeTempDb } from "./helpers.js";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 async function fetchPath(server: http.Server, urlPath: string, headers: Record<string, string> = {}): Promise<Response> {
   const addr = server.address();
@@ -40,6 +44,18 @@ test("sign serve --web-demo serves index.html same-origin without auth", { concu
     const pdf = await fetchPath(server, "/web-demo/sample-signed.pdf");
     assert.equal(pdf.status, 200);
     assert.match(pdf.headers.get("content-type") ?? "", /application\/pdf/);
+
+    // The fixture must be signed with a per-signer cert (CN includes the
+    // signer's email), not the generic org cert. Guards against the
+    // fixture-generation script accidentally falling through to
+    // loadOrCreateLocalSigner() — which previously shipped a misleading
+    // "CN=Sign CLI Local Signer" subject in the demo download.
+    const fixturePath = path.join(repoRoot, "fixtures", "web-demo", "sample-signed.pdf");
+    const inspection = await inspectPdfSignatures(fixturePath);
+    assert.equal(inspection.signatureCount, 1, "fixture has exactly one signature");
+    assert.equal(inspection.signatures[0].messageDigestMatches, true, "fixture digest must match");
+    const subjectBlob = inspection.signatures[0].signers.map((c) => c.subject ?? "").join(" | ");
+    assert.match(subjectBlob, /@/, `fixture cert subject must include an email (got: ${subjectBlob})`);
 
     // /v1/* still gated by the auth token
     const api = await fetchPath(server, "/v1/health");
