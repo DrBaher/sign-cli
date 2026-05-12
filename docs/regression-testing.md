@@ -16,7 +16,7 @@ cd /path/to/sign-cli
 npm install && npm run build
 
 # Sanity: automated suite passes.
-npm test         # expect: tests 605, pass 604, fail 0, skipped 1
+npm test         # expect: tests 613, pass 612, fail 0, skipped 1
 
 # Scratch workspace + absolute path to the built CLI.
 export TEST=/tmp/sign-regress
@@ -97,6 +97,29 @@ Expected: non-zero exit; error code `STRICT_PROVIDER_MISMATCH`; hint mentions
 The canonical command is `sign audit verify` — there is no top-level
 `sign verify`.
 
+### JSON shape
+
+```json
+// happy path
+{ "requestId": "req_...", "valid": true,  "events": 1, "break": null }
+
+// tampered chain
+{
+  "requestId": "req_...",
+  "valid": false,
+  "events": 1,
+  "break": { "kind": "hash_self_mismatch", "eventId": 1, "expected": "...", "actual": "..." }
+}
+
+// missing request id — generic error envelope, exit 1 (not 4)
+{ "ok": false, "error": { "code": "INTERNAL", "message": "Request not found: req_..." } }
+```
+
+Note: the top-level key is **`valid`** (not `chainValid`). The happy path
+has no `ok` field — exit code 0 is the success signal.
+
+### Walkthrough
+
 ```bash
 cd "$TEST" && rm -rf db && mkdir -p db
 echo "v" > vdoc.txt
@@ -106,26 +129,55 @@ OUT=$(SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" --provider local request create \
   --auto-approve true 2>&1)
 REQ=$(echo "$OUT" | grep -oE 'req_[a-f0-9]+' | head -1)
 
-# Happy path → exit 0, chainValid: true
-SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" audit verify --request-id "$REQ"
+# Happy path → exit 0, valid: true
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" audit verify --request-id "$REQ" | \
+  jq -r '"valid=\(.valid) events=\(.events)"'
 echo "exit: $?"
 
-# Tamper → exit 3, chainValid: false
+# Naive sqlite UPDATE → fails (exit 19 / runtime error). The audit_events
+# table has BEFORE UPDATE / BEFORE DELETE triggers that RAISE(ABORT). This
+# is a defense-in-depth signal worth checking: the audit chain cannot be
+# silently rewritten via a stray UPDATE.
 sqlite3 $PWD/db/s.db \
-  "UPDATE audit_events SET payload_json='{}' WHERE id = (SELECT id FROM audit_events LIMIT 1);"
-SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" audit verify --request-id "$REQ"
+  "UPDATE audit_events SET payload_json='{}' WHERE id = (SELECT id FROM audit_events LIMIT 1);" 2>&1
+echo "(should print: Runtime error: audit_events is append-only; UPDATE not permitted (19))"
+
+# Real tamper, for exercising the audit-chain verification logic: use the
+# documented `withAuditTamperingAllowed` helper to drop the triggers
+# temporarily, mutate a row, then re-install. (This is the same pattern
+# the unit tests use.)
+DB=$PWD/db/s.db node -e "
+  import('$PWD/../dist/lib/db.js').then(m => {
+    const db = m.openDatabase(process.env.DB);
+    m.withAuditTamperingAllowed(db, () => {
+      db.exec(\"UPDATE audit_events SET payload_json='{}' WHERE id = (SELECT id FROM audit_events LIMIT 1);\");
+    });
+  });
+"
+
+# Tampered → exit 3, valid: false, break.kind = hash_self_mismatch
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" audit verify --request-id "$REQ" | \
+  jq -r '"valid=\(.valid) break=\(.break.kind)"'
 echo "exit: $?"
 
-# Bad request id → exit 4
-SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" audit verify --request-id req_nonexistent
+# Missing request id → exit 1 (NOT 4), generic error envelope on stderr
+# (Note: 2>&1 because the error envelope is written to stderr; happy &
+#  tampered envelopes go to stdout.)
+SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" audit verify --request-id req_nonexistent 2>&1
 echo "exit: $?"
 ```
 
 | Step | Expected exit | Expected JSON |
 |---|---|---|
-| Happy path | `0` | `"chainValid": true` |
-| Tampered chain | `3` | `"chainValid": false` |
-| Missing request | `4` | `"ok": false` |
+| Happy path | `0` | `"valid": true`, `"break": null` (stdout) |
+| Naive sqlite `UPDATE` on `audit_events` | `19` (from sqlite) | `Runtime error: audit_events is append-only; UPDATE not permitted` |
+| Tampered chain (after `withAuditTamperingAllowed`) | `3` | `"valid": false`, `"break.kind": "hash_self_mismatch"` (stdout) |
+| Missing request id | `1` | `{ "ok": false, "error": { "code": "INTERNAL", ... } }` (**stderr**) |
+
+> Important: adjust the `$PWD/../dist/lib/db.js` path in the node one-liner to
+> point at your `sign-cli` build (e.g. `/path/to/sign-cli/dist/lib/db.js`).
+> The helper is exported precisely so doc / test code can exercise the
+> verification logic without committing a backdoor in the runtime path.
 
 ---
 
@@ -313,11 +365,19 @@ bundle/
   audit.json
   manifest.json          (bundleVersion: 2)
   original.pdf
-  signed.pdf             (present because sign happened)
   receipts/
     alice@e.com.json
     bob@e.com.json
 ```
+
+> Note: the `audit export` bundle does **not** include a `signed.pdf`. It
+> exports the original document + the per-signer audit-event receipts so
+> the chain can be re-verified independently — the signed PDF itself is a
+> separate artifact fetched via `request fetch-final --out signed.pdf`.
+> The manifest's `files` array lists exactly: `audit.json`, `original.pdf`,
+> `receipts/<email>.json` (one per signer), and `README.md`. The
+> `manifest.json` itself is not listed in its own `files` array (it's the
+> manifest of the others).
 
 ### Per-signer isolation
 
