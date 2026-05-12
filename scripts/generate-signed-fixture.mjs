@@ -54,13 +54,20 @@ endstream endobj
 trailer << /Root 1 0 R /Size 6 >>
 %%EOF`, "latin1");
 
-// A signature-y SVG: italic blue script + an underline. Resvg renders this
-// without external font files (falls back to its bundled sans where needed).
+// A path-based "handwritten signature" SVG. Deliberately uses no <text>:
+// @resvg/resvg-wasm ships zero bundled fonts, so any text-based signature
+// would render as an empty rectangle (silently). Paths render identically
+// regardless of font stack, which is what we want for a hermetic fixture.
+// Reads as a capital "A" + flowing scribble + flourish + underline.
 const SIGNATURE_SVG = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 70" width="240" height="70">
-  <text x="10" y="46" font-family="cursive, serif" font-size="36" font-style="italic"
-        fill="#0a3b91" stroke="#0a3b91" stroke-width="0.5">Alice Anderson</text>
-  <line x1="8" y1="58" x2="232" y2="58" stroke="#0a3b91" stroke-width="1.2"/>
+  <path d="M 18 52 Q 30 8, 42 52 M 24 36 L 38 36"
+        stroke="#0a3b91" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 44 48 C 60 30, 80 56, 100 42 C 120 30, 140 52, 160 40 C 180 30, 200 48, 218 38"
+        stroke="#0a3b91" fill="none" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 215 38 Q 232 30, 222 55 Q 210 58, 218 42"
+        stroke="#0a3b91" fill="none" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="8" y1="62" x2="232" y2="62" stroke="#0a3b91" stroke-width="1.2"/>
 </svg>`, "utf8");
 
 console.log(`[fixture] stamping SVG signature onto source PDF`);
