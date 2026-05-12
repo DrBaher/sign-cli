@@ -242,6 +242,45 @@ test("CLI: sign --auto-place true on PDF with no detectable fields → AUTO_PLAC
   }
 });
 
+// ─── postinstall trim ────────────────────────────────────────────────────
+
+test("postinstall: pdfjs-dist has been trimmed (no .map sourcemaps, no non-legacy build, etc.)", async () => {
+  // The scripts/trim-pdfjs-dist.mjs postinstall script drops unused
+  // pdfjs-dist subdirectories + all sourcemaps. This test locks in that the
+  // hook fired during `npm install` so install footprint stays small (~7.5
+  // MB instead of ~36 MB). If this fails after `npm install`, the
+  // postinstall didn't run — check package.json scripts.postinstall.
+  const fs = await import("node:fs");
+  const pdfjsRoot = path.resolve("node_modules/pdfjs-dist");
+  assert.ok(fs.existsSync(pdfjsRoot), "pdfjs-dist must be installed");
+
+  // These directories MUST be gone.
+  for (const dir of ["build", "web", "image_decoders", "wasm", "cmaps", "standard_fonts"]) {
+    assert.equal(
+      fs.existsSync(path.join(pdfjsRoot, dir)),
+      false,
+      `pdfjs-dist/${dir} should have been removed by the postinstall trim`,
+    );
+  }
+
+  // No `.map` files should remain.
+  function findMaps(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) out.push(...findMaps(full));
+      else if (entry.endsWith(".map")) out.push(full);
+    }
+    return out;
+  }
+  const remainingMaps = findMaps(pdfjsRoot);
+  assert.deepEqual(remainingMaps, [], `sourcemaps should have been trimmed: ${remainingMaps.join(", ")}`);
+
+  // The single file we actually import MUST still exist and load.
+  assert.ok(fs.existsSync(path.join(pdfjsRoot, "legacy/build/pdf.mjs")));
+});
+
 test("CLI: sign --auto-place true + explicit --image-* → explicit wins, notice on stderr", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "autoplace-explicit-"));
   try {

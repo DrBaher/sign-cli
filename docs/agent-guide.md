@@ -483,7 +483,7 @@ Exit `0` when candidates were found, exit `2` when none. The JSON is emitted on 
 **Caveats**:
 
 - Anchor patterns are English-only (`Signature:`, `Sign here:`, `Signed by:`, `Initial:`, `X____`). Non-English documents need AcroForm `/Sig` fields or explicit `--image-*` coords.
-- Heavy dependency: pulls in `pdfjs-dist` (~35MB unpacked). The `detect` command and `--auto-place` are the only paths that need it; the rest of the CLI never imports it.
+- Dependency: pulls in `pdfjs-dist` for text-position extraction. The `detect` command and `--auto-place` are the only paths that need it; the rest of the CLI never imports it. A `postinstall` hook (`scripts/trim-pdfjs-dist.mjs`) drops the non-legacy build, viewer assets, image/WASM decoders, CJK cmaps, standard fonts, and all sourcemaps, bringing the installed footprint from ~36 MB to **~7.5 MB**. The trim is idempotent and only ever touches our own copy (skips if pdfjs-dist is hoisted out of our `node_modules` tree as a peer of a consuming project).
 - The detector does **not** parse PDF content streams for line operators — underline detection uses underscore-character runs in the text items (which catches the common `_______` pattern but misses underlines drawn as path operators).
 
 Side effects: read-only. Idempotent.
