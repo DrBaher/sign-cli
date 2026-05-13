@@ -7,21 +7,32 @@
 //      "Initial:", "X____" patterns in the page text. For each match, we adjust
 //      the proposed rectangle to avoid overlap with surrounding text:
 //
-//        - underline-snap   (0.95) — if there's an underscore run at the anchor's
-//                                    baseline, snap to its width
-//        - whitespace-probe (0.75) — use the whitespace between anchor and the
-//                                    next text on the line
-//        - shrink-to-fit    (0.50) — start with a default rect, iteratively
-//                                    shrink until no overlap; reject if too small
+//        - underline-snap     (0.95) — anchor + adjacent underscore run on the
+//                                      same baseline → snap to its width
+//        - whitespace-probe   (0.75) — anchor + adjacent empty space on the
+//                                      same baseline → use the gap up to the
+//                                      next text on the line or the page edge
+//        - below-anchor-probe (0.85) — anchor alone on its line + vertical
+//                                      whitespace below → place rectangle BELOW
+//                                      the anchor (French/European convention:
+//                                      "Signature" on its own line, sign below)
+//        - shrink-to-fit      (0.50) — default rect iteratively shrunk to fit
+//
+// Strategy ordering: underline-snap → (if alone on line) below-anchor-probe →
+// whitespace-probe → (if NOT alone on line) below-anchor-probe → shrink-to-fit.
+// The "alone on line" check switches the heuristic between English forms
+// ("Signature: _____" — fill in to the right) and European forms ("Signature"
+// on its own line — sign below).
 //
 // Overlap is checked against pdfjs-extracted text bboxes — by the time a
 // candidate is emitted, the rectangle does NOT overlap any text on the page.
 // This is the safety contract: `overlapsText` is never `true` on a final
 // candidate. If we can't adjust to fit, we drop the candidate entirely.
 //
-// The detector never silently picks a rectangle for you — `sign sign --field
-// auto` requires confidence >= 0.8 AND a unique top candidate before using it.
-// Otherwise it errors with the full list so the caller chooses explicitly.
+// The detector never silently picks a rectangle for you — `sign sign
+// --auto-place` requires confidence >= 0.8 AND a unique top candidate before
+// using it. Otherwise it errors with the full list so the caller chooses
+// explicitly.
 
 import { PDFDocument, PDFSignature } from "pdf-lib";
 
@@ -29,6 +40,7 @@ export type AdjustmentMethod =
   | "none"
   | "underline-snap"
   | "whitespace-probe"
+  | "below-anchor-probe"
   | "shrink-to-fit";
 
 export type FieldSource = "acroform" | `anchor:${string}`;
@@ -55,16 +67,25 @@ export type DetectionSummary = {
   acroFormFields: number;
   anchorMatches: number;
   candidates: DetectedField[];
+  /**
+   * Raw pdfjs text items per page. Only populated when `verbose: true` is
+   * passed to `detectSignatureFields`. Used by `sign pdf detect-signature-field
+   * --verbose` to diagnose why detection produced zero candidates.
+   */
+  textItemsByPage?: TextItem[][];
+  /** Page dimensions (1-indexed: pageDimensions[pageNum-1]). Only with verbose. */
+  pageDimensions?: Array<{ width: number; height: number }>;
 };
 
 /**
  * Detect candidate signature-field placements in a PDF. Returns candidates
  * sorted by confidence DESC; AcroForm widgets always rank above anchor-text
  * heuristics. Caller decides what to do with them — see `sign pdf
- * detect-signature-field` and `sign sign --field auto`.
+ * detect-signature-field` and `sign sign --auto-place`.
  */
 export async function detectSignatureFields(
   pdfBytes: Buffer,
+  opts: { verbose?: boolean } = {},
 ): Promise<DetectionSummary> {
   const acroForm = await findAcroFormSignatureFields(pdfBytes);
   const textPages = await extractTextItemsByPage(pdfBytes);
@@ -72,7 +93,7 @@ export async function detectSignatureFields(
 
   // De-duplicate: if an anchor-text candidate's rectangle overlaps an existing
   // AcroForm candidate on the same page, drop the anchor (the explicit field
-  // wins). This keeps `--field auto` deterministic when both sources agree.
+  // wins). This keeps `--auto-place` deterministic when both sources agree.
   const filteredAnchors = anchors.filter((a) => {
     return !acroForm.some(
       (af) => af.page === a.page && rectanglesOverlap(af, a),
@@ -83,12 +104,18 @@ export async function detectSignatureFields(
     (a, b) => b.confidence - a.confidence,
   );
 
-  return {
+  const summary: DetectionSummary = {
     pageCount: textPages.length,
     acroFormFields: acroForm.length,
     anchorMatches: filteredAnchors.length,
     candidates,
   };
+
+  if (opts.verbose) {
+    summary.textItemsByPage = textPages.map((p) => p.items);
+    summary.pageDimensions = textPages.map((p) => ({ width: p.width, height: p.height }));
+  }
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,37 +176,42 @@ export type TextItem = {
   /** 1-indexed page. */
   page: number;
   text: string;
-  /** PDF user-space lower-left corner. */
+  /** PDF user-space lower-left corner (baseline for text). */
   x: number;
   y: number;
   width: number;
   height: number;
 };
 
-async function extractTextItemsByPage(pdfBytes: Buffer): Promise<TextItem[][]> {
+type PageContent = {
+  items: TextItem[];
+  /** Page dimensions in PDF points; used to clamp proposed rectangles. */
+  width: number;
+  height: number;
+};
+
+async function extractTextItemsByPage(pdfBytes: Buffer): Promise<PageContent[]> {
   // pdfjs uses CommonJS-style import; the `legacy/build/pdf.mjs` entry point
   // works under node's native ESM resolution.
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  // Silence pdfjs's worker message — we run it in the same thread.
-  // (No worker setup needed in node; pdfjs auto-falls-back.)
   const data = new Uint8Array(pdfBytes);
   const doc = await pdfjs.getDocument({
     data,
     useSystemFonts: false,
     disableFontFace: true,
-    // Don't try to fetch standard fonts from disk — we don't need glyphs, just
-    // positions.
     standardFontDataUrl: undefined,
   }).promise;
 
-  const pages: TextItem[][] = [];
+  const pages: PageContent[] = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
+    // view = [xMin, yMin, xMax, yMax]
+    const view = page.view as number[];
+    const pageWidth = view[2] - view[0];
+    const pageHeight = view[3] - view[1];
     const tc = await page.getTextContent();
     const items: TextItem[] = [];
     for (const it of tc.items as Array<{ str: string; transform: number[]; width: number; height: number }>) {
-      // transform = [a, b, c, d, e, f]; (e, f) is the position; height is the
-      // font size; width is the rendered width.
       if (!it.str || !it.str.trim()) continue;
       const [, , , , e, f] = it.transform;
       items.push({
@@ -191,7 +223,7 @@ async function extractTextItemsByPage(pdfBytes: Buffer): Promise<TextItem[][]> {
         height: it.height || 0,
       });
     }
-    pages.push(items);
+    pages.push({ items, width: pageWidth, height: pageHeight });
   }
   return pages;
 }
@@ -211,22 +243,22 @@ const ANCHOR_PATTERNS: Array<{ regex: RegExp; label: string }> = [
   { regex: /^\s*x\s*[_\-]{3,}\s*$/i, label: "X____" },
 ];
 
-// Default proposed rectangle for an anchor when we have no better signal.
 const DEFAULT_RECT_WIDTH = 180;
 const DEFAULT_RECT_HEIGHT = 50;
 const MIN_RECT_WIDTH = 60;
 const MIN_RECT_HEIGHT = 20;
-const ANCHOR_GAP = 6; // points between anchor text and proposed rectangle
+const ANCHOR_GAP = 6;
+const PAGE_RIGHT_MARGIN = 36; // 0.5" — clamp right-side strategies to this
 
-function findAnchorCandidates(textPages: TextItem[][]): DetectedField[] {
+function findAnchorCandidates(textPages: PageContent[]): DetectedField[] {
   const out: DetectedField[] = [];
   for (let i = 0; i < textPages.length; i++) {
-    const items = textPages[i];
+    const page = textPages[i];
     const pageNum = i + 1;
-    for (const item of items) {
+    for (const item of page.items) {
       for (const { regex, label } of ANCHOR_PATTERNS) {
         if (!regex.test(item.text)) continue;
-        const candidate = proposeRectangleForAnchor(item, items);
+        const candidate = proposeRectangleForAnchor(item, page);
         if (!candidate) continue;
         out.push({
           page: pageNum,
@@ -255,34 +287,38 @@ type ProposedRectangle = {
 };
 
 /**
- * Given an anchor text item and all text items on the same page, propose a
- * rectangle to the right of the anchor that does NOT overlap any text. Returns
- * null if no rectangle of at least the minimum size fits.
+ * Given an anchor text item and the page it appears on, propose a rectangle
+ * that does NOT overlap any text. Returns null if no rectangle of at least the
+ * minimum size fits.
+ *
+ * Strategy ordering:
+ *   1. underline-snap     — anchor + adjacent underscore run
+ *   2. below-anchor-probe — if anchor is ALONE on its line, try below FIRST
+ *   3. whitespace-probe   — anchor + clear space to the right on same line
+ *   4. below-anchor-probe — if anchor has text to the right but whitespace-probe
+ *                           failed (e.g., proposed rect overlapped line above),
+ *                           fall back to below
+ *   5. shrink-to-fit      — last resort: shrink width until no overlap
  */
 function proposeRectangleForAnchor(
   anchor: TextItem,
-  pageItems: TextItem[],
+  page: PageContent,
 ): ProposedRectangle | null {
-  // Same-line predicate: another item whose baseline y is within half the
-  // anchor's height. pdfjs reports y as the baseline (lower-left of glyph box).
+  const pageItems = page.items;
   const lineTolerance = Math.max(anchor.height * 0.6, 4);
   const sameLine = pageItems.filter(
     (i) => i !== anchor && Math.abs(i.y - anchor.y) <= lineTolerance,
   );
-
-  // Items to the right of the anchor on the same line, sorted by x.
   const rightOfAnchor = sameLine
     .filter((i) => i.x >= anchor.x + anchor.width - 2)
     .sort((a, b) => a.x - b.x);
+  const isAloneOnLine = rightOfAnchor.length === 0;
 
   // ── 1. Underline snap ───────────────────────────────────────────────────
-  // If the next item to the right is mostly underscores (or dashes), use its
-  // rectangle. That's an explicit signature-line — high confidence.
   const next = rightOfAnchor[0];
   if (next && /^[_\-\s]{3,}$/.test(next.text)) {
     const rect = {
       x: next.x,
-      // baseline + a few points down → bottom of rectangle
       y: next.y - 4,
       width: next.width,
       height: Math.max(anchor.height * 1.8, DEFAULT_RECT_HEIGHT * 0.7),
@@ -294,18 +330,21 @@ function proposeRectangleForAnchor(
     }
   }
 
-  // ── 2. Whitespace probe ─────────────────────────────────────────────────
-  // Start at anchor.x + anchor.width + gap. Right edge: the next text on the
-  // line, or the page right margin. We approximate the page right edge as
-  // anchor.x + anchor.width + DEFAULT_RECT_WIDTH * 1.5 when there's no item to
-  // the right — won't run off the page for any sensible anchor placement.
-  const xStart = anchor.x + anchor.width + ANCHOR_GAP;
-  const xEnd = next ? next.x - 2 : xStart + DEFAULT_RECT_WIDTH * 1.5;
-  const availableWidth = xEnd - xStart;
+  // ── 2. Below-anchor probe (priority path when anchor is alone on line) ──
+  if (isAloneOnLine) {
+    const below = tryBelowAnchorProbe(anchor, page, lineTolerance);
+    if (below) return below;
+  }
 
+  // ── 3. Whitespace probe (right of anchor) ───────────────────────────────
+  // xEnd is the FIRST of: next text on the line, OR the page right margin.
+  const xStart = anchor.x + anchor.width + ANCHOR_GAP;
+  const xEnd = Math.min(
+    next ? next.x - 2 : xStart + DEFAULT_RECT_WIDTH * 1.5,
+    page.width - PAGE_RIGHT_MARGIN,
+  );
+  const availableWidth = xEnd - xStart;
   if (availableWidth >= MIN_RECT_WIDTH) {
-    // Vertical: extend below the anchor's baseline by ~1.5 line heights.
-    // Check items above and below for clipping.
     const proposedHeight = Math.min(DEFAULT_RECT_HEIGHT, anchor.height * 2.5);
     const yBottom = anchor.y - 4;
     const rect = {
@@ -321,22 +360,74 @@ function proposeRectangleForAnchor(
     }
   }
 
-  // ── 3. Shrink-to-fit ────────────────────────────────────────────────────
-  // Start with the default, shrink width by 10% until no overlap or below
-  // minimum. Reject if we can't fit.
+  // ── 4. Below-anchor probe (fallback when right-side failed) ─────────────
+  if (!isAloneOnLine) {
+    const below = tryBelowAnchorProbe(anchor, page, lineTolerance);
+    if (below) return below;
+  }
+
+  // ── 5. Shrink-to-fit ────────────────────────────────────────────────────
   let rect = {
     x: anchor.x + anchor.width + ANCHOR_GAP,
     y: anchor.y - 4,
-    width: DEFAULT_RECT_WIDTH,
+    width: Math.min(DEFAULT_RECT_WIDTH, page.width - PAGE_RIGHT_MARGIN - (anchor.x + anchor.width + ANCHOR_GAP)),
     height: DEFAULT_RECT_HEIGHT,
     confidence: 0.50,
     method: "shrink-to-fit" as AdjustmentMethod,
   };
+  if (rect.width < MIN_RECT_WIDTH) return null;
   while (rectangleOverlapsAnyText(rect, pageItems)) {
     rect = { ...rect, width: rect.width * 0.9 };
     if (rect.width < MIN_RECT_WIDTH) return null;
   }
-  if (rect.width < MIN_RECT_WIDTH || rect.height < MIN_RECT_HEIGHT) return null;
+  if (rect.height < MIN_RECT_HEIGHT) return null;
+  return rect;
+}
+
+/**
+ * Place the rectangle BELOW the anchor: left-aligned with the anchor, extending
+ * downward into vertical whitespace. This is the French/European convention
+ * for a label on its own line ("Signature" followed by a blank signing area).
+ *
+ * Width: max(default, anchor.width × 3), clamped to page right margin.
+ * Height: default, clamped by the vertical room down to the next text below
+ *         (or the page bottom margin).
+ */
+function tryBelowAnchorProbe(
+  anchor: TextItem,
+  page: PageContent,
+  lineTolerance: number,
+): ProposedRectangle | null {
+  // Find text below the anchor (lower y in PDF coords), sorted closest-first.
+  const itemsBelow = page.items
+    .filter((i) => i !== anchor && i.y < anchor.y - lineTolerance)
+    .sort((a, b) => b.y - a.y);
+  const yTop = anchor.y - 6;
+  // The top edge of the nearest text below us (its baseline + ascender).
+  const nextBelowTop = itemsBelow.length > 0
+    ? itemsBelow[0].y + itemsBelow[0].height
+    : 0;
+  const verticalRoom = yTop - nextBelowTop;
+  if (verticalRoom < MIN_RECT_HEIGHT) return null;
+
+  const proposedHeight = Math.min(DEFAULT_RECT_HEIGHT, verticalRoom - 4);
+  if (proposedHeight < MIN_RECT_HEIGHT) return null;
+
+  const proposedWidth = Math.min(
+    Math.max(DEFAULT_RECT_WIDTH, anchor.width * 3),
+    page.width - PAGE_RIGHT_MARGIN - anchor.x,
+  );
+  if (proposedWidth < MIN_RECT_WIDTH) return null;
+
+  const rect = {
+    x: anchor.x,
+    y: yTop - proposedHeight,
+    width: proposedWidth,
+    height: proposedHeight,
+    confidence: 0.85,
+    method: "below-anchor-probe" as AdjustmentMethod,
+  };
+  if (rectangleOverlapsAnyText(rect, page.items)) return null;
   return rect;
 }
 

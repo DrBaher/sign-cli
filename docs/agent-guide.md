@@ -475,8 +475,15 @@ Exit `0` when candidates were found, exit `2` when none. The JSON is emitted on 
 |---|---|---|
 | `none` | `1.0` | AcroForm `/Sig` widget — rectangle taken verbatim from the PDF. |
 | `underline-snap` | `0.95` | Anchor immediately followed on the same baseline by an underscore run (`____`) or dashes. Snaps to the run's width. |
-| `whitespace-probe` | `0.75` (or `0.60` if narrow) | Anchor followed by empty space; uses the gap up to the next text or page edge. |
+| `below-anchor-probe` | `0.85` | Anchor alone on its line + vertical whitespace below. Rectangle placed BELOW the anchor, left-aligned with it. French/European convention: "Signature" on its own line, sign below. |
+| `whitespace-probe` | `0.75` (or `0.60` if narrow) | Anchor followed by empty space on the same line; uses the gap up to the next text or page right margin. English-form convention. |
 | `shrink-to-fit` | `0.50` | Default 180×50 rect iteratively shrunk by 10% until no text overlap. Rejected entirely if width drops below 60pt. |
+
+**Strategy ordering**: `underline-snap` → (if anchor is alone on its line) `below-anchor-probe` first → `whitespace-probe` → (else) `below-anchor-probe` as fallback → `shrink-to-fit`. The "alone on line" check switches the heuristic between **English** ("Signature: \_\_\_\_\_\_\_" — fill in to the right) and **European** ("Signature" alone — sign below) conventions.
+
+**Page-width clamp**: right-side strategies (`whitespace-probe`, `shrink-to-fit`) clamp their right edge to `pageWidth − 36pt` so anchors near the page-right margin can't produce rectangles that run off the page.
+
+**Debugging zero candidates**: pass `--verbose true` to `sign pdf detect-signature-field` to dump the raw pdfjs text items per page plus page dimensions. This tells you exactly what text pdfjs extracted (and where it's positioned) so you can decide whether the gap is a missing anchor pattern, an embedded-font-without-ToUnicode problem (text comes through as glyph indices), or a signature line drawn as path operators rather than text (pdfjs's `getTextContent` doesn't see those).
 
 **Safety contract**: a candidate is never emitted if its rectangle overlaps any non-whitespace text on the page. By the time the JSON reaches the caller, the rectangle is safe to stamp. This is the explicit fix for the silent-overlap-with-body-text failure mode from earlier builds.
 

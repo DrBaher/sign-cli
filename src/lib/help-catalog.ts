@@ -234,11 +234,12 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "pdf detect-signature-field",
-    summary: "Auto-detect candidate signature-field placements in a PDF. Returns ranked candidates: AcroForm /Sig widgets (confidence 1.0) first, then anchor-text matches (Signature:, Sign here, X____) with overlap-adjusted rectangles (0.50–0.95). Pair with `sign sign --auto-place` for hands-off positioning. Exit 0 = candidates returned; exit 2 = no candidates found (still emits an empty array on stdout).",
+    summary: "Auto-detect candidate signature-field placements in a PDF. Returns ranked candidates: AcroForm /Sig widgets (confidence 1.0) first, then anchor-text matches (Signature:, Sign here, X____) with overlap-adjusted rectangles. Adjustment methods: `underline-snap` (0.95, anchor + adjacent `____` line), `below-anchor-probe` (0.85, anchor alone on its line + space below — French/European convention), `whitespace-probe` (0.75, anchor + clear space on the same line — English convention), `shrink-to-fit` (0.50, default rect shrunk to avoid overlap). Pair with `sign sign --auto-place` for hands-off positioning. Exit 0 = candidates returned; exit 2 = no candidates (still emits an empty array on stdout).",
     flags: [
       { name: "--pdf", required: true, description: "PDF to inspect." },
+      { name: "--verbose", description: "Pass `true` to include the raw pdfjs text items per page in the output (under `textItemsByPage`) and page dimensions (under `pageDimensions`). Use this to debug why detection produced zero candidates — you'll see exactly what text pdfjs extracted and where." },
     ],
-    example: "sign pdf detect-signature-field --pdf ./nda.pdf",
+    example: "sign pdf detect-signature-field --pdf ./nda.pdf --verbose true",
   },
   {
     command: "workflow nda",

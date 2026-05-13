@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { detectSignatureFields } from "../lib/signature-field-detection.js";
 import { canonicalUnsignedPdfPath } from "../lib/fixtures.js";
@@ -23,7 +23,36 @@ async function buildAnchorWhitespacePdf(): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const page = doc.addPage([612, 792]);
   const helv = await doc.embedFont(StandardFonts.Helvetica);
+  // English-form layout: "Signature: <empty>     Date: <empty>" on the same
+  // line. The neighbor on the right line forces isAloneOnLine = false so
+  // whitespace-probe (right side) runs instead of below-anchor-probe.
   page.drawText("Signature:", { x: 72, y: 400, font: helv, size: 12 });
+  page.drawText("Date:", { x: 400, y: 400, font: helv, size: 12 });
+  return Buffer.from(await doc.save());
+}
+
+async function buildAnchorAloneOnLinePdf(): Promise<Buffer> {
+  // French/European convention: label alone on its line, sign below.
+  // Matches the attestation-de-conservation-des-archives layout the user hit.
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("A Vienne (Autriche)", { x: 72, y: 250, font: helv, size: 12 });
+  page.drawText("Le 12 mai 2026", { x: 72, y: 235, font: helv, size: 12 });
+  page.drawText("Signature", { x: 72, y: 220, font: helv, size: 12 });
+  // Empty signing area at y ∈ [110, 215].
+  page.drawText("Footer text below the signing area", { x: 72, y: 100, font: helv, size: 12 });
+  return Buffer.from(await doc.save());
+}
+
+async function buildAnchorNearRightEdgePdf(): Promise<Buffer> {
+  // Anchor positioned so close to the right edge that right-side strategies
+  // would overflow the page if unclamped. Exercises the PAGE_RIGHT_MARGIN
+  // clamp.
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Signature:", { x: 500, y: 400, font: helv, size: 12 });
   return Buffer.from(await doc.save());
 }
 
@@ -98,6 +127,72 @@ test("detectSignatureFields: PDF with no anchors and no AcroForm → empty list"
   assert.equal(anchorMatches, 0);
 });
 
+test("detectSignatureFields: anchor alone on line + space below → below-anchor-probe @ 0.85", async () => {
+  // The French-attestation case the user reported: "Signature" is alone on
+  // its own line with empty space below for signing. The right-side
+  // strategies would overlap with "Le 12 mai 2026" on the line above — so
+  // they're correctly rejected, and below-anchor-probe wins.
+  const pdf = await buildAnchorAloneOnLinePdf();
+  const { candidates } = await detectSignatureFields(pdf);
+  assert.equal(candidates.length, 1);
+  const c = candidates[0];
+  assert.equal(c.source, "anchor:Signature:");
+  assert.equal(c.adjustedFrom, "below-anchor-probe");
+  assert.equal(c.confidence, 0.85);
+  assert.equal(c.x, 72, "rectangle should be left-aligned with the anchor");
+  // PDF coords: lower y = lower on page. Anchor baseline at y=220. The
+  // rectangle is below the anchor, so its top edge (y + height) must be
+  // strictly below the anchor's baseline.
+  assert.ok(c.y + c.height < 220, `rectangle top (${c.y + c.height}) should be below anchor baseline 220`);
+  // And it should clear the footer at y=100.
+  assert.ok(c.y > 100 + 12, `rectangle bottom (${c.y}) should clear the footer at y=100+height`);
+});
+
+test("detectSignatureFields: anchor near right edge → page-width clamp keeps rect on page", async () => {
+  const pdf = await buildAnchorNearRightEdgePdf();
+  const { candidates } = await detectSignatureFields(pdf);
+  // Either below-anchor-probe (alone on line, tried first) or no candidate
+  // at all if the geometry is too tight. The KEY assertion is that whatever
+  // rectangle is emitted does not run off the right edge of the page.
+  for (const c of candidates) {
+    assert.ok(
+      c.x + c.width <= 612 - 36 + 0.001,
+      `candidate rectangle right edge (${c.x + c.width}) must be <= page_width - margin (576)`,
+    );
+  }
+});
+
+test("detectSignatureFields: anchor + same-line whitespace → whitespace-probe @ 0.75 (English form)", async () => {
+  const pdf = await buildAnchorWhitespacePdf();
+  const { candidates } = await detectSignatureFields(pdf);
+  // Two anchors match: "Signature:" and (implicitly) "Date:" doesn't match
+  // ANCHOR_PATTERNS, so only "Signature:" produces a candidate.
+  assert.ok(candidates.length >= 1);
+  const sigCandidate = candidates.find((c) => c.source === "anchor:Signature:");
+  assert.ok(sigCandidate);
+  assert.equal(sigCandidate!.adjustedFrom, "whitespace-probe");
+  assert.equal(sigCandidate!.confidence, 0.75);
+});
+
+test("detectSignatureFields: verbose:true returns textItemsByPage + pageDimensions", async () => {
+  const pdf = await buildAnchorAloneOnLinePdf();
+  const result = await detectSignatureFields(pdf, { verbose: true });
+  assert.ok(Array.isArray(result.textItemsByPage));
+  assert.equal(result.textItemsByPage!.length, 1, "one page");
+  const items = result.textItemsByPage![0];
+  assert.ok(items.length >= 4, "should extract at least 4 text items");
+  assert.ok(items.some((i) => /signature/i.test(i.text)), "should include the Signature anchor");
+  assert.ok(Array.isArray(result.pageDimensions));
+  assert.deepEqual(result.pageDimensions![0], { width: 612, height: 792 });
+});
+
+test("detectSignatureFields: verbose:false (default) omits textItemsByPage", async () => {
+  const pdf = await buildAnchorAloneOnLinePdf();
+  const result = await detectSignatureFields(pdf);
+  assert.equal(result.textItemsByPage, undefined);
+  assert.equal(result.pageDimensions, undefined);
+});
+
 test("detectSignatureFields: two anchors → two high-confidence candidates, AcroForm first", async () => {
   const pdf = await buildTwoAnchorsPdf();
   const { candidates } = await detectSignatureFields(pdf);
@@ -136,13 +231,30 @@ test("CLI: pdf detect-signature-field on PDF with no fields → exit 2 + empty c
   assert.deepEqual(payload.candidates, []);
 });
 
+test("CLI: pdf detect-signature-field --verbose true dumps raw text items + page dims", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "detect-verbose-"));
+  try {
+    const pdfPath = path.join(tmp, "p.pdf");
+    writeFileSync(pdfPath, await buildAnchorAloneOnLinePdf());
+    const r = spawnSync("node", [CLI, "pdf", "detect-signature-field", "--pdf", pdfPath, "--verbose", "true"], { encoding: "utf8" });
+    assert.equal(r.status, 0, `stderr=${r.stderr}`);
+    const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
+    assert.ok(Array.isArray(payload.textItemsByPage), "verbose output should include textItemsByPage");
+    assert.equal(payload.textItemsByPage.length, 1);
+    assert.ok(payload.textItemsByPage[0].some((i: { text: string }) => /signature/i.test(i.text)));
+    assert.deepEqual(payload.pageDimensions[0], { width: 612, height: 792 });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ─── CLI integration: `sign sign --auto-place` ───────────────────────────
 
 function runSignFlow(args: {
   tmpDir: string;
   pdfBytes: Buffer;
   signArgs: string[];
-}): { sign: ReturnType<typeof spawnSync>; requestId: string } {
+}): { sign: SpawnSyncReturns<string>; requestId: string } {
   const { tmpDir, pdfBytes, signArgs } = args;
   const dbPath = path.join(tmpDir, "s.db");
   const docPath = path.join(tmpDir, "doc.pdf");
