@@ -53,6 +53,67 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--out", description: "Bundle output directory (defaults to ./demo-bundle)." },
     ],
   },
+  // Profiles
+  {
+    command: "profile list",
+    summary: "List configured user profiles + show which is active. Active source: `flag` (--profile), `env` (SIGN_PROFILE), `default-profile` (file), or `project-file` (./sign-profile.json discovered upward from CWD).",
+  },
+  {
+    command: "profile show",
+    summary: "Print the resolved active profile and where each value came from (project vs user). Without --name, shows the resolved view; with --name, shows that user profile directly. Credentials redacted by default — pass --show-secrets true to reveal resolved values.",
+    flags: [
+      { name: "--name", description: "Show a specific user profile by name instead of the active resolved view." },
+      { name: "--show-secrets", description: "Pass `true` to reveal resolved credential values (post-{{env:}}-expansion). Default redacts to keys-only." },
+    ],
+    example: "sign profile show --show-secrets true",
+  },
+  {
+    command: "profile use",
+    summary: "Set the `defaultProfile` in the user file. Subsequent commands that don't pass --profile / SIGN_PROFILE use this one.",
+    flags: [{ name: "--name", description: "Profile to use (alternatively: positional after `use`)." }],
+    example: "sign profile use --name prod",
+  },
+  {
+    command: "profile set",
+    summary: "Set a single field on a profile. Validates the resulting profile before writing — `--value bogus` for `provider` fails fast. For credentials: `--key credentials.<NAME>`.",
+    flags: [
+      { name: "--name", required: true, description: "Profile name." },
+      { name: "--key", required: true, description: "Field name (`provider`, `dbPath`, `strictProvider`, `defaultTokenTtlMinutes`, `defaultSignerEmail`) or `credentials.<NAME>`." },
+      { name: "--value", required: true, description: "New value. Use `{{env:VAR}}` for shell-managed secrets." },
+    ],
+    example: "sign profile set --name prod --key credentials.DROPBOX_SIGN_API_KEY --value '{{env:DROPBOX_SIGN_API_KEY_PROD}}'",
+  },
+  {
+    command: "profile unset",
+    summary: "Remove a single field from a profile.",
+    flags: [
+      { name: "--name", required: true, description: "Profile name." },
+      { name: "--key", required: true, description: "Field to remove." },
+    ],
+  },
+  {
+    command: "profile delete",
+    summary: "Remove a named profile from the user file (requires --yes true).",
+    flags: [
+      { name: "--name", required: true, description: "Profile name." },
+      { name: "--yes", required: true, description: "Confirmation flag (`true`)." },
+    ],
+  },
+  {
+    command: "profile init",
+    summary: "Create a new profile. By default writes to the user file; pass `--project true` to write `./sign-profile.json` (single-profile shape, no map). Validates before writing.",
+    flags: [
+      { name: "--name", description: "Profile name (required unless --project)." },
+      { name: "--project", description: "Pass `true` to write a project file `./sign-profile.json` instead of the user file." },
+      { name: "--provider", description: "dropbox | docusign | signwell | local." },
+      { name: "--db", description: "Path for `dbPath` (supports `~` and `{{env:VAR}}`)." },
+      { name: "--strict-provider", description: "`true` / `false`." },
+      { name: "--default-token-ttl-minutes", description: "Positive number." },
+      { name: "--default-signer-email", description: "Default signer email." },
+      { name: "--set-default", description: "`true` to mark this as the user file's defaultProfile." },
+    ],
+    example: "sign profile init --name prod --provider dropbox --db ~/.sign-cli/prod.db --set-default true",
+  },
   {
     command: "selftest",
     summary: "In-process end-to-end smoke against a scratch DB: create → send → sign → fetch-final → verify-signed-pdf → audit verify → request receipt → verify-receipt. Exits 3 on any failure; drop-in for deploy health checks.",

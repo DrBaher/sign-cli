@@ -277,10 +277,34 @@ async function checkDocuSignProvider(): Promise<PreflightCheck[]> {
   return checks;
 }
 
+async function checkProfileContext(): Promise<PreflightCheck> {
+  try {
+    const mod = await import("./profiles.js");
+    const ctx = mod.loadProfileContext({ profileFlag: undefined });
+    const parts: string[] = [];
+    if (ctx.activeName) parts.push(`active=${ctx.activeName}`);
+    parts.push(`source=${ctx.activeSource.kind}`);
+    if (ctx.projectFilePath) parts.push(`projectFile=${ctx.projectFilePath}`);
+    return {
+      name: "profile:active",
+      status: "ok",
+      detail: parts.join(" "),
+    };
+  } catch (err) {
+    const e = err as { code?: string; message?: string; hint?: string };
+    return {
+      name: "profile:active",
+      status: "failed",
+      detail: e.message ?? String(err),
+      hint: e.hint ?? "Check `sign profile list` and the profile files under $XDG_CONFIG_HOME/sign-cli.",
+    };
+  }
+}
+
 export async function runPreflight(provider: SignProvider): Promise<PreflightReport> {
   // Env-health checks run first on every provider — these gate the basic
   // ability to use the CLI at all, independent of which provider you pick.
-  const envChecks: PreflightCheck[] = [checkNodeVersion(), checkDbPath()];
+  const envChecks: PreflightCheck[] = [checkNodeVersion(), checkDbPath(), await checkProfileContext()];
 
   let providerChecks: PreflightCheck[];
   switch (provider) {

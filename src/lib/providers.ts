@@ -5,7 +5,7 @@ export type SignProvider = typeof SIGN_PROVIDERS[number];
 /** Where the resolved provider came from. Used to print informative banners
  *  ("via --provider flag", "via SIGN_PROVIDER env", "default") so users can
  *  spot drift like "I meant local, but env said dropbox" without grepping. */
-export type ProviderSource = "flag" | "env" | "fallback" | "default";
+export type ProviderSource = "flag" | "env" | "profile-project" | "profile-user" | "fallback" | "default";
 
 export type ResolvedProvider = {
   provider: SignProvider;
@@ -34,10 +34,15 @@ export function resolveSignProvider(flag?: string, fallback?: string | null): Si
 export function resolveSignProviderWithSource(
   flag?: string,
   fallback?: string | null,
+  /** Optional profile layer (project or user file said `provider: X`). */
+  profile?: { value: SignProvider; layer: "project" | "user" },
 ): ResolvedProvider {
   if (flag !== undefined && flag !== null && flag.trim().length > 0) {
     return { provider: parseOrThrow(flag), source: "flag" };
   }
+  // Note: keep `fallback` first when it represents a persisted provider on
+  // an existing request — strict-provider matching takes care of mismatches.
+  // For typical resolution flows callers pass undefined for `fallback`.
   if (fallback !== undefined && fallback !== null && fallback.length > 0) {
     return { provider: parseOrThrow(fallback), source: "fallback" };
   }
@@ -45,16 +50,24 @@ export function resolveSignProviderWithSource(
   if (env !== undefined && env.length > 0) {
     return { provider: parseOrThrow(env), source: "env" };
   }
+  if (profile) {
+    return {
+      provider: profile.value,
+      source: profile.layer === "project" ? "profile-project" : "profile-user",
+    };
+  }
   return { provider: "dropbox", source: "default" };
 }
 
 /** Human-readable description of where the resolved provider came from. */
 export function describeProviderSource(source: ProviderSource): string {
   switch (source) {
-    case "flag":     return "via --provider flag";
-    case "env":      return "via SIGN_PROVIDER env";
-    case "fallback": return "persisted from request creation";
-    case "default":  return "default — no flag, no SIGN_PROVIDER set";
+    case "flag":             return "via --provider flag";
+    case "env":              return "via SIGN_PROVIDER env";
+    case "profile-project":  return "via project sign-profile.json";
+    case "profile-user":     return "via active profile";
+    case "fallback":         return "persisted from request creation";
+    case "default":          return "default — no flag, no SIGN_PROVIDER set";
   }
 }
 
@@ -62,12 +75,14 @@ export function describeProviderSource(source: ProviderSource): string {
  *  --provider flag itself does *not* imply strictness — strictness must be
  *  opted in via --strict-provider true or SIGN_STRICT_PROVIDER=true so the
  *  default behavior stays back-compatible. */
-export function strictProviderEnabled(strictFlag?: string): boolean {
+export function strictProviderEnabled(strictFlag?: string, profileValue?: boolean): boolean {
   if (strictFlag !== undefined && strictFlag.length > 0) {
     return strictFlag.trim().toLowerCase() === "true";
   }
   const env = (process.env.SIGN_STRICT_PROVIDER ?? "").trim().toLowerCase();
   if (env === "true") return true;
+  if (env === "false") return false;
+  if (profileValue !== undefined) return profileValue;
   return false;
 }
 
