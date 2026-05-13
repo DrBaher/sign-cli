@@ -578,7 +578,7 @@ node dist/cli.js request send --request-id <id> --provider dropbox --test-mode t
 
 ## Field placement
 
-By default the CLI lets the provider auto-place a signature page at the end of the document. For real contracts you usually need each signature, date, or text field on a specific spot. Pass `--field` (repeatable) on `request create` / `run-email`:
+By default the upstream provider (Dropbox Sign, DocuSign, SignWell) auto-appends a generic signature page at the end of the document — this is provider behavior at `request create` time, separate from the `--auto-place` flag on `sign sign` (see [Auto-detect signature field](#auto-detect-signature-field) below). For real contracts you usually need each signature, date, or text field on a specific spot. Pass `--field` (repeatable) on `request create` / `run-email`:
 
 ```bash
 node dist/cli.js request create \
@@ -603,6 +603,24 @@ The fields are persisted on the request and forwarded to the provider at send ti
 - Dropbox Sign — `form_fields_per_document`
 - DocuSign — per-signer `tabs` (`signHereTabs`, `dateSignedTabs`, etc.) with anchor or coordinate
 - SignWell — `files[].fields` keyed by recipient_id
+
+## Auto-detect signature field
+
+For `--provider local` flows, the signer-side `sign sign` command can auto-detect where to stamp a visible signature instead of requiring explicit `--image-page/--image-x/--image-y/--image-width/--image-height` coords. Two surfaces:
+
+- `sign pdf detect-signature-field --pdf <path>` — returns ranked candidates as JSON. AcroForm `/Sig` widgets (confidence `1.0`) rank first; anchor-text matches (`Signature:`, `Sign here`, `Signed by:`, `Initial:`, `X____`) follow with overlap-adjusted rectangles at `0.50`–`0.95`. Pass `--verbose true` to also dump the raw pdfjs-extracted text items (debugging zero-candidate outcomes).
+- `sign sign --auto-place true --name-signature "Alice"` — calls the detector and uses the top candidate iff there's a **unique** high-confidence (`≥0.8`) match. Multiple high-confidence matches → `AUTO_PLACE_AMBIGUOUS` with the candidate list. No high-confidence matches → `AUTO_PLACE_NO_HIGH_CONFIDENCE`. The detector never silently picks a low-confidence rectangle, and the emitted rectangle is guaranteed not to overlap any text on the page.
+
+Adjustment strategies, in priority order:
+
+| Method | Confidence | When it fires |
+|---|---|---|
+| `underline-snap` | `0.95` | Anchor + adjacent `_______` line on same baseline → snap to its width |
+| `below-anchor-probe` | `0.85` | Anchor alone on its line + space below (French / European convention) |
+| `whitespace-probe` | `0.75` / `0.60` | Anchor + clear space on the same line (English form convention) |
+| `shrink-to-fit` | `0.50` | Default rect iteratively shrunk to avoid overlap |
+
+Full reference + caveats: [`docs/agent-guide.md` §6.4a](docs/agent-guide.md#64a-sign-pdf-detect-signature-field--sign-sign---auto-place).
 
 ## Bulk send
 
