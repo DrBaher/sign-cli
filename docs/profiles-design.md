@@ -88,13 +88,14 @@ A profile is a JSON object with a fixed schema:
   "dbPath": "/Users/alice/.sign-cli/prod.db",
   "defaultTokenTtlMinutes": 60,
   "defaultSignerEmail": "alice@example.com",
-  "logMode": "pretty" | "json" | "silent",
   "credentials": {
     "DROPBOX_SIGN_API_KEY": "{{env:DROPBOX_SIGN_API_KEY_PROD}}",
     "DROPBOX_SIGN_TEST_MODE": "false"
   }
 }
 ```
+
+(`logMode` was in the original proposal but was **dropped from v1**; see §11a item 9 for the rationale.)
 
 Every field except `version` is optional. Missing fields mean "fall
 through to the next layer" (see §5).

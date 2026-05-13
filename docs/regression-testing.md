@@ -606,6 +606,146 @@ import('./dist/lib/pdf-image-stamp.js').then(async () => {
 
 ---
 
+## `sign pdf detect-date-field` — date anchor detection
+
+Date anchors (`Date:`, `Date de signature:`, `Date d'effet:`, `Date d'entrée en vigueur:`) detected as a separate category from signature anchors. Each candidate carries `alreadyFilled: true` when a recognizable date string (numeric `12/05/2026`, French `12 mai 2026`, English `May 12, 2026`) is on the same line to the right of the anchor.
+
+```bash
+node -e "
+import('pdf-lib').then(async p => {
+  const d = await p.PDFDocument.create();
+  const pg = d.addPage([612, 792]);
+  const f = await d.embedFont(p.StandardFonts.Helvetica);
+  pg.drawText('Date:', { x: 72, y: 460, font: f, size: 12 });
+  pg.drawText('______________________', { x: 110, y: 460, font: f, size: 12 });
+  pg.drawText('Date d\\'effet:', { x: 72, y: 420, font: f, size: 12 });
+  pg.drawText('12 mai 2026', { x: 145, y: 420, font: f, size: 12 });
+  require('fs').writeFileSync('$PWD/dates.pdf', Buffer.from(await d.save()));
+});"
+
+node "$SIGN" pdf detect-date-field --pdf $PWD/dates.pdf | \
+  jq -r '.candidates[] | "\(.source) alreadyFilled=\(.alreadyFilled)"'
+```
+
+| Step | Expected output |
+|---|---|
+| `detect-date-field` on the doc | Two candidates: `anchor:Date: alreadyFilled=false` and `anchor:Date d'effet: alreadyFilled=true` |
+| Same with no date anchors in the PDF | exit `2`, `candidates: []` |
+
+---
+
+## `sign pdf stamp-text` — stamp a date / plain text
+
+Sibling of `pdf stamp` for plain text (Helvetica regular, no underline). Default `--auto-place` filters to date candidates AND skips `alreadyFilled` ones.
+
+```bash
+# Stamp today's date at the blank Date: only (skipping the alreadyFilled one)
+node "$SIGN" pdf stamp-text --pdf $PWD/dates.pdf \
+  --text "$(date +'%-d %B %Y')" \
+  --auto-place all --out $PWD/dated.pdf | jq '.positions | length'
+
+# Force-overwrite even already-filled candidates
+node "$SIGN" pdf stamp-text --pdf $PWD/dates.pdf --text "today" \
+  --auto-place all --overwrite-filled true --out $PWD/dated2.pdf | jq '.positions | length'
+```
+
+| Step | Expected |
+|---|---|
+| `--auto-place all` (default skip-filled) | `positions.length == 1`, plus a `warnings: []` array for shape parity with `pdf stamp` / `sign preview` |
+| `--overwrite-filled true` | `positions.length == 2` |
+| Doc where every candidate is already filled + default skip | exit non-zero, `AUTO_PLACE_NO_HIGH_CONFIDENCE` with a hint mentioning `--overwrite-filled true` |
+
+---
+
+## `sign preview` — draft stamp without sealing
+
+Stamps a signature image (or rendered name) and writes the output **without** producing a PAdES envelope. JSON output declares `sealed: false` and lists `positions` plus `drawnRects` (the actually-drawn rects after `--preserve-aspect-ratio` shrink-to-fit).
+
+```bash
+node "$SIGN" preview --pdf $PWD/dates.pdf --signature-image $PWD/sig.png \
+  --auto-place first --out $PWD/preview.pdf | tee $PWD/preview.json | jq '.sealed, (.drawnRects | length)'
+
+# drawnRects round-trip through pdf stamp verify
+read PAGE X Y W H <<< "$(jq -r '.drawnRects[0] | "\(.page) \(.x) \(.y) \(.width) \(.height)"' $PWD/preview.json)"
+node "$SIGN" pdf stamp verify --pdf $PWD/preview.pdf \
+  --image-page $PAGE --image-x $X --image-y $Y --image-width $W --image-height $H | jq '.verdict'
+```
+
+| Step | Expected |
+|---|---|
+| `preview --auto-place first` | exit `0`; `sealed: false`; `positions.length >= 1`; `drawnRects.length` matches |
+| `pdf stamp verify` against `drawnRects[0]` | `"ok"` (round-trips even with aspect-preserve shrink) |
+| `preview --auto-place all` on a 2-anchor doc | `positions.length == 2`, `drawnRects.length == 2` |
+
+---
+
+## `sign document` — one-shot DOCX|PDF → sealed PDF
+
+End-to-end: optional DOCX conversion (via `docx2pdf-cli`) → auto-detect → stamp → PAdES seal → verify → write. All intermediate state lives in a temp DB scoped to the call.
+
+```bash
+SIGN_DB_PATH=$PWD/main.db node "$SIGN" document $PWD/dates.pdf \
+  --signer "Test Signer" --signature-image $PWD/sig.png \
+  --auto-place first --out $PWD/signed.pdf | tee $PWD/doc.json | \
+  jq '.verify.chainValid, (.drawnRects | length), .converted'
+```
+
+| Step | Expected |
+|---|---|
+| PDF input | `converted: false`, `verify.chainValid: true`, `drawnRects.length >= 1`, valid PDF on disk |
+| `drawnRects[0]` through `pdf stamp verify` | `"ok"` (round-trip succeeds with aspect-preserve) |
+| Missing `--signer` flag | exit non-zero, `MISSING_FLAG` |
+| Doc with no signature anchor | exit non-zero, `AUTO_PLACE_NO_HIGH_CONFIDENCE` |
+
+DOCX path (skip if no LibreOffice/Pages/Word/Gotenberg available):
+
+```bash
+SIGN_DB_PATH=$PWD/main.db node "$SIGN" document $PWD/contract.docx \
+  --signer "Alice" --signature-image $PWD/sig.png --auto-place first \
+  --out $PWD/signed.pdf | jq '.converted, .converterBackend'
+```
+
+| Step | Expected |
+|---|---|
+| `.docx` input with a backend installed | `converted: true`, `converterBackend` populated, sealed PDF on disk |
+| `.docx` input with no backend | `DOCX_CONVERSION_FAILED` with hint pointing at `npx docx2pdf --doctor` |
+
+---
+
+## `sign profile` — named bundles
+
+```bash
+export SIGN_PROFILES_FILE=$PWD/profiles.json
+
+# Create + list + show
+node "$SIGN" profile init --name prod --provider dropbox --db ~/.sign-cli/prod.db --set-default true | jq '.ok'
+node "$SIGN" profile list | jq '.defaultProfile'
+node "$SIGN" profile show | jq '.fields.provider.value'
+
+# Credentials redacted by default
+node "$SIGN" profile set --name prod --key credentials.DROPBOX_SIGN_API_KEY \
+  --value '{{env:SOME_REAL_VAR}}'
+export SOME_REAL_VAR=secret-value
+node "$SIGN" profile show | jq '.credentials.values // empty'           # absent
+node "$SIGN" profile show --show-secrets true | jq '.credentials.values'  # revealed
+
+# Use the profile to drive a real command
+SIGN_PROFILES_FILE=$PWD/profiles.json node "$SIGN" --profile prod request list | jq '.ok'
+
+unset SIGN_PROFILES_FILE SOME_REAL_VAR
+```
+
+| Step | Expected |
+|---|---|
+| `init` + `list` + `show` lifecycle | `ok: true` at each step; `defaultProfile == "prod"` after init |
+| `show` without `--show-secrets` | `credentials.values` field absent (only `keys`) |
+| `show --show-secrets true` | `credentials.values` includes resolved value |
+| `--profile <unknown>` on any command | exit non-zero, `PROFILE_NOT_FOUND`, hint lists available names |
+| Profile references `{{env:UNSET_VAR}}` | exit non-zero, `PROFILE_ENV_VAR_UNSET` naming the missing var |
+| `sign doctor preflight` | output includes `{ name: "profile:active", status: "ok", detail: "..." }` |
+
+---
+
 ## Item 10 — trust labels
 
 The enum has 4 values, defined at `src/lib/pdf-signature.ts:128`:

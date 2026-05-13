@@ -36,6 +36,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { SIGN_PROVIDERS, type SignProvider } from "./providers.js";
+import { registerSecretKey } from "./secret.js";
 import { SignCliError } from "./sign-error.js";
 
 export const CURRENT_PROFILE_SCHEMA_VERSION = 1;
@@ -427,6 +428,11 @@ export function applyCredentialsToProcessEnv(ctx: ProfileContext): { applied: nu
   let applied = 0;
   for (const [name, value] of Object.entries(creds)) {
     process.env[name] = value;
+    // Register the name so the error-message redactor scrubs its VALUE
+    // from any subsequent error string. Without this, custom credential
+    // keys (anything beyond the 4 hardcoded provider env vars in
+    // src/lib/secret.ts) leak in stack traces and adapter logs.
+    registerSecretKey(name);
     applied += 1;
   }
   return { applied, sourceLayer: providerSource.source };

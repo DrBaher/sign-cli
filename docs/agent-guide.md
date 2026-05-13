@@ -599,6 +599,11 @@ JSON output:
   "converterBackend": "libreoffice",  // present when converted: true
   "signedAt": "2026-05-13T14:33:08.043Z",
   "placements": [{ "page": 1, "x": 140, "y": 196, "width": 140, "height": 35 }],
+  "drawnRects": [{ "page": 1, "x": 140, "y": 196, "width": 110, "height": 35 }],
+  //                       ^ actually-drawn rect after --preserve-aspect-ratio
+  //                       shrink-to-fit. Pass this through `pdf stamp verify`
+  //                       to round-trip the position; `placements` reports
+  //                       where auto-place picked, not what was drawn.
   "warnings": [],                // same quality codes as pdf stamp
   "verify": { "chainValid": true, "events": 4, "signers": 1 }
 }
