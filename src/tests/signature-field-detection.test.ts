@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { detectSignatureFields } from "../lib/signature-field-detection.js";
 import { canonicalUnsignedPdfPath } from "../lib/fixtures.js";
@@ -254,7 +254,7 @@ function runSignFlow(args: {
   tmpDir: string;
   pdfBytes: Buffer;
   signArgs: string[];
-}): { sign: ReturnType<typeof spawnSync>; requestId: string } {
+}): { sign: SpawnSyncReturns<string>; requestId: string } {
   const { tmpDir, pdfBytes, signArgs } = args;
   const dbPath = path.join(tmpDir, "s.db");
   const docPath = path.join(tmpDir, "doc.pdf");
