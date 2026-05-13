@@ -3787,6 +3787,10 @@ export function signSigningRequest(
     signatureImage?: ImageInput;
     /** Stamp options (preserve aspect ratio, auto-crop). Defaults applied at stamp time. */
     signatureImageOptions?: StampOptions;
+    /** Additional positions to stamp the same image (e.g. `--auto-place all` on
+     *  a multi-page document with multiple signature fields). The primary
+     *  rectangle is `signatureImagePosition`; these are extras. */
+    signatureImageExtraPositions?: StampPosition[];
     /** Explicit placement for the signature image; overrides any SignatureField the sender placed. */
     signatureImagePosition?: StampPosition;
     /** Render the signer name (or this override) as a visible signature using
@@ -3835,6 +3839,7 @@ export function signSigningRequest(
     signatureImage: input.signatureImage,
     signatureImagePosition: input.signatureImagePosition,
     signatureImageOptions: input.signatureImageOptions,
+    signatureImageExtraPositions: input.signatureImageExtraPositions,
     nameSignatureText: input.nameSignatureText,
   });
 

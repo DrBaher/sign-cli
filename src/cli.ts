@@ -171,6 +171,18 @@ function isCompletePosition(position: Partial<StampPosition>): position is Stamp
   );
 }
 
+function formatAutoPlaceFlag(mode: { kind: string; page?: number; index?: number }): string {
+  switch (mode.kind) {
+    case "unique": return "true";
+    case "first": return "first";
+    case "last": return "last";
+    case "all": return "all";
+    case "page": return `page:${mode.page}`;
+    case "index": return `index:${mode.index}`;
+    default: return mode.kind;
+  }
+}
+
 function parseStampOptions(args: ParsedArgs): import("./lib/pdf-image-stamp.js").StampOptions {
   // Defaults: preserve aspect ratio ON, auto-crop OFF. Reading the flag
   // explicitly (not `=== "false"`) so any non-falsy value (`yes`, `1`)
@@ -832,26 +844,45 @@ async function main(): Promise<void> {
       });
     }
 
-    // --auto-place: detect a high-confidence signature-field rectangle in the
-    // PDF and use it as the stamp position. Only consulted when (a) a visible-
-    // signature flag is set, AND (b) no explicit --image-* coords were given.
-    // Requires a unique candidate at confidence >= 0.8; otherwise errors with
-    // the full list so the caller picks explicitly. This is the safe path —
-    // the detector itself never silently picks a low-confidence rectangle.
-    const autoPlaceFlag = flagValue(parsed, "auto-place");
-    const autoPlace = autoPlaceFlag === "true" || autoPlaceFlag === "yes" || autoPlaceFlag === "1";
-    if (autoPlace) {
+    // --auto-place: detect signature-field rectangle(s) in the PDF and use
+    // them as stamp positions. Only consulted when (a) a visible-signature
+    // flag is set, AND (b) no explicit --image-* coords were given.
+    //
+    // Selectors (set via --auto-place <value>):
+    //   true | yes | 1   exactly one high-confidence (>=0.8) candidate
+    //   first            earliest page, top-of-page first
+    //   last             latest page, bottom-of-page first
+    //   all              every high-confidence candidate (multi-stamp)
+    //   page:N           the unique candidate on page N
+    //   index:N          the Nth candidate (0-indexed, confidence-sorted)
+    //
+    // The detector itself never silently picks a low-confidence rectangle.
+    const autoPlaceFlagRaw = flagValue(parsed, "auto-place");
+    let extraImagePositions: StampPosition[] = [];
+    const { parseAutoPlaceMode, selectAutoPlaceCandidates, formatAutoPlaceChoice, InvalidAutoPlaceValue } =
+      await import("./lib/auto-place-selector.js");
+    let autoPlaceMode;
+    try {
+      autoPlaceMode = parseAutoPlaceMode(autoPlaceFlagRaw);
+    } catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) {
+        throw new SignCliError({
+          code: "INVALID_AUTO_PLACE_VALUE",
+          message: err.message,
+          hint: err.hint,
+        });
+      }
+      throw err;
+    }
+    if (autoPlaceMode.kind !== "none") {
       if (!signatureImage && !nameSignatureText) {
         throw new SignCliError({
           code: "AUTO_PLACE_REQUIRES_VISIBLE_SIG",
           message: "--auto-place requires a visible-signature flag (--signature-image or --name-signature).",
-          hint: "Pass --name-signature \"Your Name\" or --signature-image <path> alongside --auto-place true.",
+          hint: "Pass --name-signature \"Your Name\" or --signature-image <path> alongside --auto-place.",
         });
       }
       if (imagePosition && isCompletePosition(imagePosition)) {
-        // Explicit coords override auto-detection — silently. We print a notice
-        // to stderr but don't error: the caller may legitimately want to pass
-        // --auto-place defensively in a script that also computes a position.
         process.stderr.write(
           "[sign] --auto-place ignored: explicit --image-page/--image-x/--image-y/--image-width/--image-height supplied.\n",
         );
@@ -859,33 +890,24 @@ async function main(): Promise<void> {
         const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
         const resource = readLocalDocumentForResource(db, requestId);
         const detection = await detectSignatureFields(resource.pdf);
-        const highConfidence = detection.candidates.filter((c) => c.confidence >= 0.8);
-        if (highConfidence.length === 0) {
+        const result = selectAutoPlaceCandidates(detection.candidates, autoPlaceMode);
+        if (!result.ok) {
           throw new SignCliError({
-            code: "AUTO_PLACE_NO_HIGH_CONFIDENCE",
-            message: `--auto-place found no high-confidence (>= 0.8) signature fields in the PDF.`,
-            hint: detection.candidates.length > 0
-              ? `Low-confidence candidates were found; pass --image-* with one of them or rerun without --auto-place.`
-              : `No AcroForm /Sig fields and no anchor text (Signature:, Sign here, etc.) detected. Pass --image-page/--image-x/--image-y/--image-width/--image-height explicitly.`,
-            details: { candidates: detection.candidates },
+            code: result.errorCode,
+            message: result.message,
+            hint: result.hint,
+            details: { candidates: result.allCandidates },
           });
         }
-        if (highConfidence.length > 1) {
-          throw new SignCliError({
-            code: "AUTO_PLACE_AMBIGUOUS",
-            message: `--auto-place found ${highConfidence.length} high-confidence candidates; refusing to pick one.`,
-            hint: `Pass --image-* explicitly with one of the rectangles below, or use \`sign pdf detect-signature-field --pdf <path>\` to inspect them first.`,
-            details: { candidates: highConfidence },
-          });
-        }
-        const chosen = highConfidence[0];
+        const [primary, ...rest] = result.chosen;
         imagePosition = {
-          page: chosen.page, x: chosen.x, y: chosen.y, width: chosen.width, height: chosen.height,
+          page: primary.page, x: primary.x, y: primary.y, width: primary.width, height: primary.height,
         };
+        extraImagePositions = rest.map((c) => ({
+          page: c.page, x: c.x, y: c.y, width: c.width, height: c.height,
+        }));
         process.stderr.write(
-          `[sign] --auto-place chose ${chosen.source} (confidence ${chosen.confidence.toFixed(2)}, ` +
-            `adjustedFrom=${chosen.adjustedFrom ?? "none"}) at page=${chosen.page} ` +
-            `x=${chosen.x.toFixed(0)} y=${chosen.y.toFixed(0)} w=${chosen.width.toFixed(0)} h=${chosen.height.toFixed(0)}\n`,
+          `[sign] --auto-place ${formatAutoPlaceFlag(autoPlaceMode)} chose ${formatAutoPlaceChoice(result.chosen)}\n`,
         );
       }
     }
@@ -913,6 +935,7 @@ async function main(): Promise<void> {
       ...(signatureImage ? { signatureImage } : {}),
       ...(nameSignatureText ? { nameSignatureText } : {}),
       ...(imagePosition && isCompletePosition(imagePosition) ? { signatureImagePosition: imagePosition } : {}),
+      ...(extraImagePositions.length > 0 ? { signatureImageExtraPositions: extraImagePositions } : {}),
       ...(signatureImage ? { signatureImageOptions: parseStampOptions(parsed) } : {}),
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
@@ -983,6 +1006,110 @@ async function main(): Promise<void> {
       process.stderr.write(`[sign] --strict-quality: ${warnings.length} quality warning(s); failing.\n`);
       process.exit(3);
     }
+    return;
+  }
+
+  if (root === "preview") {
+    // Standalone visual preview: stamp the image (or rendered name) onto the
+    // PDF using the same pipeline as `sign sign`, but WITHOUT producing a
+    // PAdES envelope or touching any signing-request state. The output is a
+    // draft PDF you can open in a viewer to confirm the placement looks
+    // right before sealing.
+    const pdfPath = flagValue(parsed, "pdf", true)!;
+    const imageFlag = flagValue(parsed, "signature-image");
+    const nameSig = flagValue(parsed, "name-signature");
+    const outPath = flagValue(parsed, "out", true)!;
+    if (!imageFlag && !nameSig) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "sign preview requires --signature-image or --name-signature.",
+        hint: "Pass --signature-image <path|data-url> or --name-signature \"Your Name\".",
+      });
+    }
+    if (imageFlag && nameSig) {
+      throw new SignCliError({
+        code: "SIGN_VISIBLE_SIG_BOTH",
+        message: "--signature-image and --name-signature are mutually exclusive.",
+        hint: "Pick one for the preview.",
+      });
+    }
+    const fs = await import("node:fs");
+    let pdfBytes: Buffer = fs.readFileSync(pdfPath);
+
+    // Resolve position(s): either explicit --image-* or --auto-place.
+    let primary = readImagePositionFlags(parsed);
+    let extras: StampPosition[] = [];
+    const autoPlaceFlagRaw = flagValue(parsed, "auto-place");
+    const { parseAutoPlaceMode, selectAutoPlaceCandidates, formatAutoPlaceChoice, InvalidAutoPlaceValue } =
+      await import("./lib/auto-place-selector.js");
+    let mode;
+    try {
+      mode = parseAutoPlaceMode(autoPlaceFlagRaw);
+    } catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) {
+        throw new SignCliError({ code: "INVALID_AUTO_PLACE_VALUE", message: err.message, hint: err.hint });
+      }
+      throw err;
+    }
+    if (mode.kind !== "none") {
+      if (primary && isCompletePosition(primary)) {
+        process.stderr.write("[sign] --auto-place ignored: explicit --image-* coords supplied.\n");
+      } else {
+        const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
+        const detection = await detectSignatureFields(pdfBytes);
+        const result = selectAutoPlaceCandidates(detection.candidates, mode);
+        if (!result.ok) {
+          throw new SignCliError({
+            code: result.errorCode,
+            message: result.message,
+            hint: result.hint,
+            details: { candidates: result.allCandidates },
+          });
+        }
+        const [first, ...rest] = result.chosen;
+        primary = { page: first.page, x: first.x, y: first.y, width: first.width, height: first.height };
+        extras = rest.map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.width, height: c.height }));
+        process.stderr.write(`[sign] preview --auto-place chose ${formatAutoPlaceChoice(result.chosen)}\n`);
+      }
+    }
+    if (!primary || !isCompletePosition(primary)) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "sign preview requires a stamp position: pass --auto-place or --image-page/--image-x/--image-y/--image-width/--image-height.",
+      });
+    }
+
+    const stampOptions = parseStampOptions(parsed);
+    const positions = [primary, ...extras];
+    for (const pos of positions) {
+      if (imageFlag) {
+        pdfBytes = await stampImageOnPdf(pdfBytes, parseImageInput(imageFlag), pos, stampOptions);
+      } else {
+        const { stampTextOnPdf } = await import("./lib/pdf-image-stamp.js");
+        pdfBytes = await stampTextOnPdf(pdfBytes, nameSig!, pos);
+      }
+    }
+    fs.writeFileSync(outPath, pdfBytes);
+
+    // Quality assessment on the final preview, summed across positions.
+    const { assessStampQuality } = await import("./lib/stamp-quality.js");
+    const allWarnings = [];
+    for (const pos of positions) {
+      const w = await assessStampQuality({
+        pdfBytes, page: pos.page, x: pos.x, y: pos.y, width: pos.width, height: pos.height,
+      });
+      allWarnings.push(...w);
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      pdf: pdfPath,
+      out: outPath,
+      positions,
+      bytes: pdfBytes.length,
+      sealed: false,
+      stampOptions,
+      warnings: allWarnings,
+    }, null, 2));
     return;
   }
 

@@ -459,7 +459,18 @@ Auto-detection of where to put a visible signature. Two related surfaces:
 
 Exit `0` when candidates were found, exit `2` when none. The JSON is emitted on stdout either way (empty `candidates` array on exit 2).
 
-**`sign sign --auto-place true`** consumes the same detection:
+**`sign sign --auto-place <selector>`** consumes the same detection. The selector value picks how to handle multi-candidate cases:
+
+| Value | Meaning |
+|---|---|
+| `true` (or `yes` / `1`) | Legacy: require a **unique** high-confidence candidate. Errors `AUTO_PLACE_AMBIGUOUS` when multiple. |
+| `first` | Earliest page, top-of-page first (highest y). |
+| `last` | Latest page, bottom-of-page first (lowest y). |
+| `all` | Multi-stamp — stamp at **every** high-confidence candidate. The same image + options are replayed at each position. |
+| `page:N` | The unique candidate on page `N`. Errors `AUTO_PLACE_PAGE_NOT_FOUND` or `AUTO_PLACE_PAGE_AMBIGUOUS`. |
+| `index:N` | The `N`-th candidate (0-indexed from the confidence-sorted list). Errors `AUTO_PLACE_INDEX_OUT_OF_RANGE`. |
+
+
 
 | Outcome | Exit | Error code | Behavior |
 |---|---|---|---|
@@ -538,6 +549,33 @@ Pass `--strict-quality true` to `sign pdf stamp` to exit non-zero (code `3`) whe
 - Default placement may overlap existing text on a pre-formatted document. The CLI does **not** auto-detect a safe rectangle — pass explicit `--image-*` coords, or have the sender place a SignatureField with `--field` at create time.
 
 Side effects: writes to the signed PDF (the same write the rest of `sign sign` does). Per-signer state: each token signs at most once, so this is **not** idempotent — use `--idempotency-key` if you need retry safety.
+
+---
+
+### 6.5a `sign preview` — draft stamp without sealing
+
+Stamps a signature image (or rendered name) onto a PDF and writes the output **without** producing a PAdES envelope. Use this to iterate on placement before committing to a sealed PDF — once the preview looks right, run `sign sign` with the same flags to produce the real signed file.
+
+```bash
+sign preview --pdf doc.pdf --signature-image sig.png \
+  --auto-place all --out preview.pdf
+```
+
+Flag surface mirrors `sign sign` for the stamping side:
+
+| Flag | Notes |
+|---|---|
+| `--pdf` | Source PDF (required) |
+| `--out` | Output preview PDF path (required) |
+| `--signature-image` *or* `--name-signature` | One of them required; mutually exclusive |
+| `--auto-place <selector>` | Same selectors as `sign sign --auto-place` (true / first / last / all / page:N / index:N) |
+| `--image-page/--image-x/--image-y/--image-width/--image-height` | Explicit position, overrides `--auto-place` |
+| `--preserve-aspect-ratio` | Default `true` |
+| `--signature-image-auto-crop` | Default `false`; PNG-only auto-crop |
+
+Output JSON declares `sealed: false` and lists every `position` that received a stamp (one entry per stamp; `--auto-place all` produces multiple). Quality warnings (`STAMP_OFF_PAGE`, `STAMP_OUTSIZED_VS_TEXT`, etc.) are surfaced the same way they are on `pdf stamp`.
+
+Side effects: writes the output PDF. **No** DB interaction, **no** request state mutation, **no** audit-chain events. Safe to run repeatedly against the same source.
 
 ---
 
