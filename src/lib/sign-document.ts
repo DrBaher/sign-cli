@@ -78,7 +78,15 @@ export type SignDocumentResult = {
   converted: boolean;
   converterBackend?: string;
   signedAt: string;
+  /** Candidate rectangles selected by --auto-place (or supplied explicitly). */
   placements: StampPosition[];
+  /**
+   * Actually-drawn rectangles inside the sealed PDF, parsed back from its
+   * content streams. With --preserve-aspect-ratio true (default), these are
+   * SMALLER than `placements` because the stamp shrinks-to-fit. Pass one of
+   * these into `pdf stamp verify --image-*` to round-trip-verify position.
+   */
+  drawnRects: StampPosition[];
   warnings: QualityWarning[];
   verify: {
     chainValid: boolean;
@@ -199,11 +207,26 @@ export async function signDocumentOneShot(input: SignDocumentInput): Promise<Sig
     });
     copyFileSync(finalIntermediate, input.outPath);
 
-    // ── 6. Verify (audit chain + structural quality on the sealed PDF) ──
+    // ── 6. Verify (audit chain + structural quality + drawn-rect probe) ─
     const verify = verifyRequestAuditChain(db, created.requestId);
     const finalBytes = readFileSync(input.outPath);
     const allWarnings: QualityWarning[] = [];
+    // Resolve the ACTUALLY-drawn rectangles by inspecting the sealed PDF's
+    // content streams. With --preserve-aspect-ratio true (the default),
+    // the drawn rect is smaller than the candidate rect — `placements`
+    // reports the candidate (where auto-place picked) but `drawnRects`
+    // reports what `pdf stamp verify` would compare against.
+    const { verifyPdfStamp } = await import("./pdf-stamp-verify.js");
+    const drawnRects: StampPosition[] = [];
     for (const pos of [primary, ...extras]) {
+      const probe = await verifyPdfStamp(finalBytes, pos);
+      const actual = probe.found ?? null;
+      if (actual) {
+        drawnRects.push({
+          page: actual.page, x: actual.x, y: actual.y,
+          width: actual.width, height: actual.height,
+        });
+      }
       const w = await assessStampQuality({
         pdfBytes: finalBytes,
         page: pos.page, x: pos.x, y: pos.y, width: pos.width, height: pos.height,
@@ -220,6 +243,7 @@ export async function signDocumentOneShot(input: SignDocumentInput): Promise<Sig
       converterBackend,
       signedAt: signed.signedAt,
       placements: [primary, ...extras],
+      drawnRects,
       warnings: allWarnings,
       verify: {
         chainValid: verify.valid,

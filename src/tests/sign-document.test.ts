@@ -181,6 +181,62 @@ test("CLI: sign document with --auto-place but no anchors → AUTO_PLACE_NO_HIGH
   }
 });
 
+// ─── Regression: drawnRects round-trips through pdf stamp verify ────────
+
+test("CLI: sign document drawnRects round-trips through pdf stamp verify", async () => {
+  // Catches the regression where `placements` (candidate rect) was the only
+  // rect reported, but the actually-drawn rect is smaller when
+  // --preserve-aspect-ratio is true (the default). Verifying `placements`
+  // against the stamp would error wrong_position; verifying `drawnRects`
+  // succeeds.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "sign-doc-drawn-"));
+  try {
+    const inputPath = path.join(tmp, "in.pdf");
+    const sigPath = path.join(tmp, "sig.png");
+    const outPath = path.join(tmp, "signed.pdf");
+    writeFileSync(inputPath, await buildAnchorPdf());
+    // Build a sig with an aspect that doesn't match the box (forces shrink-
+    // to-fit). Anchor underline is ~147pt wide; image is 200×80, aspect 2.5.
+    const pixels = new Uint8Array(200 * 80 * 4);
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 0; pixels[i + 1] = 0; pixels[i + 2] = 200; pixels[i + 3] = 255;
+    }
+    writeFileSync(sigPath, encodePng({ width: 200, height: 80, channels: 4, pixels }));
+
+    const r = runDocument([
+      inputPath,
+      "--signer", "Alice",
+      "--signature-image", sigPath,
+      "--auto-place", "first",
+      "--out", outPath,
+    ]);
+    assert.equal(r.status, 0, `stderr=${r.stderr}`);
+    const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
+
+    assert.equal(payload.placements.length, 1);
+    assert.equal(payload.drawnRects.length, 1);
+    assert.ok(
+      payload.drawnRects[0].width < payload.placements[0].width,
+      `expected drawnRect.width (${payload.drawnRects[0].width}) < placement.width (${payload.placements[0].width}) when preserveAspectRatio=true`,
+    );
+
+    // Round-trip: pdf stamp verify against drawnRects[0] → verdict=ok
+    const d = payload.drawnRects[0];
+    const verify = spawnSync("node", [CLI, "pdf", "stamp", "verify", "--pdf", outPath,
+      "--image-page", String(d.page),
+      "--image-x", String(d.x),
+      "--image-y", String(d.y),
+      "--image-width", String(d.width),
+      "--image-height", String(d.height),
+    ], { encoding: "utf8" });
+    const verifyJson = JSON.parse(verify.stdout.slice(verify.stdout.indexOf("{")));
+    assert.equal(verifyJson.verdict, "ok",
+      `drawnRects should round-trip through stamp verify; got ${verifyJson.verdict}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ─── DOCX → ensure we DON'T import docx2pdf-cli's logic ──────────────────
 
 test("docx2pdf-convert: re-exports a thin convert function; no own conversion logic", async () => {
