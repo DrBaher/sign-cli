@@ -890,7 +890,11 @@ async function main(): Promise<void> {
         const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
         const resource = readLocalDocumentForResource(db, requestId);
         const detection = await detectSignatureFields(resource.pdf);
-        const result = selectAutoPlaceCandidates(detection.candidates, autoPlaceMode);
+        // `sign sign --auto-place` is signature-category only. Date anchors
+        // belong to `sign pdf stamp-text` instead. Filtering here keeps a
+        // PDF with both Signature: and Date: anchors from breaking existing
+        // flows with AUTO_PLACE_AMBIGUOUS.
+        const result = selectAutoPlaceCandidates(detection.signatureCandidates, autoPlaceMode);
         if (!result.ok) {
           throw new SignCliError({
             code: result.errorCode,
@@ -1057,7 +1061,10 @@ async function main(): Promise<void> {
       } else {
         const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
         const detection = await detectSignatureFields(pdfBytes);
-        const result = selectAutoPlaceCandidates(detection.candidates, mode);
+        // `sign preview` is a draft of the signature stamp — uses signature
+        // candidates only. For preview of date stamps, use `sign pdf
+        // stamp-text` (which writes the stamp directly; preview is implicit).
+        const result = selectAutoPlaceCandidates(detection.signatureCandidates, mode);
         if (!result.ok) {
           throw new SignCliError({
             code: result.errorCode,
@@ -1114,6 +1121,9 @@ async function main(): Promise<void> {
   }
 
   if (root === "pdf" && sub === "detect-signature-field") {
+    // Backward-compat: returns only signature candidates. Date candidates
+    // (added in the date-handling feature) live under `sign pdf
+    // detect-date-field`.
     const pdfPath = flagValue(parsed, "pdf", true)!;
     const verboseFlag = flagValue(parsed, "verbose");
     const verbose = verboseFlag === "true" || verboseFlag === "yes" || verboseFlag === "1";
@@ -1121,12 +1131,133 @@ async function main(): Promise<void> {
     const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
     const pdfBytes = fs.readFileSync(pdfPath);
     const result = await detectSignatureFields(pdfBytes, { verbose });
-    const payload = { ok: true, pdf: pdfPath, ...result };
+    // Project the response down to signature candidates so existing scripts
+    // continue to see only the rectangles relevant to stamping a signature.
+    const payload = {
+      ok: true,
+      pdf: pdfPath,
+      pageCount: result.pageCount,
+      acroFormFields: result.acroFormFields,
+      anchorMatches: result.signatureCandidates.length,
+      candidates: result.signatureCandidates,
+      ...(verbose ? { textItemsByPage: result.textItemsByPage, pageDimensions: result.pageDimensions } : {}),
+    };
     console.log(JSON.stringify(payload, null, 2));
-    // Exit 2 when no candidates were found so scripts can branch without
-    // parsing JSON. The command itself succeeded; the PDF just has no
-    // detectable signature fields.
-    if (result.candidates.length === 0) process.exit(2);
+    if (payload.candidates.length === 0) process.exit(2);
+    return;
+  }
+
+  if (root === "pdf" && sub === "detect-date-field") {
+    // Mirror of detect-signature-field, but for date anchors (Date:, Date de
+    // signature:, Date d'effet:, etc.). Each candidate carries
+    // `alreadyFilled: true` when a recognisable date string is already
+    // present near the anchor — callers stamping a date can skip those.
+    const pdfPath = flagValue(parsed, "pdf", true)!;
+    const verboseFlag = flagValue(parsed, "verbose");
+    const verbose = verboseFlag === "true" || verboseFlag === "yes" || verboseFlag === "1";
+    const fs = await import("node:fs");
+    const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
+    const pdfBytes = fs.readFileSync(pdfPath);
+    const result = await detectSignatureFields(pdfBytes, { verbose });
+    const payload = {
+      ok: true,
+      pdf: pdfPath,
+      pageCount: result.pageCount,
+      anchorMatches: result.dateCandidates.length,
+      candidates: result.dateCandidates,
+      ...(verbose ? { textItemsByPage: result.textItemsByPage, pageDimensions: result.pageDimensions } : {}),
+    };
+    console.log(JSON.stringify(payload, null, 2));
+    if (payload.candidates.length === 0) process.exit(2);
+    return;
+  }
+
+  if (root === "pdf" && sub === "stamp-text") {
+    // Stamp a text string (e.g. a date) onto a PDF. Mirrors `pdf stamp` for
+    // images but uses Helvetica regular without italic/underline. Supports
+    // --auto-place to fill detected DATE anchors (sign sign --auto-place
+    // covers SIGNATURE anchors). By default, candidates where a date is
+    // already filled in nearby are skipped — pass `--overwrite-filled true`
+    // to ignore that protection.
+    const pdfPath = flagValue(parsed, "pdf", true)!;
+    const text = flagValue(parsed, "text", true)!;
+    const outPath = flagValue(parsed, "out", true)!;
+    const fs = await import("node:fs");
+    let pdfBytes: Buffer = fs.readFileSync(pdfPath);
+
+    let primary = readImagePositionFlags(parsed);
+    let extras: StampPosition[] = [];
+    const autoPlaceFlagRaw = flagValue(parsed, "auto-place");
+    const overwriteFilledRaw = flagValue(parsed, "overwrite-filled");
+    const overwriteFilled = overwriteFilledRaw === "true" || overwriteFilledRaw === "yes" || overwriteFilledRaw === "1";
+    const { parseAutoPlaceMode, selectAutoPlaceCandidates, formatAutoPlaceChoice, InvalidAutoPlaceValue } =
+      await import("./lib/auto-place-selector.js");
+    let mode;
+    try {
+      mode = parseAutoPlaceMode(autoPlaceFlagRaw);
+    } catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) {
+        throw new SignCliError({ code: "INVALID_AUTO_PLACE_VALUE", message: err.message, hint: err.hint });
+      }
+      throw err;
+    }
+    if (mode.kind !== "none") {
+      if (primary && isCompletePosition(primary)) {
+        process.stderr.write("[sign] --auto-place ignored: explicit --image-* coords supplied.\n");
+      } else {
+        const { detectSignatureFields } = await import("./lib/signature-field-detection.js");
+        const detection = await detectSignatureFields(pdfBytes);
+        // Filter to DATE candidates. Default: skip alreadyFilled. Caller
+        // can opt back in with --overwrite-filled true.
+        const datePool = overwriteFilled
+          ? detection.dateCandidates
+          : detection.dateCandidates.filter((c) => !c.alreadyFilled);
+        const result = selectAutoPlaceCandidates(datePool, mode);
+        if (!result.ok) {
+          // When the date pool is empty BECAUSE alreadyFilled candidates
+          // were filtered out, point the user at --overwrite-filled rather
+          // than the generic AUTO_PLACE_NO_HIGH_CONFIDENCE hint about
+          // missing anchors.
+          const skippedFilled =
+            !overwriteFilled &&
+            datePool.length === 0 &&
+            detection.dateCandidates.some((c) => c.alreadyFilled);
+          throw new SignCliError({
+            code: result.errorCode,
+            message: result.message,
+            hint: skippedFilled
+              ? `${detection.dateCandidates.filter((c) => c.alreadyFilled).length} date candidate(s) were skipped because a date string appears already filled in nearby. Pass --overwrite-filled true to include them, or pass --image-* explicitly with one of the rectangles in details.allDateCandidates.`
+              : result.hint,
+            details: { candidates: datePool, allDateCandidates: detection.dateCandidates },
+          });
+        }
+        const [first, ...rest] = result.chosen;
+        primary = { page: first.page, x: first.x, y: first.y, width: first.width, height: first.height };
+        extras = rest.map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.width, height: c.height }));
+        process.stderr.write(`[sign] stamp-text --auto-place chose ${formatAutoPlaceChoice(result.chosen)}\n`);
+      }
+    }
+    if (!primary || !isCompletePosition(primary)) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "sign pdf stamp-text requires a position: --auto-place or --image-page/--image-x/--image-y/--image-width/--image-height.",
+      });
+    }
+
+    const { stampPlainTextOnPdf } = await import("./lib/pdf-image-stamp.js");
+    const positions = [primary, ...extras];
+    for (const pos of positions) {
+      pdfBytes = await stampPlainTextOnPdf(pdfBytes, text, pos);
+    }
+    fs.writeFileSync(outPath, pdfBytes);
+    console.log(JSON.stringify({
+      ok: true,
+      pdf: pdfPath,
+      out: outPath,
+      text,
+      positions,
+      bytes: pdfBytes.length,
+    }, null, 2));
     return;
   }
 
