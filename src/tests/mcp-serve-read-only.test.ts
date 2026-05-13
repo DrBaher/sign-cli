@@ -3,8 +3,71 @@ import assert from "node:assert/strict";
 import { dispatchMcp, READ_ONLY_BLOCKED_TOOLS } from "../lib/mcp-server.js";
 import { createDb, makeTempDb } from "./helpers.js";
 
-test("READ_ONLY_BLOCKED_TOOLS covers sign + signer_decline (the MCP-facing mutating tools)", () => {
-  assert.deepEqual([...READ_ONLY_BLOCKED_TOOLS].sort(), ["sign", "signer_decline"]);
+test("READ_ONLY_BLOCKED_TOOLS covers every MCP-facing mutating tool", () => {
+  assert.deepEqual(
+    [...READ_ONLY_BLOCKED_TOOLS].sort(),
+    ["document", "pdf_stamp_text", "preview", "sign", "signer_decline"],
+  );
+});
+
+test("dispatchMcp tools/call refuses pdf_stamp_text in read-only mode", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  try {
+    const result = await dispatchMcp({
+      method: "tools/call",
+      params: { name: "pdf_stamp_text", arguments: { pdf_path: "x.pdf", text: "x", out_path: "o.pdf" } },
+      db,
+      readOnly: true,
+    });
+    const value = result.kind === "result" ? result.value as { content: Array<{ text: string }>; isError: boolean } : null;
+    assert.equal(value!.isError, true);
+    const env = JSON.parse(value!.content[0].text);
+    assert.equal(env.error.code, "FORBIDDEN_READ_ONLY");
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
+
+test("dispatchMcp tools/call refuses preview in read-only mode", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  try {
+    const result = await dispatchMcp({
+      method: "tools/call",
+      params: { name: "preview", arguments: { pdf_path: "x.pdf", out_path: "o.pdf" } },
+      db,
+      readOnly: true,
+    });
+    const value = result.kind === "result" ? result.value as { content: Array<{ text: string }>; isError: boolean } : null;
+    assert.equal(value!.isError, true);
+    const env = JSON.parse(value!.content[0].text);
+    assert.equal(env.error.code, "FORBIDDEN_READ_ONLY");
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
+
+test("dispatchMcp tools/call refuses document in read-only mode", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  try {
+    const result = await dispatchMcp({
+      method: "tools/call",
+      params: { name: "document", arguments: { input_path: "x.docx", out_path: "o.pdf", signer_name: "Alice" } },
+      db,
+      readOnly: true,
+    });
+    const value = result.kind === "result" ? result.value as { content: Array<{ text: string }>; isError: boolean } : null;
+    assert.equal(value!.isError, true);
+    const env = JSON.parse(value!.content[0].text);
+    assert.equal(env.error.code, "FORBIDDEN_READ_ONLY");
+  } finally {
+    db.close();
+    cleanup();
+  }
 });
 
 test("dispatchMcp tools/call refuses sign in read-only mode with FORBIDDEN_READ_ONLY", async () => {

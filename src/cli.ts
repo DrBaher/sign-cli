@@ -27,7 +27,7 @@ import {
 } from "./lib/help-catalog.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
 import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio } from "./lib/mcp-server.js";
-import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateOutputPath, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
+import { validateBulkRowCount, validateConfigPath, validateDocumentPath, validateEmail, validateFieldCount, validateOutputPath, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import {
   resolveSignProvider,
   resolveSignProviderWithSource,
@@ -1178,7 +1178,14 @@ async function main(): Promise<void> {
 
       const values: import("./lib/profiles.js").ProfileV1 = { version: 1 };
       if (provider) values.provider = provider as never;
-      if (dbPathFlag) values.dbPath = dbPathFlag;
+      if (dbPathFlag) {
+        // Validate the dbPath at config-write time so a malicious or
+        // typo'd path doesn't get baked into the profile file. Allows
+        // home-relative paths (~/...) without the absolute-docs opt-in,
+        // since `~/.sign-cli/prod.db` is the documented example.
+        values.dbPath = dbPathFlag;
+        validateConfigPath(dbPathFlag);
+      }
       if (strictFlag === "true") values.strictProvider = true;
       else if (strictFlag === "false") values.strictProvider = false;
       if (tokenTtl !== undefined) values.defaultTokenTtlMinutes = Number(tokenTtl);

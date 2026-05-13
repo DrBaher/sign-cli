@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { applyPendingMigrations } from "./migrations.js";
+import { SignCliError } from "./sign-error.js";
 
 export type SqliteDb = DatabaseSync;
 
@@ -12,7 +13,30 @@ function hasColumn(db: SqliteDb, tableName: string, columnName: string): boolean
 
 export function openDatabase(dbPath: string): SqliteDb {
   const resolved = path.resolve(dbPath);
-  mkdirSync(path.dirname(resolved), { recursive: true });
+  const parentDir = path.dirname(resolved);
+  try {
+    mkdirSync(parentDir, { recursive: true });
+  } catch (err) {
+    // Wrap filesystem permission errors into a structured SignCliError so
+    // callers get a stable code + hint instead of a raw Node.js stack.
+    // Common failure modes:
+    //   EACCES — parent dir not writable
+    //   EROFS  — read-only filesystem (e.g. mounted CD/initramfs)
+    //   ENOENT — parent of parent is missing AND recursive:true couldn't
+    //            help (rare; e.g. on /dev/null)
+    const e = err as { code?: string; message?: string };
+    if (e.code === "EACCES" || e.code === "EROFS" || e.code === "EPERM") {
+      throw new SignCliError({
+        code: "STORAGE_UNWRITABLE",
+        message: `Cannot create database directory ${parentDir}: ${e.message ?? e.code}`,
+        hint:
+          `Either chmod/chown the parent directory so the current user can write to it, ` +
+          `set SIGN_DB_PATH to a writable location (e.g. /tmp/sign.db or ~/.sign-cli/main.db), ` +
+          `or pick a profile whose dbPath points somewhere writable.`,
+      });
+    }
+    throw err; // Other failures (ENOENT on a truly broken path, etc.) bubble up.
+  }
   const db = new DatabaseSync(resolved);
   try {
     db.exec("PRAGMA journal_mode = WAL;");

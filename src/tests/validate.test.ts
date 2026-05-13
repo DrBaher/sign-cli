@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   validateBulkRowCount,
+  validateConfigPath,
   validateDocumentPath,
   validateEmail,
   validateFieldCount,
@@ -89,6 +90,71 @@ test("validateDocumentPath enforces SIGN_MAX_DOCUMENT_BYTES", () => {
     validateDocumentPath("big.pdf", { cwd: dir, maxBytes: 4096 });
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateConfigPath: expands ~ and ~/ under $HOME", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vcp-home-"));
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "vcp-cwd-"));
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  try {
+    assert.equal(validateConfigPath("~", { home, cwd }), path.resolve(home));
+    assert.equal(validateConfigPath("~/.sign-cli/prod.db", { home, cwd }), path.resolve(home, ".sign-cli/prod.db"));
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("validateConfigPath: relative paths resolve under cwd without opt-in", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vcp-home2-"));
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "vcp-cwd2-"));
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  try {
+    assert.equal(validateConfigPath("project.db", { home, cwd }), path.resolve(cwd, "project.db"));
+    assert.equal(validateConfigPath("./data/x.db", { home, cwd }), path.resolve(cwd, "data/x.db"));
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("validateConfigPath: rejects paths outside both $HOME and cwd without SIGN_ALLOW_ABSOLUTE_DOCS", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vcp-home3-"));
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "vcp-cwd3-"));
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  try {
+    assert.throws(
+      () => validateConfigPath("/etc/sign.db", { home, cwd }),
+      /outside both \$HOME .* and CWD/,
+    );
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("validateConfigPath: SIGN_ALLOW_ABSOLUTE_DOCS=1 opts in to arbitrary absolute paths", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vcp-home4-"));
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "vcp-cwd4-"));
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  process.env.SIGN_ALLOW_ABSOLUTE_DOCS = "1";
+  try {
+    assert.equal(validateConfigPath("/etc/sign.db", { home, cwd }), "/etc/sign.db");
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 
