@@ -10,6 +10,24 @@ import { initWasm, Resvg } from "@resvg/resvg-wasm";
 
 export type ImageMime = "image/png" | "image/jpeg" | "image/svg+xml";
 
+export type StampOptions = {
+  /**
+   * Preserve the image's natural aspect ratio when stamping. Default: true.
+   * When true, the image is shrunk to fit inside `position` (top-left aligned)
+   * so it's never stretched. Set to false to restore legacy stretch-to-fill
+   * behavior — only useful for callers that intentionally want to fill the
+   * rectangle exactly (rare; agents almost always want the default).
+   */
+  preserveAspectRatio?: boolean;
+  /**
+   * Auto-crop PNG images before stamping. Default: false. Trims the
+   * white/transparent margin around the ink, and (by default) replaces
+   * near-white opaque pixels with transparent ones so a scan-on-paper
+   * signature composes cleanly over a PDF page. PNG only — no-op on JPG/SVG.
+   */
+  autoCrop?: boolean;
+};
+
 export type StampPosition = {
   /** 1-indexed page number. */
   page: number;
@@ -177,6 +195,7 @@ export async function stampImageOnPdf(
   pdfBytes: Buffer,
   image: ImageInput,
   position: StampPosition,
+  options: StampOptions = {},
 ): Promise<Buffer> {
   if (position.page < 1) {
     throw new Error(`stampImageOnPdf: page is 1-indexed; got ${position.page}`);
@@ -186,9 +205,20 @@ export async function stampImageOnPdf(
       `stampImageOnPdf: width and height must be > 0 (got ${position.width} x ${position.height})`,
     );
   }
-  const { bytes, mime } = await loadImageBytes(image, position.width);
+  let { bytes, mime } = await loadImageBytes(image, position.width);
   if (bytes.length === 0) {
     throw new Error(`stampImageOnPdf: image is empty`);
+  }
+
+  // Auto-crop: trim white/transparent margins around the ink and (by default)
+  // key out near-white opaque pixels so a scan-on-white-paper signature
+  // composes cleanly. PNG only — JPG/SVG would need a different code path
+  // and are out of scope for v1 (callers get a no-op + warning via the
+  // returned `appliedAutoCrop` flag-equivalent behavior at the CLI layer).
+  if (options.autoCrop && mime === "image/png") {
+    const { autoCropPngBytes } = await import("./png-bounds.js");
+    const cropped = autoCropPngBytes(bytes);
+    if (cropped) bytes = cropped;
   }
 
   const pdf = await PDFDocument.load(pdfBytes);
@@ -205,12 +235,29 @@ export async function stampImageOnPdf(
       ? await pdf.embedPng(bytes)
       : await pdf.embedJpg(bytes);
 
-  page.drawImage(embedded, {
-    x: position.x,
-    y: position.y,
-    width: position.width,
-    height: position.height,
-  });
+  // Preserve aspect ratio by default: shrink the image to fit inside the
+  // requested rectangle, top-left aligned. Setting preserveAspectRatio:false
+  // restores the legacy behavior (stretch to fill the rect) — only used by
+  // callers that have explicitly opted out, e.g. for backwards compat.
+  const preserve = options.preserveAspectRatio ?? true;
+  let drawX = position.x;
+  let drawY = position.y;
+  let drawW = position.width;
+  let drawH = position.height;
+  if (preserve && embedded.width > 0 && embedded.height > 0) {
+    const scale = Math.min(
+      position.width / embedded.width,
+      position.height / embedded.height,
+    );
+    drawW = embedded.width * scale;
+    drawH = embedded.height * scale;
+    // Top-left align: x stays at position.x, y rises so the image's TOP edge
+    // is at position.y + position.height.
+    drawX = position.x;
+    drawY = position.y + position.height - drawH;
+  }
+
+  page.drawImage(embedded, { x: drawX, y: drawY, width: drawW, height: drawH });
 
   const saved = await pdf.save({ useObjectStreams: false });
   return Buffer.from(saved);

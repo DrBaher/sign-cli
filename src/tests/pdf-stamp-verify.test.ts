@@ -13,7 +13,10 @@ const TINY_IMAGE = parseImageInput(TINY_PNG_DATA_URL);
 
 async function stampedFixture(position = { page: 1, x: 100, y: 200, width: 150, height: 60 }): Promise<Buffer> {
   const pdf = readFileSync(canonicalUnsignedPdfPath());
-  return stampImageOnPdf(pdf, TINY_IMAGE, position);
+  // Opt out of the new aspect-ratio default — these tests verify the verifier
+  // (round-trip the stamped rect at the EXACT requested coords). A 1×1 PNG
+  // shrunk to fit would be drawn at 60×60 instead of 150×60.
+  return stampImageOnPdf(pdf, TINY_IMAGE, position, { preserveAspectRatio: false });
 }
 
 test("stampVerifyExitCode: ok→0, wrong_position→3, missing→4", () => {
@@ -81,7 +84,9 @@ test("verifyPdfStamp: invalid page index (zero or negative) → throws", async (
 test("verifyPdfStamp: multi-stamp PDF — verify finds the matching one even with other stamps present", async () => {
   // Stamp once at (100, 200), then re-stamp the result at (300, 400).
   const once = await stampedFixture({ page: 1, x: 100, y: 200, width: 150, height: 60 });
-  const twice = await stampImageOnPdf(once, TINY_IMAGE, { page: 1, x: 300, y: 400, width: 80, height: 40 });
+  // Same aspect-ratio opt-out as stampedFixture — we want the verifier to see
+  // the EXACT 80×40 rectangle we passed.
+  const twice = await stampImageOnPdf(once, TINY_IMAGE, { page: 1, x: 300, y: 400, width: 80, height: 40 }, { preserveAspectRatio: false });
   const r1 = await verifyPdfStamp(twice, { page: 1, x: 100, y: 200, width: 150, height: 60 });
   const r2 = await verifyPdfStamp(twice, { page: 1, x: 300, y: 400, width: 80, height: 40 });
   assert.equal(r1.verdict, "ok");

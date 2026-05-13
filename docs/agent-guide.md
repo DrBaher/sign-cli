@@ -515,6 +515,22 @@ If neither resolves a position and a visible-signature flag was passed, the comm
 
 Mutual exclusion: passing **both** `--signature-image` and `--name-signature` errors with `code: "SIGN_VISIBLE_SIG_BOTH"`. Pick one.
 
+**Aspect ratio & auto-crop** (PR A):
+
+- `--preserve-aspect-ratio` (default `true`) shrinks the image to fit inside the rectangle (top-left aligned) so it's never stretched. Pass `false` to restore the legacy stretch-to-fill behavior.
+- `--signature-image-auto-crop true` (PNG only) trims white/transparent margins around the ink and replaces near-white opaque pixels with transparent ones — removes the white-rectangle-around-signature look from scanned-on-paper signature photos. Silent no-op on JPG/SVG or unsupported PNG subsets (16-bit, interlaced, palette).
+
+**Quality warnings**: every visible-signature flow (`sign sign --signature-image`, `sign pdf stamp`) emits a `warnings` array with these codes when they apply:
+
+| Code | When |
+|---|---|
+| `STAMP_OFF_PAGE` | Rectangle extends past page bounds (severity: `error`) |
+| `STAMP_OUTSIZED_VS_TEXT` | Stamp height > 5× the median body-text line height on the page |
+| `STAMP_OVERLAPS_TEXT` | Stamp rectangle intersects one or more text bboxes |
+| `ASPECT_RATIO_DISTORTED` | Drawn aspect differs from the image's natural aspect by >5% — only fires when `--preserve-aspect-ratio false` was used |
+
+Pass `--strict-quality true` to `sign pdf stamp` to exit non-zero (code `3`) when any warning fires. Default is advisory: warnings appear in the JSON output and the command still exits `0`.
+
 **Important caveats**:
 
 - Neither produces a "cursive forged-handwriting" look. `--name-signature` renders in italic Helvetica — recognizable as a signature stamp, not a forgery of someone's hand. For a real cursive look, prepare an SVG/PNG of the signature and pass it via `--signature-image`.

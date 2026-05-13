@@ -59,7 +59,7 @@ import {
   parseFieldSpec,
   type SignatureField,
 } from "./field-placement.js";
-import type { ImageInput, StampPosition } from "./pdf-image-stamp.js";
+import type { ImageInput, StampOptions, StampPosition } from "./pdf-image-stamp.js";
 import {
   cancelLocalDocument,
   checkLocalAccount,
@@ -3785,6 +3785,8 @@ export function signSigningRequest(
     strictProvider?: boolean;
     /** Visible signature image to stamp on the PDF before PAdES sealing (local provider only). */
     signatureImage?: ImageInput;
+    /** Stamp options (preserve aspect ratio, auto-crop). Defaults applied at stamp time. */
+    signatureImageOptions?: StampOptions;
     /** Explicit placement for the signature image; overrides any SignatureField the sender placed. */
     signatureImagePosition?: StampPosition;
     /** Render the signer name (or this override) as a visible signature using
@@ -3832,6 +3834,7 @@ export function signSigningRequest(
     now,
     signatureImage: input.signatureImage,
     signatureImagePosition: input.signatureImagePosition,
+    signatureImageOptions: input.signatureImageOptions,
     nameSignatureText: input.nameSignatureText,
   });
 

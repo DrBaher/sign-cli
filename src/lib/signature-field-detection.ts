@@ -190,6 +190,17 @@ type PageContent = {
   height: number;
 };
 
+/**
+ * Extract pdfjs text items for a single page (1-indexed). Exported helper
+ * for consumers that need text positions for quality checks etc. — keeps
+ * the pdfjs import surface centralized in this module.
+ */
+export async function extractPageTextItems(pdfBytes: Buffer, page: number): Promise<TextItem[]> {
+  const all = await extractTextItemsByPage(pdfBytes);
+  if (page < 1 || page > all.length) return [];
+  return all[page - 1].items;
+}
+
 async function extractTextItemsByPage(pdfBytes: Buffer): Promise<PageContent[]> {
   // pdfjs uses CommonJS-style import; the `legacy/build/pdf.mjs` entry point
   // works under node's native ESM resolution.
