@@ -491,6 +491,57 @@ SIGN_DB_PATH=$PWD/db/s.db node "$SIGN" sign --request-id "$REQ" --token "$TOK" -
   grep AUTO_PLACE_REQUIRES_VISIBLE_SIG
 ```
 
+### `below-anchor-probe` — French/European layout (label alone on its line)
+
+The right-side strategies (`underline-snap`, `whitespace-probe`) only handle the English convention `"Signature: ____"`. For documents where the anchor is **alone on its line** with the signing area **below** it (common in French legal templates), the detector falls back to `below-anchor-probe` (confidence `0.85`).
+
+```bash
+cd "$TEST" && rm -rf db && mkdir -p db
+
+# Generate a French-style layout: anchor alone on its line, space below
+node -e "
+import('pdf-lib').then(async p => {
+  const { writeFileSync } = await import('node:fs');
+  const d = await p.PDFDocument.create();
+  const pg = d.addPage([612, 792]);
+  const f = await d.embedFont(p.StandardFonts.Helvetica);
+  pg.drawText('A Vienne (Autriche)', { x: 72, y: 250, font: f, size: 12 });
+  pg.drawText('Le 12 mai 2026',      { x: 72, y: 235, font: f, size: 12 });
+  pg.drawText('Signature',           { x: 72, y: 220, font: f, size: 12 });
+  // empty signing area y ∈ [110, 215]
+  pg.drawText('Footer text below',   { x: 72, y: 100, font: f, size: 12 });
+  writeFileSync('$PWD/attestation.pdf', Buffer.from(await d.save()));
+});"
+
+# Detect: should find one below-anchor-probe candidate at 0.85
+node "$SIGN" pdf detect-signature-field --pdf $PWD/attestation.pdf 2>&1 | \
+  jq -r '.candidates[] | "\(.source) confidence=\(.confidence) adjustedFrom=\(.adjustedFrom) rect=\(.x|tonumber|floor),\(.y|tonumber|floor),\(.width|tonumber|floor),\(.height|tonumber|floor)"'
+```
+
+| Step | Expected exit | Expected output |
+|---|---|---|
+| Detect on attestation-style PDF | `0` | `anchor:Signature: confidence=0.85 adjustedFrom=below-anchor-probe rect=72,164,180,50` |
+| Sign with `--auto-place true` | `0` | stderr: `[sign] --auto-place chose anchor:Signature: (confidence 0.85, adjustedFrom=below-anchor-probe) at page=1 x=72 y=164 w=180 h=50` |
+
+### `--verbose true` — diagnose zero-candidate outcomes
+
+When detection returns `candidates: []` and you can't tell why, `--verbose true` dumps the raw pdfjs-extracted text items per page (under `textItemsByPage`) plus page dimensions (under `pageDimensions`). Three failure modes can be distinguished from the output:
+
+1. **Missing anchor pattern** — text items contain the would-be anchor (e.g., `"Sign:"`, `"By:"`) but it doesn't match any of `ANCHOR_PATTERNS`. Fix: add a pattern.
+2. **Embedded font without ToUnicode** — text items have empty `text` fields or garbage glyph indices. Fix: convert the PDF to use Standard 14 fonts, or live with the gap.
+3. **Signature line drawn as path operators** — no text items appear near where the visible signature line is. pdfjs's `getTextContent` doesn't see PDF line operators (`m`/`l`). Fix: requires content-stream parsing (not implemented).
+
+```bash
+# Run detection on a PDF that returned candidates: [] and inspect what pdfjs saw
+node "$SIGN" pdf detect-signature-field --pdf $PWD/mystery.pdf --verbose true 2>&1 | \
+  jq '{pageDimensions, textItemsByPage: .textItemsByPage[0][:10]}'   # first 10 items, page 1
+```
+
+| Step | Expected output |
+|---|---|
+| `--verbose true` | JSON output adds `textItemsByPage: [[ { text, x, y, width, height, page }, ... ]]` and `pageDimensions: [{ width, height }, ...]` |
+| Without `--verbose` | Output omits both fields (default keeps the response compact) |
+
 ---
 
 ## `sign sign --name-signature` — render name as visible text
