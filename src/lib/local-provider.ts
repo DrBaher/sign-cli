@@ -59,6 +59,10 @@ type LocalDocumentRecord = {
     imagePath?: string;
     /** Where the image should be drawn before PAdES sealing. */
     imagePosition?: StampPosition;
+    /** Additional positions to stamp the SAME image (`--auto-place all` etc.).
+     *  Kept separate from `imagePosition` so old single-stamp records on disk
+     *  remain readable without migration. */
+    imageExtraPositions?: StampPosition[];
     /** Stamp options (aspect ratio, auto-crop) captured from the signer's
      *  `sign sign` invocation; replayed at stamp-time so the final visual
      *  matches the signer's request. */
@@ -269,12 +273,26 @@ trailer << /Root 1 0 R /Size 5 >>
           `Local provider: signer ${entry.email} has imagePath=${entry.imagePath} but the file is missing.`,
         );
       }
+      const stampOptions = entry.imageStampOptions ?? {};
       sourcePdf = await stampImageOnPdf(
         sourcePdf,
         { kind: "file", path: entry.imagePath },
         entry.imagePosition,
-        entry.imageStampOptions ?? {},
+        stampOptions,
       );
+      // Replay any extra positions (e.g. --auto-place all). Each extra is
+      // stamped with the SAME image bytes and SAME options, just at a new
+      // rectangle. The stamping pipeline writes idempotently to the PDF, so
+      // re-loading + re-saving per stamp is fine for the modest counts we
+      // expect (typically 1–5).
+      for (const pos of entry.imageExtraPositions ?? []) {
+        sourcePdf = await stampImageOnPdf(
+          sourcePdf,
+          { kind: "file", path: entry.imagePath },
+          pos,
+          stampOptions,
+        );
+      }
     } else if (entry.nameSignatureText) {
       sourcePdf = await stampTextOnPdf(
         sourcePdf,
@@ -480,6 +498,8 @@ export function signLocalDocument(
     signatureImagePosition?: StampPosition;
     /** Stamp options (aspect ratio, auto-crop) for the visible-image path. */
     signatureImageOptions?: StampOptions;
+    /** Extra stamp positions (multi-candidate `--auto-place all` etc.). */
+    signatureImageExtraPositions?: StampPosition[];
     /**
      * Alternative to `signatureImage`: render the given text (typically the
      * signer name) as a visible signature using a built-in italic font.
@@ -581,6 +601,8 @@ export function signLocalDocument(
       ...(imagePath ? { imagePath } : {}),
       ...(input.nameSignatureText ? { nameSignatureText: input.nameSignatureText } : {}),
       ...(resolvedPosition ? { imagePosition: resolvedPosition } : {}),
+      ...(input.signatureImageExtraPositions && input.signatureImageExtraPositions.length > 0
+        ? { imageExtraPositions: input.signatureImageExtraPositions } : {}),
       ...(input.signatureImageOptions ? { imageStampOptions: input.signatureImageOptions } : {}),
     });
   } else if ((imagePath || input.nameSignatureText) && resolvedPosition) {

@@ -297,7 +297,7 @@ test("CLI: sign --auto-place true uses the detected underline-snap rectangle", a
     });
     assert.equal(sign.status, 0, `sign failed: ${sign.stderr}`);
     // Stderr should announce the auto-place choice
-    assert.match(sign.stderr, /--auto-place chose anchor:Signature:/);
+    assert.match(sign.stderr, /--auto-place .+ chose anchor:Signature:/);
     assert.match(sign.stderr, /adjustedFrom=underline-snap/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
