@@ -552,6 +552,68 @@ Side effects: writes to the signed PDF (the same write the rest of `sign sign` d
 
 ---
 
+### 6.4c `sign document` — one-shot end-to-end signing
+
+Single command that goes from DOCX (or PDF) input to a sealed PDF on disk.
+
+```bash
+sign document contract.docx \
+  --signer "Baher Al Hakim" \
+  --signature-image baher.png \
+  --auto-place first \
+  --out signed.pdf
+```
+
+What runs under the hood, in order:
+
+1. **DOCX → PDF** if the input extension matches `.docx`, `.doc`, `.odt`, or `.rtf`. Delegated to the bundled [`docx2pdf-cli`](https://github.com/DrBaher/docx2pdf-cli) companion CLI, which auto-selects an available backend (LibreOffice, Pages, Word, Gotenberg, ConvertAPI, textutil-cups). PDF inputs skip this step. The integration is intentionally **thin** — `sign document` does not re-export `docx2pdf-cli`'s flags. For backend control or batch conversion, run `docx2pdf` directly first.
+2. **Auto-place detection** runs over the (converted) PDF to find the signature anchor rectangle. Default selector is `first` (top-most anchor) — most one-shot flows have a single `Signature:` line. Pass `--auto-place all|last|page:N|index:N` to override.
+3. **Stamp + PAdES seal** using a **temp database** scoped to this invocation (audit events, signer records, key material all live in `/tmp/sign-document-<random>/` and are removed when the command exits). The user's main `./data/sign.db` is **not touched**.
+4. **Verify** — runs `verifyRequestAuditChain` on the temp DB before exit; `verify.chainValid` is included in the JSON output.
+5. **Copy** the sealed PDF to the path specified by `--out` and clean up the temp dir.
+
+Flags:
+
+| Flag | Required | Notes |
+|---|---|---|
+| `<input>` (positional) | yes | `.docx`/`.doc`/`.odt`/`.rtf`/`.pdf` |
+| `--signer "<name>"` | yes | Full name (used on the signature cert) |
+| `--out <path>` | yes | Output sealed PDF |
+| `--signature-image` *or* `--name-signature` | one required | Visible-signature input |
+| `--auto-place <selector>` | optional (default `first`) | Same selectors as `sign sign --auto-place` |
+| `--image-page/--image-x/--image-y/--image-width/--image-height` | optional | Override auto-place |
+| `--signer-email <email>` | optional | Defaults to `<slugified-name>@local.invalid` |
+| `--title <text>` | optional | Defaults to the input filename |
+| `--preserve-aspect-ratio` | default `true` | Same semantics as `sign sign` |
+| `--signature-image-auto-crop` | default `false` | Same semantics as `sign sign` |
+
+JSON output:
+
+```jsonc
+{
+  "ok": true,
+  "input": "contract.docx",
+  "output": "signed.pdf",
+  "bytes": 18696,
+  "converted": true,             // false when input was already a PDF
+  "converterBackend": "libreoffice",  // present when converted: true
+  "signedAt": "2026-05-13T14:33:08.043Z",
+  "placements": [{ "page": 1, "x": 140, "y": 196, "width": 140, "height": 35 }],
+  "warnings": [],                // same quality codes as pdf stamp
+  "verify": { "chainValid": true, "events": 4, "signers": 1 }
+}
+```
+
+**Side effects**: writes the sealed PDF to `--out`. Creates and removes a temp dir for the signing-flow state. **Does not** mutate the user's main DB. **Does** invoke the `docx2pdf` subprocess when the input is a word-processing file.
+
+**Caveats**:
+
+- `docx2pdf-cli` needs a backend available in your environment. Run `npx docx2pdf --doctor` to see which backends are installed. On Linux you typically need LibreOffice. On macOS you can use Pages or Word natively.
+- The PAdES envelope is sealed with a fresh per-call signer key (in the temp key dir). For cross-call audit chain continuity, use the multi-step `request create` / `request send` / `sign sign` flow instead — `sign document` is for one-shot self-sign use cases where you just need a sealed PDF.
+- Multi-page documents and multi-anchor PDFs work — `--auto-place all` stamps at every signature anchor.
+
+---
+
 ### 6.4b `sign pdf detect-date-field` + `sign pdf stamp-text`
 
 Sibling pair of the signature-field detection/stamping commands, but for **date** fields.
