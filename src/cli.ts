@@ -1013,6 +1013,63 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (root === "document") {
+    // One-shot DOCX|PDF → signed PDF. Delegates the heavy lifting to
+    // signDocumentOneShot which orchestrates: docx2pdf conversion (if
+    // needed) → auto-place detection → stamp + PAdES seal → verify →
+    // copy output → cleanup. All temp DB / store / key state is
+    // scoped to the call (the user's main ./data/sign.db is untouched).
+    const inputPath = parsed.positionals[1] ?? flagValue(parsed, "input", true)!;
+    const outPath = flagValue(parsed, "out", true)!;
+    const signerName = flagValue(parsed, "signer") ?? flagValue(parsed, "signer-name");
+    if (!signerName) {
+      throw new SignCliError({
+        code: "MISSING_FLAG",
+        message: "sign document requires --signer \"<name>\" (the signer's full name).",
+        hint: "Example: sign document file.docx --signer \"Baher Al Hakim\" --signature-image sig.png --auto-place first --out signed.pdf",
+      });
+    }
+    const signerEmail = flagValue(parsed, "signer-email") ?? undefined;
+    const title = flagValue(parsed, "title") ?? undefined;
+    const signatureImage = flagValue(parsed, "signature-image");
+    const nameSig = flagValue(parsed, "name-signature");
+
+    const autoPlaceRaw = flagValue(parsed, "auto-place");
+    const { parseAutoPlaceMode, InvalidAutoPlaceValue } = await import("./lib/auto-place-selector.js");
+    let autoPlaceMode;
+    try {
+      autoPlaceMode = parseAutoPlaceMode(autoPlaceRaw);
+    } catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) {
+        throw new SignCliError({ code: "INVALID_AUTO_PLACE_VALUE", message: err.message, hint: err.hint });
+      }
+      throw err;
+    }
+    // Default for `sign document` is "first" — most one-shot flows have a
+    // single signature anchor and "just sign there" is what the user wants.
+    if (autoPlaceMode.kind === "none" && !readImagePositionFlags(parsed)) {
+      autoPlaceMode = { kind: "first" } as const;
+    }
+
+    const imagePosition = readImagePositionFlags(parsed);
+
+    const { signDocumentOneShot } = await import("./lib/sign-document.js");
+    const result = await signDocumentOneShot({
+      inputPath,
+      outPath,
+      signerName,
+      signerEmail,
+      title,
+      signatureImage: signatureImage ? parseImageInput(signatureImage) : undefined,
+      nameSignatureText: nameSig,
+      autoPlaceMode,
+      imagePosition: imagePosition && isCompletePosition(imagePosition) ? imagePosition : undefined,
+      signatureImageOptions: signatureImage ? parseStampOptions(parsed) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
   if (root === "preview") {
     // Standalone visual preview: stamp the image (or rendered name) onto the
     // PDF using the same pipeline as `sign sign`, but WITHOUT producing a

@@ -76,6 +76,7 @@
     "@dropbox/sign": "^1.10.0",
     "@resvg/resvg-wasm": "^2.6.2",
     "@types/pg": "^8.20.0",
+    "docx2pdf-cli": "^0.2.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.7.284",
     "pg": "^8.20.0"

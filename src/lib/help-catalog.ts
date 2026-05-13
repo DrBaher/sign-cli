@@ -236,6 +236,28 @@ export const HELP_CATALOG: CommandSpec[] = [
     example: "sign pdf stamp verify --pdf ./signed.pdf --image-page 1 --image-x 100 --image-y 200 --image-width 150 --image-height 60",
   },
   {
+    command: "document",
+    summary: "One-shot end-to-end signing: DOCX|PDF in, sealed (PAdES) PDF out. Converts the input to PDF via the bundled docx2pdf-cli (auto-selecting the available backend — LibreOffice, Pages, Word, Gotenberg, ConvertAPI, textutil), auto-detects the signature-field rectangle, stamps the signature image, PAdES-seals, verifies the audit chain, and writes the final PDF. All intermediate state lives in a temp DB scoped to the call — the user's main `./data/sign.db` is untouched. For backend control on the converter side, run docx2pdf directly first and pass the resulting PDF.",
+    flags: [
+      { name: "<input>", required: true, description: "Positional: input document. `.docx`, `.doc`, `.odt`, `.rtf`, or `.pdf`." },
+      { name: "--signer", required: true, description: "Signer's full name (used on the signature cert + record)." },
+      { name: "--out", required: true, description: "Output sealed PDF path." },
+      { name: "--signature-image", description: "Visible signature image (PNG/JPG/SVG/data-URL). Mutually exclusive with --name-signature." },
+      { name: "--name-signature", description: "Visible signature as rendered italic text. Mutually exclusive with --signature-image." },
+      { name: "--auto-place", description: "Placement selector. Defaults to `first` (top-most signature anchor) when no explicit --image-* coords are given. Full selector set: true | first | last | all | page:N | index:N." },
+      { name: "--image-page", description: "Explicit stamp page (1-indexed). Overrides --auto-place." },
+      { name: "--image-x", description: "Explicit stamp x in PDF points." },
+      { name: "--image-y", description: "Explicit stamp y in PDF points." },
+      { name: "--image-width", description: "Explicit stamp width in points." },
+      { name: "--image-height", description: "Explicit stamp height in points." },
+      { name: "--signer-email", description: "Optional. Defaults to `<slugified-name>@local.invalid` for self-sign flows." },
+      { name: "--title", description: "Optional document title. Defaults to the input filename." },
+      { name: "--preserve-aspect-ratio", description: "Default `true`. Shrinks the image to fit, never stretches." },
+      { name: "--signature-image-auto-crop", description: "Pass `true` to trim white/transparent PNG margins before stamping." },
+    ],
+    example: "sign document contract.docx --signer \"Alice\" --signature-image alice.png --auto-place first --out signed.pdf",
+  },
+  {
     command: "preview",
     summary: "Stamp a signature image (or rendered name) onto a PDF WITHOUT producing a PAdES envelope. Use this to iterate on placement before committing to a signed PDF — once you're happy with where the stamp lands, run `sign sign` with the same --signature-image/--auto-place flags to produce the real (sealed) PDF. No signing-request DB interaction. Quality warnings (oversized, overlap, off-page) are surfaced in the output the same way `pdf stamp` does.",
     flags: [
