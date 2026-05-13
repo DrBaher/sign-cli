@@ -8,9 +8,45 @@ import {
   validateDocumentPath,
   validateEmail,
   validateFieldCount,
+  validateOutputPath,
   validateReturnUrl,
   validateSignerCount,
 } from "../lib/validate.js";
+
+test("validateOutputPath: rejects absolute path outside cwd without SIGN_ALLOW_ABSOLUTE_DOCS", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "out-traversal-"));
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  try {
+    assert.throws(
+      () => validateOutputPath("/etc/something.pdf", { cwd: dir }),
+      /escapes the working directory/,
+    );
+    assert.throws(
+      () => validateOutputPath("../../../escape.pdf", { cwd: dir }),
+      /escapes the working directory/,
+    );
+    // Inside cwd → OK
+    const resolved = validateOutputPath("inside.pdf", { cwd: dir });
+    assert.equal(resolved, path.resolve(dir, "inside.pdf"));
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateOutputPath: SIGN_ALLOW_ABSOLUTE_DOCS=1 opts in to absolute paths", () => {
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  process.env.SIGN_ALLOW_ABSOLUTE_DOCS = "1";
+  try {
+    const resolved = validateOutputPath("/tmp/output.pdf", { cwd: "/var/tmp" });
+    assert.equal(resolved, "/tmp/output.pdf", "should accept absolute path when opted in");
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+  }
+});
 
 test("validateEmail accepts simple addresses and rejects garbage", () => {
   validateEmail("a@b.co");

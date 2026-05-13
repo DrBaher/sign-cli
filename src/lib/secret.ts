@@ -43,12 +43,28 @@ export function redactHeaders(headers: Record<string, unknown>): Record<string, 
   return out;
 }
 
+// Dynamic registry — env-var names whose VALUES should also be redacted.
+// Populated at runtime when a profile applies credentials to process.env
+// (see `applyCredentialsToProcessEnv` in src/lib/profiles.ts). The hardcoded
+// list below covers the four well-known provider env vars; this set covers
+// custom credentials like `ACME_API_KEY` that a profile might inject.
+const DYNAMIC_SECRET_KEYS = new Set<string>();
+
+/** Register an env-var name whose value should be redacted from error
+ *  messages. Idempotent; safe to call repeatedly. Called by the profiles
+ *  module after `applyCredentialsToProcessEnv` so custom credential keys
+ *  don't leak in adapter logs. */
+export function registerSecretKey(key: string): void {
+  if (key && key.length > 0) DYNAMIC_SECRET_KEYS.add(key);
+}
+
 export function collectKnownSecrets(): string[] {
   const keys = [
     "DROPBOX_SIGN_API_KEY",
     "SIGNWELL_API_KEY",
     "SIGNWELL_WEBHOOK_SECRET",
     "DOCUSIGN_INTEGRATION_KEY",
+    ...DYNAMIC_SECRET_KEYS,
   ];
   const out: string[] = [];
   for (const key of keys) {

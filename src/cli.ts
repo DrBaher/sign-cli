@@ -27,7 +27,7 @@ import {
 } from "./lib/help-catalog.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
 import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio } from "./lib/mcp-server.js";
-import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
+import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateOutputPath, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import {
   resolveSignProvider,
   resolveSignProviderWithSource,
@@ -1022,7 +1022,7 @@ async function main(): Promise<void> {
   if (root === "pdf" && sub === "stamp") {
     const pdfPath = flagValue(parsed, "pdf", true)!;
     const imageFlag = flagValue(parsed, "image", true)!;
-    const outPath = flagValue(parsed, "out", true)!;
+    const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     const position = readImagePositionFlags(parsed);
     if (!position || !isCompletePosition(position)) {
       throw new SignCliError({
@@ -1221,7 +1221,7 @@ async function main(): Promise<void> {
     // copy output → cleanup. All temp DB / store / key state is
     // scoped to the call (the user's main ./data/sign.db is untouched).
     const inputPath = parsed.positionals[1] ?? flagValue(parsed, "input", true)!;
-    const outPath = flagValue(parsed, "out", true)!;
+    const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     const signerName = flagValue(parsed, "signer") ?? flagValue(parsed, "signer-name");
     if (!signerName) {
       throw new SignCliError({
@@ -1280,7 +1280,7 @@ async function main(): Promise<void> {
     const pdfPath = flagValue(parsed, "pdf", true)!;
     const imageFlag = flagValue(parsed, "signature-image");
     const nameSig = flagValue(parsed, "name-signature");
-    const outPath = flagValue(parsed, "out", true)!;
+    const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     if (!imageFlag && !nameSig) {
       throw new SignCliError({
         code: "MISSING_FLAG",
@@ -1453,7 +1453,7 @@ async function main(): Promise<void> {
     // to ignore that protection.
     const pdfPath = flagValue(parsed, "pdf", true)!;
     const text = flagValue(parsed, "text", true)!;
-    const outPath = flagValue(parsed, "out", true)!;
+    const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     const fs = await import("node:fs");
     let pdfBytes: Buffer = fs.readFileSync(pdfPath);
 

@@ -7,6 +7,7 @@ import {
   redactHeaders,
   redactSecretValue,
   redactString,
+  registerSecretKey,
 } from "../lib/secret.js";
 
 test("redactSecretValue keeps prefix/suffix and replaces middle", () => {
@@ -61,5 +62,35 @@ test("collectKnownSecrets reads only set env vars", () => {
   } finally {
     if (original === undefined) delete process.env.DROPBOX_SIGN_API_KEY;
     else process.env.DROPBOX_SIGN_API_KEY = original;
+  }
+});
+
+test("registerSecretKey: custom env-var names get their values redacted", () => {
+  // Simulates what `applyCredentialsToProcessEnv` does for a profile's
+  // `credentials: { CUSTOM_API_KEY: "..." }` block — without registration,
+  // the custom value would leak in error messages because
+  // collectKnownSecrets() only knows about the four hardcoded provider
+  // env vars.
+  const saved = process.env.CUSTOM_AUDIT_TEST_VAR;
+  process.env.CUSTOM_AUDIT_TEST_VAR = "super-secret-token-from-profile";
+  try {
+    // Before registration: the value is NOT in collectKnownSecrets
+    const before = collectKnownSecrets();
+    assert.equal(before.includes("super-secret-token-from-profile"), false,
+      "by default, only hardcoded env vars are redacted");
+
+    registerSecretKey("CUSTOM_AUDIT_TEST_VAR");
+    const after = collectKnownSecrets();
+    assert.ok(after.includes("super-secret-token-from-profile"),
+      "registerSecretKey should make the env var's value part of the known set");
+
+    // End-to-end: redactErrorMessage scrubs the value too.
+    const errMsg = "An error occurred with token super-secret-token-from-profile in flight.";
+    const redacted = redactErrorMessage(new Error(errMsg));
+    assert.equal(redacted.includes("super-secret-token-from-profile"), false,
+      "redactErrorMessage should mask the value of a registered custom env var");
+  } finally {
+    if (saved === undefined) delete process.env.CUSTOM_AUDIT_TEST_VAR;
+    else process.env.CUSTOM_AUDIT_TEST_VAR = saved;
   }
 });

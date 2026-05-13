@@ -48,6 +48,31 @@ export type DocumentPathRule = {
   maxBytes?: number;
 };
 
+/** Output-path counterpart to validateDocumentPath. Only enforces the
+ *  traversal check (the path doesn't have to exist yet — we're about to
+ *  write to it). Override with SIGN_ALLOW_ABSOLUTE_DOCS=1 (same toggle as
+ *  the input-path validator, on purpose: one knob for "let me read/write
+ *  paths outside the cwd"). Used by `pdf stamp --out`, `pdf stamp-text
+ *  --out`, `preview --out`, `document --out`, and `profile init --db`. */
+export function validateOutputPath(
+  rawPath: string,
+  rule: { cwd?: string; allowAbsoluteOutsideCwd?: boolean } = {},
+): string {
+  const cwd = rule.cwd ?? process.cwd();
+  const resolved = path.resolve(cwd, rawPath);
+  if (rule.allowAbsoluteOutsideCwd) return resolved;
+  const allow = (process.env.SIGN_ALLOW_ABSOLUTE_DOCS ?? "").toLowerCase();
+  if (["1", "true", "yes"].includes(allow)) return resolved;
+  const cwdResolved = path.resolve(cwd);
+  const relative = path.relative(cwdResolved, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(
+      `Output path escapes the working directory: "${rawPath}". Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
+    );
+  }
+  return resolved;
+}
+
 export function validateDocumentPath(rawPath: string, rule: DocumentPathRule = {}): { resolved: string; bytes: number } {
   const cwd = rule.cwd ?? process.cwd();
   const resolved = path.resolve(cwd, rawPath);

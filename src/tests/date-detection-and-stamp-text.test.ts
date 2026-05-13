@@ -142,7 +142,12 @@ test("CLI: pdf detect-date-field exits 2 when no date anchors found", async () =
 // ─── CLI: stamp-text ─────────────────────────────────────────────────────
 
 function runStampText(args: string[]): SpawnSyncReturns<string> {
-  return spawnSync("node", [CLI, "pdf", "stamp-text", ...args], { encoding: "utf8" });
+  // Tests use /tmp/* output paths; opt in to absolute paths in the test
+  // harness via SIGN_ALLOW_ABSOLUTE_DOCS=1.
+  return spawnSync("node", [CLI, "pdf", "stamp-text", ...args], {
+    encoding: "utf8",
+    env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" },
+  });
 }
 
 test("CLI: pdf stamp-text emits warnings array (parity with `pdf stamp` and `sign preview`)", async () => {

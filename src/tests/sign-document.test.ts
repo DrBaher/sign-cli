@@ -34,7 +34,7 @@ function runDocument(args: string[], extraEnv: NodeJS.ProcessEnv = {}): SpawnSyn
   try {
     return spawnSync("node", [CLI, "document", ...args], {
       encoding: "utf8",
-      env: { ...process.env, SIGN_DB_PATH: path.join(tmp, "main.db"), ...extraEnv },
+      env: { ...process.env, SIGN_DB_PATH: path.join(tmp, "main.db"), SIGN_ALLOW_ABSOLUTE_DOCS: "1", ...extraEnv },
     });
   } finally {
     rmSync(tmp, { recursive: true, force: true });

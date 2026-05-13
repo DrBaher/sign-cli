@@ -29,8 +29,34 @@ function smallSignaturePng(): Buffer {
 }
 
 function runPreview(args: string[]): SpawnSyncReturns<string> {
-  return spawnSync("node", [CLI, "preview", ...args], { encoding: "utf8" });
+  // Tests write to /tmp/... paths; allow absolute output paths in this
+  // test harness via SIGN_ALLOW_ABSOLUTE_DOCS=1 (same convention as the
+  // other CLI integration tests). Production users get the
+  // path-traversal guard.
+  return spawnSync("node", [CLI, "preview", ...args], {
+    encoding: "utf8",
+    env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" },
+  });
 }
+
+test("CLI preview: rejects --out paths that escape CWD without SIGN_ALLOW_ABSOLUTE_DOCS", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "preview-traversal-"));
+  try {
+    const pdfPath = path.join(tmp, "doc.pdf");
+    const sigPath = path.join(tmp, "sig.png");
+    writeFileSync(pdfPath, await buildTwoAnchorsPdf());
+    writeFileSync(sigPath, smallSignaturePng());
+    // Deliberately do NOT pass SIGN_ALLOW_ABSOLUTE_DOCS — production default.
+    const r = spawnSync("node", [CLI, "preview",
+      "--pdf", pdfPath, "--signature-image", sigPath,
+      "--auto-place", "first", "--out", "/tmp/escaped-cwd.pdf",
+    ], { encoding: "utf8", env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "" } });
+    assert.notEqual(r.status, 0, "preview should reject absolute --out paths without the opt-in flag");
+    assert.match(r.stderr + r.stdout, /escapes the working directory|SIGN_ALLOW_ABSOLUTE_DOCS/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test("CLI preview: emits drawnRects that round-trip through pdf stamp verify", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "preview-drawn-"));
