@@ -552,6 +552,34 @@ Side effects: writes to the signed PDF (the same write the rest of `sign sign` d
 
 ---
 
+### 6.4b `sign pdf detect-date-field` + `sign pdf stamp-text`
+
+Sibling pair of the signature-field detection/stamping commands, but for **date** fields.
+
+**`sign pdf detect-date-field --pdf <path>`** — returns date-anchor candidates as JSON. Recognized labels: `Date:` (colon required), `Date de signature:`, `Date d'effet:`, `Date d'entrée en vigueur:`. Each candidate has `category: "date"` and an `alreadyFilled: boolean` flag. The flag is `true` when a recognizable date string sits near the anchor — numeric (`12/05/2026`, `2026-05-12`), French textual (`12 mai 2026`), or English textual (`May 12, 2026`).
+
+**`sign pdf stamp-text --pdf <path> --text "<string>" --out <path>`** — sibling of `pdf stamp` for plain text instead of images. Used for stamping dates (or any other non-signature text). Supports `--auto-place` with the full selector set; filtered to date candidates. Default behavior: **skip `alreadyFilled` candidates**. Pass `--overwrite-filled true` to include them.
+
+```bash
+# Auto-fill every blank date field; leaves "Date d'effet: 12 mai 2026" alone
+sign pdf stamp-text --pdf contract.pdf --text "$(date +'%-d %B %Y')" \
+  --auto-place all --out filled.pdf
+
+# Force overwrite even when a date is already filled
+sign pdf stamp-text --pdf contract.pdf --text "today" \
+  --auto-place all --overwrite-filled true --out filled.pdf
+```
+
+When the date pool is empty because every candidate was `alreadyFilled`, the error hint explicitly points at `--overwrite-filled` rather than the generic "no candidates" message.
+
+**Category split**: `sign pdf detect-signature-field` returns **signature** candidates only; `sign pdf detect-date-field` returns **date** candidates only. `sign sign --auto-place` is signature-only; `sign pdf stamp-text --auto-place` is date-only. A PDF with one Signature: anchor + two Date: anchors no longer breaks `sign sign --auto-place true` with `AUTO_PLACE_AMBIGUOUS` (the date anchors are filtered out before the selector runs).
+
+**Rendering**: `stampPlainTextOnPdf` uses pdf-lib's `StandardFonts.Helvetica` (regular), black text, no underline, left-aligned. Auto-sizes to fit the rectangle width. This is different from `sign sign --name-signature` which renders italic + underline + signature-blue to communicate "signature, not body text."
+
+Side effects: writes to the output PDF. **No** DB interaction, **no** signing-request state mutation, **no** audit events. Safe to run repeatedly.
+
+---
+
 ### 6.5a `sign preview` — draft stamp without sealing
 
 Stamps a signature image (or rendered name) onto a PDF and writes the output **without** producing a PAdES envelope. Use this to iterate on placement before committing to a sealed PDF — once the preview looks right, run `sign sign` with the same flags to produce the real signed file.

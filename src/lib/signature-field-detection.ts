@@ -60,13 +60,32 @@ export type DetectedField = {
   fieldName?: string;
   /** Anchor text that produced this candidate (e.g., "Signature:"). */
   anchorText?: string;
+  /**
+   * What kind of field this is. AcroForm /Sig widgets and `Signature:` /
+   * `Sign here` etc. → "signature". Date anchors (`Date:`, `Date de
+   * signature:`) → "date". Used by callers to filter which candidates apply
+   * to a given action (`sign sign --auto-place` only considers signature
+   * candidates; `sign pdf stamp-text` only considers date candidates).
+   */
+  category: "signature" | "date";
+  /**
+   * For `category: "date"` only. Set to `true` when text near the proposed
+   * rectangle already matches a date pattern — so a caller stamping a date
+   * can skip this candidate by default.
+   */
+  alreadyFilled?: boolean;
 };
 
 export type DetectionSummary = {
   pageCount: number;
   acroFormFields: number;
   anchorMatches: number;
+  /** All candidates, sorted by confidence DESC. */
   candidates: DetectedField[];
+  /** Convenience view: candidates filtered to `category: "signature"`. */
+  signatureCandidates: DetectedField[];
+  /** Convenience view: candidates filtered to `category: "date"`. */
+  dateCandidates: DetectedField[];
   /**
    * Raw pdfjs text items per page. Only populated when `verbose: true` is
    * passed to `detectSignatureFields`. Used by `sign pdf detect-signature-field
@@ -109,6 +128,8 @@ export async function detectSignatureFields(
     acroFormFields: acroForm.length,
     anchorMatches: filteredAnchors.length,
     candidates,
+    signatureCandidates: candidates.filter((c) => c.category === "signature"),
+    dateCandidates: candidates.filter((c) => c.category === "date"),
   };
 
   if (opts.verbose) {
@@ -162,6 +183,7 @@ async function findAcroFormSignatureFields(
         confidence: 1.0,
         adjustedFrom: "none",
         fieldName: field.getName(),
+        category: "signature",
       });
     }
   }
@@ -246,12 +268,33 @@ async function extractTextItemsByPage(pdfBytes: Buffer): Promise<PageContent[]> 
 // Patterns we recognize. Each must match a *standalone* text item (we don't
 // merge items across whitespace — pdfjs gives us per-item text, so "Signature"
 // and ":" may be split). Trailing colons are optional. Case-insensitive.
-const ANCHOR_PATTERNS: Array<{ regex: RegExp; label: string }> = [
-  { regex: /^\s*signature\s*:?\s*$/i, label: "Signature:" },
-  { regex: /^\s*signed\s+by\s*:?\s*$/i, label: "Signed by:" },
-  { regex: /^\s*sign\s+here\s*:?\s*$/i, label: "Sign here:" },
-  { regex: /^\s*initial(s)?\s*:?\s*$/i, label: "Initial:" },
-  { regex: /^\s*x\s*[_\-]{3,}\s*$/i, label: "X____" },
+type AnchorCategory = "signature" | "date";
+
+const ANCHOR_PATTERNS: Array<{ regex: RegExp; label: string; category: AnchorCategory }> = [
+  // Signature anchors
+  { regex: /^\s*signature\s*:?\s*$/i, label: "Signature:", category: "signature" },
+  { regex: /^\s*signed\s+by\s*:?\s*$/i, label: "Signed by:", category: "signature" },
+  { regex: /^\s*sign\s+here\s*:?\s*$/i, label: "Sign here:", category: "signature" },
+  { regex: /^\s*initial(s)?\s*:?\s*$/i, label: "Initial:", category: "signature" },
+  { regex: /^\s*x\s*[_\-]{3,}\s*$/i, label: "X____", category: "signature" },
+  // Date anchors — must end with a colon to disambiguate from sentences
+  // containing "date". `Date:` alone matches most English forms; the longer
+  // French/European variants below are commonly used on legal templates.
+  { regex: /^\s*date\s*:\s*$/i, label: "Date:", category: "date" },
+  { regex: /^\s*date\s+de\s+signature\s*:?\s*$/i, label: "Date de signature:", category: "date" },
+  { regex: /^\s*date\s+d['’]effet\s*:?\s*$/i, label: "Date d'effet:", category: "date" },
+  { regex: /^\s*date\s+d['’]entr[ée]e\s+en\s+vigueur\s*:?\s*$/i, label: "Date d'entrée en vigueur:", category: "date" },
+];
+
+// Patterns for "is this text a date?" — used to mark `alreadyFilled: true`
+// when a date candidate's rectangle already contains a recognisable date.
+const DATE_TEXT_PATTERNS: RegExp[] = [
+  // Numeric: 12/05/2026, 12-05-2026, 12.05.2026, 2026-05-12, etc.
+  /\b\d{1,4}\s*[\/\-\.]\s*\d{1,2}\s*[\/\-\.]\s*\d{1,4}\b/,
+  // French textual: "12 mai 2026" / "1er janvier 2026"
+  /\b\d{1,2}(er)?\s+(janvier|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre)\s+\d{4}\b/i,
+  // English textual: "May 12, 2026" / "12 May 2026"
+  /\b(\d{1,2}\s+)?(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\s*,?\s*\d{4}\b/i,
 ];
 
 const DEFAULT_RECT_WIDTH = 180;
@@ -267,11 +310,11 @@ function findAnchorCandidates(textPages: PageContent[]): DetectedField[] {
     const page = textPages[i];
     const pageNum = i + 1;
     for (const item of page.items) {
-      for (const { regex, label } of ANCHOR_PATTERNS) {
+      for (const { regex, label, category } of ANCHOR_PATTERNS) {
         if (!regex.test(item.text)) continue;
         const candidate = proposeRectangleForAnchor(item, page);
         if (!candidate) continue;
-        out.push({
+        const field: DetectedField = {
           page: pageNum,
           x: candidate.x,
           y: candidate.y,
@@ -281,11 +324,44 @@ function findAnchorCandidates(textPages: PageContent[]): DetectedField[] {
           confidence: candidate.confidence,
           adjustedFrom: candidate.method,
           anchorText: item.text.trim(),
-        });
+          category,
+        };
+        if (category === "date") {
+          // alreadyFilled: any text item on the same line as the anchor, to
+          // the right of it, that matches a date pattern. Anchor-aware
+          // (not just rect-aware) so we catch `Date: 12 mai 2026` even when
+          // the proposed rectangle shrunk past the date.
+          field.alreadyFilled = anchorHasNearbyDate(item, page.items);
+        }
+        out.push(field);
       }
     }
   }
   return out;
+}
+
+function anchorHasNearbyDate(anchor: TextItem, items: TextItem[]): boolean {
+  // Same line as the anchor, to the right OR (if the anchor is alone on its
+  // line) on the line directly below it. Either of those positions is the
+  // conventional place an author would have written the date.
+  const lineTolerance = Math.max(anchor.height * 0.6, 4);
+  for (const item of items) {
+    if (item === anchor) continue;
+    // Same line as the anchor, to the right. We deliberately do NOT probe
+    // the line below — multi-anchor PDFs (e.g. `Date:` blank, then
+    // `Date d'effet: 12 mai 2026` on the next line) trip a false positive
+    // there, marking the blank Date: as alreadyFilled because it sees the
+    // OTHER anchor's date below. Same-line-right is tight enough to catch
+    // the common case (`Date: 12/05/2026`) without that false positive.
+    // For the rare `Date:\n<date>` two-line layout, the user can pass
+    // --overwrite-filled true.
+    const sameLineRight = Math.abs(item.y - anchor.y) <= lineTolerance && item.x >= anchor.x;
+    if (!sameLineRight) continue;
+    for (const re of DATE_TEXT_PATTERNS) {
+      if (re.test(item.text)) return true;
+    }
+  }
+  return false;
 }
 
 type ProposedRectangle = {

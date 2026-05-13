@@ -15,6 +15,7 @@ function cand(page: number, x: number, y: number, conf: number, label = "Signatu
     confidence: conf,
     adjustedFrom: "underline-snap",
     anchorText: label,
+    category: "signature",
   };
 }
 

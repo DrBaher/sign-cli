@@ -344,3 +344,61 @@ export async function stampTextOnPdf(
   const saved = await pdf.save({ useObjectStreams: false });
   return Buffer.from(saved);
 }
+
+/**
+ * Like `stampTextOnPdf`, but without the signature styling (no italic, no
+ * underline, black text). Used by `sign pdf stamp-text` to stamp dates and
+ * other plain content. Auto-sizes to fit the rectangle width; left-aligned.
+ */
+export async function stampPlainTextOnPdf(
+  pdfBytes: Buffer,
+  text: string,
+  position: StampPosition,
+): Promise<Buffer> {
+  if (position.page < 1) {
+    throw new Error(`stampPlainTextOnPdf: page is 1-indexed; got ${position.page}`);
+  }
+  if (position.width <= 0 || position.height <= 0) {
+    throw new Error(
+      `stampPlainTextOnPdf: width and height must be > 0 (got ${position.width} x ${position.height})`,
+    );
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`stampPlainTextOnPdf: text is empty`);
+  }
+
+  const pdf = await PDFDocument.load(pdfBytes);
+  const pages = pdf.getPages();
+  if (position.page > pages.length) {
+    throw new Error(
+      `stampPlainTextOnPdf: page ${position.page} is out of range (PDF has ${pages.length})`,
+    );
+  }
+  const page = pages[position.page - 1];
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+  const maxHeight = position.height * 0.8;
+  let fontSize = Math.min(maxHeight, 24);
+  const minFontSize = 6;
+  while (fontSize > minFontSize) {
+    const w = font.widthOfTextAtSize(trimmed, fontSize);
+    if (w <= position.width * 0.95) break;
+    fontSize -= 1;
+  }
+
+  const textHeight = font.heightAtSize(fontSize);
+  const textX = position.x + Math.min(position.width * 0.02, 3);
+  const textY = position.y + (position.height - textHeight) / 2 + fontSize * 0.2;
+
+  page.drawText(trimmed, {
+    x: textX,
+    y: textY,
+    size: fontSize,
+    font,
+    color: rgb(0, 0, 0),
+  });
+
+  const saved = await pdf.save({ useObjectStreams: false });
+  return Buffer.from(saved);
+}

@@ -256,12 +256,38 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "pdf detect-signature-field",
-    summary: "Auto-detect candidate signature-field placements in a PDF. Returns ranked candidates: AcroForm /Sig widgets (confidence 1.0) first, then anchor-text matches (Signature:, Sign here, X____) with overlap-adjusted rectangles. Adjustment methods: `underline-snap` (0.95, anchor + adjacent `____` line), `below-anchor-probe` (0.85, anchor alone on its line + space below — French/European convention), `whitespace-probe` (0.75, anchor + clear space on the same line — English convention), `shrink-to-fit` (0.50, default rect shrunk to avoid overlap). Pair with `sign sign --auto-place` for hands-off positioning. Exit 0 = candidates returned; exit 2 = no candidates (still emits an empty array on stdout).",
+    summary: "Auto-detect signature-field placements in a PDF. Returns AcroForm /Sig widgets (confidence 1.0) first, then anchor-text matches (Signature:, Sign here, Signed by:, Initial:, X____) with overlap-adjusted rectangles. Pair with `sign sign --auto-place` for hands-off positioning. Date anchors are NOT included here — see `pdf detect-date-field`. Exit 2 when no candidates found.",
     flags: [
       { name: "--pdf", required: true, description: "PDF to inspect." },
-      { name: "--verbose", description: "Pass `true` to include the raw pdfjs text items per page in the output (under `textItemsByPage`) and page dimensions (under `pageDimensions`). Use this to debug why detection produced zero candidates — you'll see exactly what text pdfjs extracted and where." },
+      { name: "--verbose", description: "Pass `true` to include the raw pdfjs text items per page (`textItemsByPage`) and page dimensions (`pageDimensions`). Use to debug zero-candidate outcomes." },
     ],
     example: "sign pdf detect-signature-field --pdf ./nda.pdf --verbose true",
+  },
+  {
+    command: "pdf detect-date-field",
+    summary: "Auto-detect date-field placements in a PDF. Returns anchor-text matches for `Date:`, `Date de signature:`, `Date d'effet:`, `Date d'entrée en vigueur:`. Each candidate carries `alreadyFilled: true` when a recognisable date string is already present near the anchor — callers stamping a date can skip those by default. Pair with `sign pdf stamp-text --auto-place` for hands-off date filling. Exit 2 when no candidates found.",
+    flags: [
+      { name: "--pdf", required: true, description: "PDF to inspect." },
+      { name: "--verbose", description: "Pass `true` to include the raw pdfjs text items per page (`textItemsByPage`) and page dimensions (`pageDimensions`)." },
+    ],
+    example: "sign pdf detect-date-field --pdf ./contract.pdf",
+  },
+  {
+    command: "pdf stamp-text",
+    summary: "Stamp a plain text string (Helvetica regular, no underline) onto a PDF — sibling of `pdf stamp` for image stamping. Used for dates and other non-signature text fills. Supports `--auto-place` to fill detected DATE anchors automatically. Candidates that already contain a date string are skipped by default; pass `--overwrite-filled true` to ignore that protection.",
+    flags: [
+      { name: "--pdf", required: true, description: "Source PDF path." },
+      { name: "--text", required: true, description: "Text to stamp." },
+      { name: "--out", required: true, description: "Output PDF path." },
+      { name: "--auto-place", description: "Auto-detect placement at date anchors. Same selector values as `sign sign --auto-place` — true | first | last | all | page:N | index:N. Filtered to `category: date`." },
+      { name: "--overwrite-filled", description: "Default `false`. Pass `true` to include date candidates flagged `alreadyFilled` (a date string is already present nearby). Otherwise those are skipped — preserving existing content." },
+      { name: "--image-page", description: "Explicit stamp page (1-indexed). Overrides --auto-place when set with the other --image-* coords." },
+      { name: "--image-x", description: "Explicit stamp x in PDF points." },
+      { name: "--image-y", description: "Explicit stamp y in PDF points." },
+      { name: "--image-width", description: "Explicit stamp width in points." },
+      { name: "--image-height", description: "Explicit stamp height in points." },
+    ],
+    example: "sign pdf stamp-text --pdf contract.pdf --text \"12 mai 2026\" --auto-place all --out stamped.pdf",
   },
   {
     command: "workflow nda",

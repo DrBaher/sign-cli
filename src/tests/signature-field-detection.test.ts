@@ -97,9 +97,13 @@ test("detectSignatureFields: anchor + underline → underline-snap @ 0.95", asyn
 
 test("detectSignatureFields: anchor + whitespace → whitespace-probe @ 0.75", async () => {
   const pdf = await buildAnchorWhitespacePdf();
-  const { candidates } = await detectSignatureFields(pdf);
-  assert.equal(candidates.length, 1);
-  const c = candidates[0];
+  const { signatureCandidates } = await detectSignatureFields(pdf);
+  // The fixture also has a "Date:" anchor which now matches as a date
+  // candidate; the unified `candidates` list contains both. Filter to
+  // signature candidates for this test which is asserting the signature
+  // whitespace-probe behavior specifically.
+  assert.equal(signatureCandidates.length, 1);
+  const c = signatureCandidates[0];
   assert.equal(c.adjustedFrom, "whitespace-probe");
   assert.equal(c.confidence, 0.75);
 });
