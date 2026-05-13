@@ -7,6 +7,7 @@ import {
   detectMimeFromBytes,
   mimeToExt,
   stampImageOnPdf,
+  type StampOptions,
   stampTextOnPdf,
   type ImageInput,
   type StampPosition,
@@ -58,6 +59,10 @@ type LocalDocumentRecord = {
     imagePath?: string;
     /** Where the image should be drawn before PAdES sealing. */
     imagePosition?: StampPosition;
+    /** Stamp options (aspect ratio, auto-crop) captured from the signer's
+     *  `sign sign` invocation; replayed at stamp-time so the final visual
+     *  matches the signer's request. */
+    imageStampOptions?: StampOptions;
     /** When set, render this text (typically the signer's name) as a visible
      *  signature using a built-in italic font instead of an image. Mutually
      *  exclusive with imagePath. */
@@ -268,6 +273,7 @@ trailer << /Root 1 0 R /Size 5 >>
         sourcePdf,
         { kind: "file", path: entry.imagePath },
         entry.imagePosition,
+        entry.imageStampOptions ?? {},
       );
     } else if (entry.nameSignatureText) {
       sourcePdf = await stampTextOnPdf(
@@ -472,6 +478,8 @@ export function signLocalDocument(
      */
     signatureImage?: ImageInput;
     signatureImagePosition?: StampPosition;
+    /** Stamp options (aspect ratio, auto-crop) for the visible-image path. */
+    signatureImageOptions?: StampOptions;
     /**
      * Alternative to `signatureImage`: render the given text (typically the
      * signer name) as a visible signature using a built-in italic font.
@@ -573,6 +581,7 @@ export function signLocalDocument(
       ...(imagePath ? { imagePath } : {}),
       ...(input.nameSignatureText ? { nameSignatureText: input.nameSignatureText } : {}),
       ...(resolvedPosition ? { imagePosition: resolvedPosition } : {}),
+      ...(input.signatureImageOptions ? { imageStampOptions: input.signatureImageOptions } : {}),
     });
   } else if ((imagePath || input.nameSignatureText) && resolvedPosition) {
     // Re-signing with a new visible-signature spec: update the existing entry

@@ -217,6 +217,9 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--image-width", required: true, description: "Stamp width in points." },
       { name: "--image-height", required: true, description: "Stamp height in points." },
       { name: "--out", required: true, description: "Output PDF path." },
+      { name: "--preserve-aspect-ratio", description: "Default `true`. Shrinks the image to fit inside the rectangle, top-left aligned, so it's never stretched. Pass `false` to restore legacy stretch-to-fill behavior." },
+      { name: "--signature-image-auto-crop", description: "Pass `true` to trim white/transparent margins around the ink and replace near-white opaque pixels with transparent ones (PNG only; no-op on JPG/SVG). Removes the white-rectangle-around-signature look from photographed-on-paper signature scans." },
+      { name: "--strict-quality", description: "Pass `true` to exit non-zero (code 3) when any quality warning fires (oversized stamp, overlap with body text, off-page rectangle, distorted aspect). Default is advisory — warnings are surfaced but the command still exits 0." },
     ],
   },
   {
@@ -304,6 +307,8 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--image-width", description: "Stamp width in points." },
       { name: "--image-height", description: "Stamp height in points." },
       { name: "--auto-place", description: "Pass `true` to auto-detect the stamp rectangle via `sign pdf detect-signature-field`. Requires a unique high-confidence (≥0.8) candidate; otherwise errors with `AUTO_PLACE_NO_HIGH_CONFIDENCE` or `AUTO_PLACE_AMBIGUOUS` and the candidate list. Explicit --image-* coords override --auto-place." },
+      { name: "--preserve-aspect-ratio", description: "Default `true`. Shrinks --signature-image to fit inside the stamp rectangle (top-left aligned) so it's never stretched. Pass `false` to restore legacy stretch-to-fill behavior." },
+      { name: "--signature-image-auto-crop", description: "Pass `true` to trim white/transparent margins around the ink and replace near-white opaque pixels with transparent ones (PNG only). Removes the white-rectangle-around-signature look from scans." },
       { name: "--idempotency-key", description: "Same key returns the cached SignerSignResult instead of double-signing on retry." },
     ],
     example:

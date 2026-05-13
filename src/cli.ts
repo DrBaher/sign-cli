@@ -171,6 +171,19 @@ function isCompletePosition(position: Partial<StampPosition>): position is Stamp
   );
 }
 
+function parseStampOptions(args: ParsedArgs): import("./lib/pdf-image-stamp.js").StampOptions {
+  // Defaults: preserve aspect ratio ON, auto-crop OFF. Reading the flag
+  // explicitly (not `=== "false"`) so any non-falsy value (`yes`, `1`)
+  // toggles on, matching the convention elsewhere in the CLI.
+  const preserveRaw = flagValue(args, "preserve-aspect-ratio");
+  const autoCropRaw = flagValue(args, "signature-image-auto-crop");
+  return {
+    preserveAspectRatio: preserveRaw === "false" || preserveRaw === "no" || preserveRaw === "0" ? false : true,
+    autoCrop: autoCropRaw === "true" || autoCropRaw === "yes" || autoCropRaw === "1",
+  };
+}
+
+
 function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFlag: string; defaultMs?: number }): number | undefined {
   const msValue = flagValue(args, options.msFlag);
   if (msValue !== undefined) {
@@ -900,6 +913,7 @@ async function main(): Promise<void> {
       ...(signatureImage ? { signatureImage } : {}),
       ...(nameSignatureText ? { nameSignatureText } : {}),
       ...(imagePosition && isCompletePosition(imagePosition) ? { signatureImagePosition: imagePosition } : {}),
+      ...(signatureImage ? { signatureImageOptions: parseStampOptions(parsed) } : {}),
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
     emitJsonWithProvider(result, resolvedProvider);
@@ -943,9 +957,32 @@ async function main(): Promise<void> {
     }
     const fs = await import("node:fs");
     const pdfBytes = fs.readFileSync(pdfPath);
-    const stamped = await stampImageOnPdf(pdfBytes, parseImageInput(imageFlag), position);
+    const stampOptions = parseStampOptions(parsed);
+    const stamped = await stampImageOnPdf(pdfBytes, parseImageInput(imageFlag), position, stampOptions);
     fs.writeFileSync(outPath, stamped);
-    console.log(JSON.stringify({ ok: true, pdf: pdfPath, out: outPath, position, bytes: stamped.length }, null, 2));
+
+    // Quality warnings: run on the stamped PDF so the user sees any
+    // structural issues (overlap, off-page, oversized) before they sign.
+    // `--strict-quality true` makes the command exit non-zero when any
+    // warning fires; default is advisory (still exit 0).
+    const { assessStampQuality } = await import("./lib/stamp-quality.js");
+    const warnings = await assessStampQuality({
+      pdfBytes: stamped,
+      page: position.page,
+      x: position.x,
+      y: position.y,
+      width: position.width,
+      height: position.height,
+    });
+    console.log(JSON.stringify(
+      { ok: true, pdf: pdfPath, out: outPath, position, bytes: stamped.length, stampOptions, warnings },
+      null, 2,
+    ));
+    const strictRaw = flagValue(parsed, "strict-quality");
+    if (warnings.length > 0 && (strictRaw === "true" || strictRaw === "yes" || strictRaw === "1")) {
+      process.stderr.write(`[sign] --strict-quality: ${warnings.length} quality warning(s); failing.\n`);
+      process.exit(3);
+    }
     return;
   }
 

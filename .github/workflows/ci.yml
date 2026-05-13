@@ -4,7 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # `claude/**` so stacked PRs (where the base is another claude/* branch
+    # rather than main) also trigger CI. Without this, only PRs targeting
+    # main get checks, and the rest of the stack runs untested until merge.
+    branches: [main, "claude/**"]
 
 jobs:
   build-and-test:
