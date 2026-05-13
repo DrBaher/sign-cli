@@ -32,6 +32,41 @@ function runPreview(args: string[]): SpawnSyncReturns<string> {
   return spawnSync("node", [CLI, "preview", ...args], { encoding: "utf8" });
 }
 
+test("CLI preview: emits drawnRects that round-trip through pdf stamp verify", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "preview-drawn-"));
+  try {
+    const pdfPath = path.join(tmp, "doc.pdf");
+    const sigPath = path.join(tmp, "sig.png");
+    const outPath = path.join(tmp, "preview.pdf");
+    writeFileSync(pdfPath, await buildTwoAnchorsPdf());
+    writeFileSync(sigPath, smallSignaturePng());
+
+    const r = runPreview([
+      "--pdf", pdfPath, "--signature-image", sigPath,
+      "--auto-place", "first", "--out", outPath,
+    ]);
+    assert.equal(r.status, 0, `stderr=${r.stderr}`);
+    const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
+    assert.ok(Array.isArray(payload.drawnRects), "preview must emit drawnRects array");
+    assert.equal(payload.drawnRects.length, 1, "one drawn rect for the chosen anchor");
+
+    // Round-trip: pdf stamp verify against drawnRects[0] → verdict=ok
+    const d = payload.drawnRects[0];
+    const verify = spawnSync("node", [CLI, "pdf", "stamp", "verify", "--pdf", outPath,
+      "--image-page", String(d.page),
+      "--image-x", String(d.x),
+      "--image-y", String(d.y),
+      "--image-width", String(d.width),
+      "--image-height", String(d.height),
+    ], { encoding: "utf8" });
+    const verifyJson = JSON.parse(verify.stdout.slice(verify.stdout.indexOf("{")));
+    assert.equal(verifyJson.verdict, "ok",
+      "drawnRects[0] from sign preview should round-trip through pdf stamp verify");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("CLI preview: --auto-place all stamps at every high-confidence candidate", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "preview-all-"));
   try {

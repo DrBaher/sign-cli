@@ -984,7 +984,15 @@ async function main(): Promise<void> {
       ...(signatureImage ? { signatureImageOptions: parseStampOptions(parsed) } : {}),
       ...(flagValue(parsed, "idempotency-key") ? { idempotencyKey: flagValue(parsed, "idempotency-key")! } : {}),
     });
-    emitJsonWithProvider(result, resolvedProvider);
+
+    // Wrap with `ok: true` so the success envelope matches every other
+    // command (audit gap closed). drawnRects intentionally omitted here:
+    // `sign sign` writes the sealed PDF to the local provider's internal
+    // store, not back to a caller-controlled path, so callers that want
+    // to round-trip rectangles should use `sign document` (which probes
+    // its own output) or fetch via `request fetch-final` + `pdf stamp
+    // verify`.
+    emitJsonWithProvider({ ok: true, ...result }, resolvedProvider);
     return;
   }
 
@@ -1348,20 +1356,34 @@ async function main(): Promise<void> {
     }
     fs.writeFileSync(outPath, pdfBytes);
 
-    // Quality assessment on the final preview, summed across positions.
+    // Quality assessment + drawn-rect probe on the final preview, summed
+    // across positions. `drawnRects` are read back from the PDF's content
+    // streams, so callers can round-trip them through `pdf stamp verify`
+    // even when --preserve-aspect-ratio shrunk the actual draw. Same
+    // semantic as `sign document`'s drawnRects field.
     const { assessStampQuality } = await import("./lib/stamp-quality.js");
+    const { verifyPdfStamp } = await import("./lib/pdf-stamp-verify.js");
     const allWarnings = [];
+    const drawnRects: StampPosition[] = [];
     for (const pos of positions) {
       const w = await assessStampQuality({
         pdfBytes, page: pos.page, x: pos.x, y: pos.y, width: pos.width, height: pos.height,
       });
       allWarnings.push(...w);
+      const probe = await verifyPdfStamp(pdfBytes, pos);
+      if (probe.found) {
+        drawnRects.push({
+          page: probe.found.page, x: probe.found.x, y: probe.found.y,
+          width: probe.found.width, height: probe.found.height,
+        });
+      }
     }
     console.log(JSON.stringify({
       ok: true,
       pdf: pdfPath,
       out: outPath,
       positions,
+      drawnRects,
       bytes: pdfBytes.length,
       sealed: false,
       stampOptions,
@@ -1500,6 +1522,18 @@ async function main(): Promise<void> {
       pdfBytes = await stampPlainTextOnPdf(pdfBytes, text, pos);
     }
     fs.writeFileSync(outPath, pdfBytes);
+
+    // Quality assessment — same shape as `pdf stamp` and `sign preview`, so
+    // users get a consistent warnings array regardless of which stamping
+    // command they ran.
+    const { assessStampQuality } = await import("./lib/stamp-quality.js");
+    const allWarnings = [];
+    for (const pos of positions) {
+      const w = await assessStampQuality({
+        pdfBytes, page: pos.page, x: pos.x, y: pos.y, width: pos.width, height: pos.height,
+      });
+      allWarnings.push(...w);
+    }
     console.log(JSON.stringify({
       ok: true,
       pdf: pdfPath,
@@ -1507,6 +1541,7 @@ async function main(): Promise<void> {
       text,
       positions,
       bytes: pdfBytes.length,
+      warnings: allWarnings,
     }, null, 2));
     return;
   }

@@ -145,6 +145,25 @@ function runStampText(args: string[]): SpawnSyncReturns<string> {
   return spawnSync("node", [CLI, "pdf", "stamp-text", ...args], { encoding: "utf8" });
 }
 
+test("CLI: pdf stamp-text emits warnings array (parity with `pdf stamp` and `sign preview`)", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "stamp-text-warn-"));
+  try {
+    const pdfPath = path.join(tmp, "p.pdf");
+    const outPath = path.join(tmp, "out.pdf");
+    writeFileSync(pdfPath, await buildDateOnlyPdf());
+    const r = runStampText([
+      "--pdf", pdfPath, "--text", "13 May 2026",
+      "--auto-place", "all", "--out", outPath,
+    ]);
+    assert.equal(r.status, 0, `stderr=${r.stderr}`);
+    const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
+    assert.ok(Array.isArray(payload.warnings),
+      "stamp-text must emit `warnings: []` for shape parity with pdf stamp / sign preview");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("CLI: pdf stamp-text --auto-place all skips alreadyFilled by default", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "stamp-text-"));
   try {

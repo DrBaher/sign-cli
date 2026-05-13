@@ -302,6 +302,10 @@ test("CLI: sign --auto-place true uses the detected underline-snap rectangle", a
     assert.equal(sign.status, 0, `sign failed: ${sign.stderr}`);
     // Stderr should announce the auto-place choice
     assert.match(sign.stderr, /--auto-place .+ chose anchor:Signature:/);
+    // Success envelope: `ok: true` must be present for consistency with
+    // every other command. Locked in to prevent regression.
+    const payload = JSON.parse(sign.stdout.slice(sign.stdout.indexOf("{")));
+    assert.equal(payload.ok, true, "sign sign success response must include ok: true");
     assert.match(sign.stderr, /adjustedFrom=underline-snap/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

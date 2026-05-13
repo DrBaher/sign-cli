@@ -21,6 +21,19 @@ export type CommandSpec = {
 };
 
 export const HELP_CATALOG: CommandSpec[] = [
+  // Global flags — accepted on EVERY command. Listed here as a pseudo-entry
+  // so `sign --help` / `sign --catalog json` surfaces them; they don't
+  // belong to any single subcommand.
+  {
+    command: "(global flags)",
+    summary: "Accepted on every command. Resolved BEFORE the per-command flags below. Resolution order for any value: flag > env > active profile > built-in default.",
+    flags: [
+      { name: "--provider", description: "dropbox | docusign | signwell | local. Env: `SIGN_PROVIDER`. Profile-driven via `--profile <name>`." },
+      { name: "--strict-provider", description: "`true` to reject mismatches between the resolved provider and a request's persisted provider. Env: `SIGN_STRICT_PROVIDER`." },
+      { name: "--profile", description: "Activate a named profile from `~/.config/sign-cli/profiles.json` (or `SIGN_PROFILES_FILE`). The active profile sets defaults for provider, dbPath, strictProvider, defaultTokenTtlMinutes, defaultSignerEmail, and credentials. Env: `SIGN_PROFILE`. See `sign profile show` for resolved state." },
+      { name: "--verbose", description: "`true` to enable HTTP/SDK debug logging (sets `SIGN_DEBUG=1`). Headers like Authorization / API keys are auto-redacted." },
+    ],
+  },
   // Top-level lifecycle
   {
     command: "init",
