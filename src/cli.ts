@@ -336,14 +336,55 @@ async function main(): Promise<void> {
   if ((flagValue(parsed, "verbose") ?? "false") === "true") {
     process.env.SIGN_DEBUG = "1";
   }
-  const dbPath = process.env.SIGN_DB_PATH ?? "./data/sign.db";
+
+  // ── Profile bootstrap (must run BEFORE openDatabase) ────────────────────
+  // The active profile may set `dbPath` and `credentials`. Both need to be
+  // resolved before we open the DB and before any adapter reads its env
+  // vars. The profile flag itself is purely additive — existing flag-only /
+  // env-only invocations see no change because the profile layer is
+  // consulted only when nothing higher in the resolution chain produced a
+  // value.
+  const { loadProfileContext, resolveFromProfile, applyCredentialsToProcessEnv } =
+    await import("./lib/profiles.js");
+  const profileCtx = loadProfileContext({
+    profileFlag: flagValue(parsed, "profile"),
+  });
+  // Apply the active profile's credentials block to process.env BEFORE any
+  // adapter consults its env vars. Atomic semantics: only the layer that
+  // resolved `provider` contributes credentials.
+  applyCredentialsToProcessEnv(profileCtx);
+
+  // Resolve dbPath: flag (none yet) > env > profile (project > user) > default.
+  // We don't have a per-command dbPath flag today, so the flag layer is
+  // effectively skipped here.
+  let dbPath = process.env.SIGN_DB_PATH;
+  if (!dbPath) {
+    const profileDb = resolveFromProfile("dbPath", profileCtx);
+    if (profileDb) dbPath = profileDb.value;
+  }
+  if (!dbPath) dbPath = "./data/sign.db";
+
   const db = openDatabase(dbPath);
+
   // Resolve the provider AND remember how it was resolved, so mutating
   // commands can both print a stderr banner and embed `resolved_provider`
   // in their JSON output. See Item 1 of the product-readiness feedback.
-  const resolvedProvider = resolveSignProviderWithSource(flagValue(parsed, "provider"));
+  // Profile layer is consulted between env and the persisted-fallback layer
+  // (see resolveSignProviderWithSource overload).
+  const profileProvider = resolveFromProfile("provider", profileCtx);
+  const resolvedProvider = resolveSignProviderWithSource(
+    flagValue(parsed, "provider"),
+    undefined,
+    profileProvider ? { value: profileProvider.value, layer: profileProvider.source } : undefined,
+  );
   const selectedProvider = resolvedProvider.provider;
-  const strictProvider = strictProviderEnabled(flagValue(parsed, "strict-provider"));
+
+  // Strict-provider: flag > env > profile.
+  const profileStrict = resolveFromProfile("strictProvider", profileCtx);
+  const strictProvider = strictProviderEnabled(
+    flagValue(parsed, "strict-provider"),
+    profileStrict?.value,
+  );
 
   // Version flag — handled before any positional dispatch.
   if ((flagValue(parsed, "version") ?? "false") === "true") {
@@ -1011,6 +1052,158 @@ async function main(): Promise<void> {
       process.exit(3);
     }
     return;
+  }
+
+  if (root === "profile") {
+    const sub = parsed.positionals[1];
+    const {
+      defaultUserFilePath,
+      findProjectFile,
+      readUserFile,
+      readProjectFile,
+      writeProjectFile,
+      initUserProfile,
+      setProfileKey,
+      deleteUserProfile,
+      useUserProfile,
+      resolveProfileView,
+      redactCredentials,
+      loadProfileContext: loadCtx,
+    } = await import("./lib/profiles.js");
+    const userFilePath = defaultUserFilePath();
+
+    if (sub === "list") {
+      const file = readUserFile(userFilePath);
+      const projectPath = findProjectFile(process.cwd());
+      console.log(JSON.stringify({
+        ok: true,
+        userFilePath,
+        defaultProfile: file?.defaultProfile,
+        profiles: file ? Object.keys(file.profiles).sort() : [],
+        projectFile: projectPath ?? null,
+        active: (() => {
+          try { return loadCtx({ userFilePath }).activeSource; } catch { return { kind: "none" }; }
+        })(),
+      }, null, 2));
+      return;
+    }
+
+    if (sub === "show") {
+      const name = flagValue(parsed, "name");
+      const showSecrets = flagValue(parsed, "show-secrets") === "true";
+      // If --name given, show that user profile directly (with provenance =
+      // user only). If not, show the active resolved view.
+      if (name) {
+        const file = readUserFile(userFilePath);
+        if (!file || !file.profiles[name]) {
+          throw new SignCliError({
+            code: "PROFILE_NOT_FOUND",
+            message: `No profile named '${name}' in ${userFilePath}.`,
+            hint: file ? `Available: ${Object.keys(file.profiles).sort().join(", ")}.` : `No user profile file yet.`,
+          });
+        }
+        const profile = file.profiles[name];
+        const display = showSecrets ? profile : redactCredentials(profile);
+        console.log(JSON.stringify({ ok: true, name, userFilePath, profile: display }, null, 2));
+        return;
+      }
+      const ctx = loadCtx({ userFilePath });
+      const view = resolveProfileView(ctx, { showSecrets });
+      console.log(JSON.stringify({ ok: true, ...view }, null, 2));
+      return;
+    }
+
+    if (sub === "use") {
+      const name = flagValue(parsed, "name") ?? parsed.positionals[2];
+      if (!name) {
+        throw new SignCliError({
+          code: "MISSING_FLAG",
+          message: "sign profile use requires --name <name> (or a positional name).",
+        });
+      }
+      const file = useUserProfile(userFilePath, name);
+      console.log(JSON.stringify({ ok: true, defaultProfile: file.defaultProfile, userFilePath }, null, 2));
+      return;
+    }
+
+    if (sub === "set") {
+      const name = flagValue(parsed, "name", true)!;
+      const key = flagValue(parsed, "key", true)!;
+      const value = flagValue(parsed, "value", true)!;
+      const file = setProfileKey({ filePath: userFilePath, name, key: key as never, value });
+      console.log(JSON.stringify({ ok: true, name, key, profiles: Object.keys(file.profiles).sort(), userFilePath }, null, 2));
+      return;
+    }
+
+    if (sub === "unset") {
+      const name = flagValue(parsed, "name", true)!;
+      const key = flagValue(parsed, "key", true)!;
+      setProfileKey({ filePath: userFilePath, name, key: key as never, value: undefined });
+      console.log(JSON.stringify({ ok: true, name, key, userFilePath }, null, 2));
+      return;
+    }
+
+    if (sub === "delete") {
+      const name = flagValue(parsed, "name", true)!;
+      const yes = flagValue(parsed, "yes") === "true";
+      if (!yes) {
+        throw new SignCliError({
+          code: "MISSING_FLAG",
+          message: "sign profile delete requires --yes true to confirm.",
+          hint: "Re-run with --yes true.",
+        });
+      }
+      const file = deleteUserProfile(userFilePath, name);
+      console.log(JSON.stringify({ ok: true, deleted: name, remaining: Object.keys(file.profiles).sort(), userFilePath }, null, 2));
+      return;
+    }
+
+    if (sub === "init") {
+      const name = flagValue(parsed, "name");
+      const project = flagValue(parsed, "project") === "true";
+      const setDefault = flagValue(parsed, "set-default") === "true";
+      const provider = flagValue(parsed, "provider");
+      const dbPathFlag = flagValue(parsed, "db");
+      const strictFlag = flagValue(parsed, "strict-provider");
+      const tokenTtl = flagValue(parsed, "default-token-ttl-minutes");
+      const signerEmail = flagValue(parsed, "default-signer-email");
+
+      const values: import("./lib/profiles.js").ProfileV1 = { version: 1 };
+      if (provider) values.provider = provider as never;
+      if (dbPathFlag) values.dbPath = dbPathFlag;
+      if (strictFlag === "true") values.strictProvider = true;
+      else if (strictFlag === "false") values.strictProvider = false;
+      if (tokenTtl !== undefined) values.defaultTokenTtlMinutes = Number(tokenTtl);
+      if (signerEmail) values.defaultSignerEmail = signerEmail;
+
+      if (project) {
+        const pathMod = await import("node:path");
+        const target = pathMod.join(process.cwd(), "sign-profile.json");
+        // Write the project-file shape (single object, no profiles{} map).
+        writeProjectFile(target, values);
+        console.log(JSON.stringify({ ok: true, kind: "project", path: target, profile: values }, null, 2));
+        return;
+      }
+      if (!name) {
+        throw new SignCliError({
+          code: "MISSING_FLAG",
+          message: "sign profile init requires --name <name> (or --project for a project-file init).",
+        });
+      }
+      const file = initUserProfile({
+        filePath: userFilePath, name,
+        values,
+        setAsDefault: setDefault,
+      });
+      console.log(JSON.stringify({ ok: true, kind: "user", name, userFilePath, profiles: Object.keys(file.profiles).sort(), defaultProfile: file.defaultProfile }, null, 2));
+      return;
+    }
+
+    throw new SignCliError({
+      code: "UNKNOWN_COMMAND",
+      message: `Unknown profile subcommand: ${JSON.stringify(sub)}.`,
+      hint: "Valid: list, show, use, set, unset, delete, init.",
+    });
   }
 
   if (root === "document") {

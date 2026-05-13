@@ -692,6 +692,73 @@ Side effects: **read-only**. Idempotent.
 
 ---
 
+### 6.7 Profiles — named bundles of provider + DB + credentials defaults
+
+A **profile** captures provider, dbPath, strict-provider, default token TTL, default signer email, and a credentials block in one named bundle. Activate it with `--profile <name>` / `SIGN_PROFILE=<name>`, or via `defaultProfile` in the user file, or implicitly via a `sign-profile.json` checked into the project root.
+
+**Resolution order** for any field (provider, dbPath, etc.) is `flag > env > project profile > user profile > built-in default`. Profiles are additive — existing flag-and-env-driven invocations see no change.
+
+**Storage**:
+- User file: `$XDG_CONFIG_HOME/sign-cli/profiles.json` (mode `0600`), shape `{ version, defaultProfile?, profiles: { <name>: <profile> } }`. Override path via `SIGN_PROFILES_FILE`.
+- Project file: `sign-profile.json`, discovered by walking **upward from CWD** until `$HOME` / filesystem root. Single-profile shape (no map).
+
+**Schema** (v1):
+
+```jsonc
+{
+  "version": 1,
+  "provider": "dropbox" | "docusign" | "signwell" | "local",
+  "strictProvider": true,
+  "dbPath": "~/.sign-cli/prod.db",
+  "defaultTokenTtlMinutes": 60,
+  "defaultSignerEmail": "alice@example.com",
+  "credentials": {
+    "DROPBOX_SIGN_API_KEY": "{{env:DROPBOX_SIGN_API_KEY_PROD}}",
+    "DROPBOX_SIGN_TEST_MODE": "false"
+  }
+}
+```
+
+**`{{env:VAR}}` expansion** happens at load time. The file persists the literal reference; the in-memory profile gets the resolved value. An **unset env var errors loudly** (`PROFILE_ENV_VAR_UNSET`) with a hint naming the missing variable.
+
+**Atomic credentials** — the layer that resolved `provider` is the only one that contributes credentials. Switching profiles can never silently inherit the previous profile's secrets.
+
+**CLI surface**:
+
+| Command | What |
+|---|---|
+| `sign profile list` | Lists profiles + active source |
+| `sign profile show [--name <n>] [--show-secrets true]` | Resolved view with per-field provenance. Credentials redacted by default. |
+| `sign profile use --name <n>` | Sets `defaultProfile` in the user file |
+| `sign profile set --name <n> --key <k> --value <v>` | Single-key edit (re-validates) |
+| `sign profile unset --name <n> --key <k>` | Removes a key |
+| `sign profile delete --name <n> --yes true` | Removes a profile |
+| `sign profile init --name <n> [--provider <p>] [--db <path>] [--set-default true]` | Creates a user profile |
+| `sign profile init --project true [--provider <p>]` | Writes `./sign-profile.json` instead |
+
+**Credentials format on set**: use `--key credentials.<NAME>` with a value that may contain `{{env:VAR}}` references:
+
+```bash
+sign profile set --name prod --key credentials.DROPBOX_SIGN_API_KEY \
+  --value '{{env:DROPBOX_SIGN_API_KEY_PROD}}'
+```
+
+**Error codes**:
+
+| Code | Cause |
+|---|---|
+| `PROFILE_NOT_FOUND` | `--profile <name>` / `SIGN_PROFILE` named a profile that doesn't exist; hint lists available names |
+| `PROFILE_ALREADY_EXISTS` | `sign profile init` on a name that's already present |
+| `PROFILE_ENV_VAR_UNSET` | `{{env:VAR}}` reference but the var is unset in the environment |
+| `INVALID_PROFILE` | Schema validation failed (unknown field, bad provider, bad type, etc.) |
+| `INVALID_PROFILE_NAME` | Name contains chars outside `[A-Za-z0-9._-]` |
+
+**Provider banner**: when a profile resolves `provider`, the stderr banner reads `[sign] resolved provider: dropbox (via project sign-profile.json)` or `(via active profile)` so the source is visible.
+
+**Side effects**: `init` / `set` / `unset` / `use` / `delete` write to the user file (mode `0600`); `init --project true` writes `./sign-profile.json`. All others are read-only. No DB interaction.
+
+---
+
 ## 7. Decision recipes
 
 Short "if X then Y" rules covering the common branching points.
