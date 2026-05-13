@@ -347,10 +347,16 @@ function anchorHasNearbyDate(anchor: TextItem, items: TextItem[]): boolean {
   const lineTolerance = Math.max(anchor.height * 0.6, 4);
   for (const item of items) {
     if (item === anchor) continue;
+    // Same line as the anchor, to the right. We deliberately do NOT probe
+    // the line below — multi-anchor PDFs (e.g. `Date:` blank, then
+    // `Date d'effet: 12 mai 2026` on the next line) trip a false positive
+    // there, marking the blank Date: as alreadyFilled because it sees the
+    // OTHER anchor's date below. Same-line-right is tight enough to catch
+    // the common case (`Date: 12/05/2026`) without that false positive.
+    // For the rare `Date:\n<date>` two-line layout, the user can pass
+    // --overwrite-filled true.
     const sameLineRight = Math.abs(item.y - anchor.y) <= lineTolerance && item.x >= anchor.x;
-    const lineBelow = item.y < anchor.y - lineTolerance && item.y > anchor.y - anchor.height * 4 &&
-      Math.abs(item.x - anchor.x) < anchor.width * 4;
-    if (!sameLineRight && !lineBelow) continue;
+    if (!sameLineRight) continue;
     for (const re of DATE_TEXT_PATTERNS) {
       if (re.test(item.text)) return true;
     }

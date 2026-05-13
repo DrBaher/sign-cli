@@ -53,6 +53,28 @@ test("detectSignatureFields: alreadyFilled set when date text is nearby", async 
   assert.equal(filledDate!.alreadyFilled, true, "Date d'effet followed by '12 mai 2026' should be flagged");
 });
 
+test("detectSignatureFields: alreadyFilled does NOT cross-pollute between adjacent anchors", async () => {
+  // Regression: a blank `Date:` immediately above a `Date d'effet: 12 mai 2026`
+  // line would incorrectly inherit alreadyFilled=true because the
+  // line-below probe found the OTHER anchor's date. The fix is to limit
+  // alreadyFilled detection to same-line-right only.
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Date:", { x: 72, y: 460, font: helv, size: 12 });
+  page.drawText("______________________", { x: 110, y: 460, font: helv, size: 12 });
+  page.drawText("Date d'effet:", { x: 72, y: 420, font: helv, size: 12 });
+  page.drawText("12 mai 2026", { x: 145, y: 420, font: helv, size: 12 });
+  const r = await detectSignatureFields(Buffer.from(await doc.save()));
+  const blankDate = r.dateCandidates.find((c) => c.source === "anchor:Date:");
+  const filledDate = r.dateCandidates.find((c) => c.source === "anchor:Date d'effet:");
+  assert.ok(blankDate);
+  assert.ok(filledDate);
+  assert.equal(blankDate!.alreadyFilled, false,
+    "blank Date: must NOT inherit alreadyFilled from the adjacent Date d'effet: anchor");
+  assert.equal(filledDate!.alreadyFilled, true);
+});
+
 test("detectSignatureFields: candidates list is unified (signature + date together)", async () => {
   const pdf = await buildSigDatePdf();
   const r = await detectSignatureFields(pdf);
