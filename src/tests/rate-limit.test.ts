@@ -64,10 +64,10 @@ test("SIGN_LOCAL_MAX_FETCHES_PER_HOUR throttles repeated fetches with RATE_LIMIT
       const token = created.tokens[0].token;
 
       // Two fetches succeed.
-      fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token });
-      fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token });
+      await fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token });
+      await fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token });
       // Third hits the limit.
-      assert.throws(
+      await assert.rejects(
         () => fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token }),
         (err: unknown) => err instanceof SignCliError && err.code === "RATE_LIMITED",
       );
@@ -135,14 +135,14 @@ test("Different request IDs count separately against the per-hour limit", { conc
       });
       await sendSigningRequest(db, { requestId: a.requestId, provider: "local", testMode: true });
       await sendSigningRequest(db, { requestId: b.requestId, provider: "local", testMode: true });
-      fetchUnsignedDocumentForSigner(db, { requestId: a.requestId, token: a.tokens[0].token });
-      fetchUnsignedDocumentForSigner(db, { requestId: b.requestId, token: b.tokens[0].token });
+      await fetchUnsignedDocumentForSigner(db, { requestId: a.requestId, token: a.tokens[0].token });
+      await fetchUnsignedDocumentForSigner(db, { requestId: b.requestId, token: b.tokens[0].token });
       // Each is at its limit; another fetch on either should fail.
-      assert.throws(
+      await assert.rejects(
         () => fetchUnsignedDocumentForSigner(db, { requestId: a.requestId, token: a.tokens[0].token }),
         (err: unknown) => err instanceof SignCliError && err.code === "RATE_LIMITED",
       );
-      assert.throws(
+      await assert.rejects(
         () => fetchUnsignedDocumentForSigner(db, { requestId: b.requestId, token: b.tokens[0].token }),
         (err: unknown) => err instanceof SignCliError && err.code === "RATE_LIMITED",
       );
@@ -174,9 +174,9 @@ test("Fetches outside the 1-hour window don't count against the limit", { concur
       const token = created.tokens[0].token;
       // Two fetches with simulated "now" 90 minutes apart — outside the window, so no rate-limit.
       const earlier = new Date(Date.now() - 90 * 60 * 1000);
-      fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token, now: earlier });
+      await fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token, now: earlier });
       // The second call uses the real "now"; the earlier event falls outside the window.
-      fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token });
+      await fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token });
     } finally {
       rmSync(dir, { recursive: true, force: true });
       db.close();

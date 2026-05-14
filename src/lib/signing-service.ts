@@ -53,7 +53,14 @@ import {
   verifyDocuSignCallback,
   type DocuSignWebhookPayload,
 } from "./docusign-webhook.js";
-import { inspectPdfSignatures, type PdfSignatureReport, type TrustLabel } from "./pdf-signature.js";
+import {
+  inspectPdfSignatures,
+  inspectPdfSignaturesBuffer,
+  summarizeExistingSignatures,
+  type ExistingSignatureSummary,
+  type PdfSignatureReport,
+  type TrustLabel,
+} from "./pdf-signature.js";
 import { digestForChainHead, inspectTimestampResponse, issueRfc3161Timestamp, type TimestampInspection } from "./timestamp.js";
 import {
   parseFieldSpec,
@@ -4204,12 +4211,18 @@ export type FetchUnsignedDocumentResult = {
   bytes: number;
   sha256: string;
   outPath: string | null;
+  // Pre-sign view of any existing PADES signatures on the PDF. Surfaces
+  // even when the PDF has no signatures (count=0, hasSignature=false) so
+  // signer-side agents can branch on a stable shape. Treat
+  // `allDigestsOk: false` as a red flag (a prior signature is broken;
+  // someone may have tampered with the doc after it was signed).
+  existingSignatures: ExistingSignatureSummary;
 };
 
-export function fetchUnsignedDocumentForSigner(
+export async function fetchUnsignedDocumentForSigner(
   db: SqliteDb,
   input: { requestId: string; token: string; signerEmail?: string; outPath?: string; now?: Date },
-): FetchUnsignedDocumentResult {
+): Promise<FetchUnsignedDocumentResult> {
   const request = getRequestRow(db, input.requestId);
   const provider = getPersistedProvider(request);
   ensureLocalProvider(request, provider);
@@ -4265,6 +4278,21 @@ export function fetchUnsignedDocumentForSigner(
     now,
   });
 
+  // Pre-sign visibility: surface any existing signatures so the signer
+  // (human or agent) can see what they're countersigning. Best-effort —
+  // if inspection throws (corrupt PDF / unusual envelope), we don't block
+  // the fetch; we attach a degenerate summary with a warning instead.
+  let existingSignatures: ExistingSignatureSummary;
+  try {
+    const report = await inspectPdfSignaturesBuffer(document.pdf, `request:${request.id}`);
+    existingSignatures = summarizeExistingSignatures(report);
+  } catch (err) {
+    existingSignatures = {
+      count: 0, hasSignature: false, allDigestsOk: false, signers: [],
+      warnings: [`inspectPdfSignatures failed: ${err instanceof Error ? err.message : String(err)}`],
+    };
+  }
+
   return {
     requestId: request.id,
     providerRequestId,
@@ -4273,6 +4301,7 @@ export function fetchUnsignedDocumentForSigner(
     bytes: document.bytes,
     sha256: document.sha256,
     outPath,
+    existingSignatures,
   };
 }
 

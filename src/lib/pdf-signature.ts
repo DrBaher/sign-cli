@@ -32,6 +32,65 @@ export type PdfSignatureReport = {
   warnings: string[];
 };
 
+/** Compact view of a PdfSignatureReport for embedding inside other command
+ *  results (e.g. `signer fetch-document`, `sign`). Drops the verbose byte
+ *  range + raw signature bytes + per-finding parse warnings; keeps the
+ *  information a signer needs to decide whether to countersign:
+ *  who-signed-it, what authority issued the cert, whether the digest
+ *  verifies. `allDigestsOk: false` means at least one existing signature
+ *  is broken (tamper or parse failure) — treat as a red flag. */
+export type ExistingSignatureSummary = {
+  count: number;
+  hasSignature: boolean;
+  allDigestsOk: boolean;
+  signers: Array<{
+    subject: string | null;
+    issuer: string | null;
+    validFrom: string | null;
+    validTo: string | null;
+    fingerprintSha256: string | null;
+    trust: TrustLabel;
+    digestOk: boolean | null;
+  }>;
+  warnings: string[];
+};
+
+export function summarizeExistingSignatures(report: PdfSignatureReport): ExistingSignatureSummary {
+  const signers: ExistingSignatureSummary["signers"] = [];
+  let allDigestsOk = report.signatureCount > 0;
+  const warnings: string[] = [...report.warnings];
+  for (const finding of report.signatures) {
+    if (finding.messageDigestMatches !== true) allDigestsOk = false;
+    warnings.push(...finding.parseWarnings);
+    if (finding.signers.length === 0) {
+      // Signature exists but no signer cert recovered — surface as an
+      // entry with all-null cert fields so the caller sees the count is
+      // correct.
+      signers.push({
+        subject: null, issuer: null, validFrom: null, validTo: null,
+        fingerprintSha256: null, trust: "unknown",
+        digestOk: finding.messageDigestMatches,
+      });
+      continue;
+    }
+    for (const s of finding.signers) {
+      signers.push({
+        subject: s.subject, issuer: s.issuer,
+        validFrom: s.validFrom, validTo: s.validTo,
+        fingerprintSha256: s.fingerprintSha256, trust: s.trust,
+        digestOk: finding.messageDigestMatches,
+      });
+    }
+  }
+  return {
+    count: report.signatureCount,
+    hasSignature: report.hasSignature,
+    allDigestsOk,
+    signers,
+    warnings,
+  };
+}
+
 const OID_MESSAGE_DIGEST = "1.2.840.113549.1.9.4";
 const OID_SHA256 = "2.16.840.1.101.3.4.2.1";
 const OID_SHA1 = "1.3.14.3.2.26";
@@ -180,6 +239,18 @@ function describeCertificate(cert: Buffer): {
 
 export async function inspectPdfSignatures(filePath: string): Promise<PdfSignatureReport> {
   const buffer = await readFile(filePath);
+  return inspectPdfSignaturesBuffer(buffer, filePath);
+}
+
+/** Buffer-input sibling of inspectPdfSignatures. Use this when the PDF bytes
+ *  are already in memory (e.g. read from the local-provider store) so we
+ *  don't have to round-trip through a temp file. `virtualPath` is echoed
+ *  back in the report's `path` field — pass the canonical filename when one
+ *  exists, otherwise something descriptive like "request:<id>". */
+export async function inspectPdfSignaturesBuffer(
+  buffer: Buffer,
+  virtualPath: string = "<buffer>",
+): Promise<PdfSignatureReport> {
   const ranges = findByteRanges(buffer);
   const warnings: string[] = [];
   const signatures: PdfSignatureFinding[] = [];
@@ -260,7 +331,7 @@ export async function inspectPdfSignatures(filePath: string): Promise<PdfSignatu
   }
 
   return {
-    path: filePath,
+    path: virtualPath,
     fileSize: buffer.length,
     signatures,
     signatureCount: signatures.length,

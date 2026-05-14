@@ -113,6 +113,7 @@ test("dispatchMcp tools/list lists every signer-side tool", { concurrency: false
         "document",
         "pdf_detect_date_field",
         "pdf_detect_signature_field",
+        "pdf_inspect_signatures",
         "pdf_stamp_text",
         "preview",
         "profile_list",

@@ -88,6 +88,15 @@ export type SignDocumentResult = {
    */
   drawnRects: StampPosition[];
   warnings: QualityWarning[];
+  /**
+   * Pre-sign view of existing PADES signatures on the input PDF, if any.
+   * `null` when the input was a DOCX-like file (no pre-existing sigs are
+   * possible — the converted PDF is fresh). When the input was already a
+   * PDF, this surfaces what was on it BEFORE this command added its own
+   * seal — so the caller can see if they just countersigned a doc that
+   * other parties had already signed.
+   */
+  existingSignatures: import("./pdf-signature.js").ExistingSignatureSummary | null;
   verify: {
     chainValid: boolean;
     events: number;
@@ -234,6 +243,22 @@ export async function signDocumentOneShot(input: SignDocumentInput): Promise<Sig
       allWarnings.push(...w);
     }
 
+    // Inspect the ORIGINAL input (only meaningful when it was already a
+    // PDF — DOCX inputs go through docx2pdf-cli and produce a fresh PDF
+    // with no pre-existing signatures). Best-effort: if inspection
+    // throws (corrupt PDF, unusual envelope), we don't fail the whole
+    // command; just surface null.
+    let existingSignatures: import("./pdf-signature.js").ExistingSignatureSummary | null = null;
+    if (!converted) {
+      try {
+        const { inspectPdfSignatures, summarizeExistingSignatures } = await import("./pdf-signature.js");
+        const report = await inspectPdfSignatures(input.inputPath);
+        existingSignatures = summarizeExistingSignatures(report);
+      } catch {
+        // swallow — best-effort
+      }
+    }
+
     return {
       ok: true,
       input: input.inputPath,
@@ -245,6 +270,7 @@ export async function signDocumentOneShot(input: SignDocumentInput): Promise<Sig
       placements: [primary, ...extras],
       drawnRects,
       warnings: allWarnings,
+      existingSignatures,
       verify: {
         chainValid: verify.valid,
         events: verify.events,

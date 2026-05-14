@@ -369,6 +369,14 @@ export const HELP_CATALOG: CommandSpec[] = [
     example: "sign pdf detect-date-field --pdf ./contract.pdf",
   },
   {
+    command: "pdf inspect",
+    summary: "Inspect signatures on ANY PADES-signed PDF — ours, Adobe's, DocuSign's, Dropbox Sign's, SignWell's. Pure read; no DB interaction, no audit events written. Returns per-signature signer CN/email, cert subject + issuer, validity window, fingerprint, trust label (self_signed_local | self_signed_other | ca_signed | unknown), message-digest match, and parse warnings. Trust label is structural (issuer vs subject) — no chain validation, no trust-store lookup, no expiry check; for those, use an external verifier. Exit 2 when the PDF has no signatures.",
+    flags: [
+      { name: "--pdf", required: true, description: "PDF to inspect." },
+    ],
+    example: "sign pdf inspect --pdf ./signed-by-adobe.pdf",
+  },
+  {
     command: "pdf stamp-text",
     summary: "Stamp a plain text string (Helvetica regular, no underline) onto a PDF — sibling of `pdf stamp` for image stamping. Used for dates and other non-signature text fills. Supports `--auto-place` to fill detected DATE anchors automatically. Candidates that already contain a date string are skipped by default; pass `--overwrite-filled true` to ignore that protection.",
     flags: [
