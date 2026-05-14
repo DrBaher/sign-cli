@@ -7,17 +7,29 @@ permission) act.
 
 ## What the agent sees
 
+**Don't hardcode this list.** Query it at startup with `sign mcp tools` —
+the catalog grows; this is a snapshot, not a contract.
+
 ```bash
 sign mcp tools --format markdown   # human-readable catalog with input + output schemas
 sign mcp tools | jq '.tools[].name'
+# Read-only inspection
 # "signer_list"
 # "signer_fetch_document"
-# "sign"
-# "signer_decline"
 # "request_show"
 # "request_status"
 # "audit_verify"
 # "request_watch"
+# "pdf_detect_signature_field"
+# "pdf_detect_date_field"
+# "profile_list"
+# "profile_show"
+# Mutating (gated by --read-only true)
+# "sign"
+# "signer_decline"
+# "pdf_stamp_text"
+# "preview"
+# "document"
 ```
 
 Each tool ships a JSON-Schema `inputSchema`, `outputSchema`, and (for
@@ -40,7 +52,7 @@ What each flag buys you:
 |---|---|
 | `--capability tools` | hide resources/prompts surfaces — agent can't probe them |
 | `--tool …` (repeatable) | only the named tools are advertised; others return UNKNOWN_TOOL |
-| `--read-only true` | block sign + signer_decline (already excluded by --tool, belt-and-suspenders) |
+| `--read-only true` | block sign + signer_decline + pdf_stamp_text + preview + document (already excluded by --tool, belt-and-suspenders) |
 | `--emit-events …` | append every JSON-RPC message to NDJSON for replay |
 | `--emit-events-redact true` | mask tokens in the log so it's safe for a SIEM |
 

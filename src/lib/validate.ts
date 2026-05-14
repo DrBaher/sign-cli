@@ -48,6 +48,41 @@ export type DocumentPathRule = {
   maxBytes?: number;
 };
 
+/** Config-path validator for values stored in a profile or other long-lived
+ *  config (notably `sign profile init --db <path>`). More permissive than
+ *  validateOutputPath: home-relative paths (`~/...`, `~`) are accepted
+ *  without the SIGN_ALLOW_ABSOLUTE_DOCS opt-in, because the canonical
+ *  example is `~/.sign-cli/prod.db`. Other absolute paths still require
+ *  the opt-in. Returns the path with `~` expanded.
+ *
+ *  The traversal protection is still there: `../../../etc/sign.db` is
+ *  rejected unless the user opts in explicitly. */
+export function validateConfigPath(
+  rawPath: string,
+  rule: { cwd?: string; home?: string } = {},
+): string {
+  const home = rule.home ?? (process.env.HOME ?? "/");
+  const cwd = rule.cwd ?? process.cwd();
+  // Home-relative shortcut: `~`, `~/foo` → expand to absolute under $HOME.
+  let working = rawPath;
+  if (working === "~") working = home;
+  else if (working.startsWith("~/")) working = path.join(home, working.slice(2));
+  const resolved = path.resolve(cwd, working);
+  // OK if resolved sits under $HOME OR under cwd.
+  const homeResolved = path.resolve(home);
+  const cwdResolved = path.resolve(cwd);
+  const insideHome = !path.relative(homeResolved, resolved).startsWith("..") && !path.isAbsolute(path.relative(homeResolved, resolved));
+  const insideCwd = !path.relative(cwdResolved, resolved).startsWith("..") && !path.isAbsolute(path.relative(cwdResolved, resolved));
+  if (insideHome || insideCwd) return resolved;
+  // Otherwise: require the opt-in.
+  const allow = (process.env.SIGN_ALLOW_ABSOLUTE_DOCS ?? "").toLowerCase();
+  if (["1", "true", "yes"].includes(allow)) return resolved;
+  throw new Error(
+    `Config path "${rawPath}" is outside both $HOME (${home}) and CWD (${cwd}). ` +
+    `Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
+  );
+}
+
 /** Output-path counterpart to validateDocumentPath. Only enforces the
  *  traversal check (the path doesn't have to exist yet — we're about to
  *  write to it). Override with SIGN_ALLOW_ABSOLUTE_DOCS=1 (same toggle as

@@ -27,7 +27,7 @@ import {
 } from "./lib/help-catalog.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
 import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio } from "./lib/mcp-server.js";
-import { validateBulkRowCount, validateDocumentPath, validateEmail, validateFieldCount, validateOutputPath, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
+import { validateBulkRowCount, validateConfigPath, validateDocumentPath, validateEmail, validateFieldCount, validateOutputPath, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import {
   resolveSignProvider,
   resolveSignProviderWithSource,
@@ -998,6 +998,7 @@ async function main(): Promise<void> {
 
   if (root === "pdf" && sub === "stamp" && action === "verify") {
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
     const position = readImagePositionFlags(parsed);
     if (!position || !isCompletePosition(position)) {
       throw new SignCliError({
@@ -1021,6 +1022,7 @@ async function main(): Promise<void> {
 
   if (root === "pdf" && sub === "stamp") {
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
     const imageFlag = flagValue(parsed, "image", true)!;
     const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     const position = readImagePositionFlags(parsed);
@@ -1178,7 +1180,14 @@ async function main(): Promise<void> {
 
       const values: import("./lib/profiles.js").ProfileV1 = { version: 1 };
       if (provider) values.provider = provider as never;
-      if (dbPathFlag) values.dbPath = dbPathFlag;
+      if (dbPathFlag) {
+        // Validate the dbPath at config-write time so a malicious or
+        // typo'd path doesn't get baked into the profile file. Allows
+        // home-relative paths (~/...) without the absolute-docs opt-in,
+        // since `~/.sign-cli/prod.db` is the documented example.
+        values.dbPath = dbPathFlag;
+        validateConfigPath(dbPathFlag);
+      }
       if (strictFlag === "true") values.strictProvider = true;
       else if (strictFlag === "false") values.strictProvider = false;
       if (tokenTtl !== undefined) values.defaultTokenTtlMinutes = Number(tokenTtl);
@@ -1221,6 +1230,7 @@ async function main(): Promise<void> {
     // copy output → cleanup. All temp DB / store / key state is
     // scoped to the call (the user's main ./data/sign.db is untouched).
     const inputPath = parsed.positionals[1] ?? flagValue(parsed, "input", true)!;
+    validateDocumentPath(inputPath);
     const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     const signerName = flagValue(parsed, "signer") ?? flagValue(parsed, "signer-name");
     if (!signerName) {
@@ -1278,6 +1288,7 @@ async function main(): Promise<void> {
     // draft PDF you can open in a viewer to confirm the placement looks
     // right before sealing.
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
     const imageFlag = flagValue(parsed, "signature-image");
     const nameSig = flagValue(parsed, "name-signature");
     const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
@@ -1397,6 +1408,7 @@ async function main(): Promise<void> {
     // (added in the date-handling feature) live under `sign pdf
     // detect-date-field`.
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
     const verboseFlag = flagValue(parsed, "verbose");
     const verbose = verboseFlag === "true" || verboseFlag === "yes" || verboseFlag === "1";
     const fs = await import("node:fs");
@@ -1425,6 +1437,7 @@ async function main(): Promise<void> {
     // `alreadyFilled: true` when a recognisable date string is already
     // present near the anchor — callers stamping a date can skip those.
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
     const verboseFlag = flagValue(parsed, "verbose");
     const verbose = verboseFlag === "true" || verboseFlag === "yes" || verboseFlag === "1";
     const fs = await import("node:fs");
@@ -1452,6 +1465,7 @@ async function main(): Promise<void> {
     // already filled in nearby are skipped — pass `--overwrite-filled true`
     // to ignore that protection.
     const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
     const text = flagValue(parsed, "text", true)!;
     const outPath = validateOutputPath(flagValue(parsed, "out", true)!);
     const fs = await import("node:fs");

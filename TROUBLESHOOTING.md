@@ -16,7 +16,7 @@ When a `sign` CLI command fails, it now emits a JSON envelope to stderr with a s
 }
 ```
 
-Set `SIGN_ERROR_FORMAT=text` to fall back to the legacy plain-string-on-stderr behavior. Codes agents can rely on: `TOKEN_REQUIRED`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_SIGNER_MISMATCH`, `SIGNER_ALREADY_SIGNED`, `PRE_SIGN_HASH_MISMATCH`, `PRE_SIGN_TITLE_MISMATCH`, `PRE_SIGN_TITLE_BAD_REGEX`, `PRE_SIGN_SIGNER_MISMATCH`, `NON_LOCAL_PROVIDER`, `REQUEST_NOT_SENT`, `MISSING_FLAG`, `UNKNOWN_COMMAND`, `INTERNAL` (fallback for un-tagged failures).
+Set `SIGN_ERROR_FORMAT=text` to fall back to the legacy plain-string-on-stderr behavior. Codes agents can rely on: `TOKEN_REQUIRED`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_SIGNER_MISMATCH`, `SIGNER_ALREADY_SIGNED`, `PRE_SIGN_HASH_MISMATCH`, `PRE_SIGN_TITLE_MISMATCH`, `PRE_SIGN_TITLE_BAD_REGEX`, `PRE_SIGN_SIGNER_MISMATCH`, `NON_LOCAL_PROVIDER`, `REQUEST_NOT_SENT`, `MISSING_FLAG`, `UNKNOWN_COMMAND`, `STORAGE_UNWRITABLE`, `PROFILE_ENV_VAR_UNSET`, `INVALID_PROFILE`, `INVALID_PROFILE_NAME`, `PROFILE_NOT_FOUND`, `PROFILE_ALREADY_EXISTS`, `INTERNAL` (fallback for un-tagged failures).
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -36,7 +36,11 @@ Set `SIGN_ERROR_FORMAT=text` to fall back to the legacy plain-string-on-stderr b
 | `request cancel is destructive at the provider. Re-run with --yes true to confirm.` | Safety guard. | Re-run with `--yes true`. |
 | `DocuSign cancel requires --reason "..."` | DocuSign requires a void reason. | Pass `--reason "Reason"`. |
 | `Dropbox Sign reminders require --email <signer email>.` | Dropbox's remind endpoint needs the signer email. | Pass `--email signer@example.com` to `request remind`. |
-| `Document path escapes the working directory: ...` | Path validation blocked an absolute path or `..` traversal. | Move the file under your CWD or set `SIGN_ALLOW_ABSOLUTE_DOCS=1`. |
+| `Document path escapes the working directory: ...` | Path validation blocked an absolute path or `..` traversal on a `--document` / `--pdf` / `--input` flag. | Move the file under your CWD or set `SIGN_ALLOW_ABSOLUTE_DOCS=1`. |
+| `Output path escapes the working directory: ...` | Same guard as above, but on a `--out` flag. The CLI refuses to write outside CWD by default so a buggy or malicious caller can't drop a sealed PDF anywhere on disk. | Move the destination inside CWD or set `SIGN_ALLOW_ABSOLUTE_DOCS=1` for that invocation only. |
+| `Config path "..." is outside both $HOME (...) and CWD (...)` | `sign profile init --db <path>` got an absolute path that's neither under `$HOME` nor under CWD. The validator is permissive about home-relative paths (`~/.sign-cli/prod.db`) since that's the canonical example, but stricter about anything else. | Use `~/...`, a relative path under CWD, or set `SIGN_ALLOW_ABSOLUTE_DOCS=1`. |
+| `error.code == "STORAGE_UNWRITABLE"` | `openDatabase` couldn't create or write the parent directory of `SIGN_DB_PATH` (or the active profile's `dbPath`). Common cause: `EACCES` on a system-managed path, `EROFS` on a read-only mount. | Apply the `hint` in the envelope. Quick fixes: `SIGN_DB_PATH=~/.sign-cli/main.db`, switch profile (`sign profile use <name>`), or chmod/chown the parent. |
+| `error.code == "PROFILE_ENV_VAR_UNSET"` | An active profile references `{{env:VAR}}` but `VAR` isn't exported. The validator deliberately fails loud rather than silently substituting empty. | Export the env var named in the message before re-running. |
 | `Document "X" is N bytes, exceeding the limit of M` | Document over `SIGN_MAX_DOCUMENT_BYTES` (default 25 MiB). | Override via env or use a smaller PDF. |
 | `Signer email is not a valid email address` | Email failed the basic format check. | Fix the typo or surrounding whitespace. |
 | `--return-url protocol "javascript:" is not allowed` / `--return-url must use https://` | URL allowlist for embedded `--return-url`. | Use https or a localhost http URL. |

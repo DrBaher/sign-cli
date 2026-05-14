@@ -49,6 +49,8 @@ current `[Unreleased]` cycle:
 | `PRE_RENDER_MISSING_PLACEHOLDERS` | `workflow nda` | template has `{{KEY}}`s with no value; `details.missing[]` lists all |
 | `STAMP_VERIFY_WRONG_POSITION` | `pdf stamp verify` | stamp present but found ≠ expected; `details.found` carries actuals |
 | `STAMP_VERIFY_MISSING` | `pdf stamp verify` | no stamp found on the given page |
+| `STORAGE_UNWRITABLE` | any command that opens the SQLite DB (most do) | parent of `SIGN_DB_PATH` (or active profile's `dbPath`) is not writable; `hint` names the directory and points at writable alternatives |
+| `PROFILE_ENV_VAR_UNSET` | any command resolving an active profile that references `{{env:VAR}}` | the named env var is unset; `hint` names the variable to export |
 
 ---
 
@@ -96,6 +98,16 @@ sign <cmd> --help             # → human-readable, but stable enough to grep
 `--catalog json` is the **truth** for command + flag inventory. If a flag
 isn't there, it isn't a stable surface. The catalog is regenerated from
 `src/lib/help-catalog.ts` at build time.
+
+**`sign mcp tools` is the truth for the MCP surface.** Don't hardcode tool
+names in agent loops; query it at startup. The catalog as of `[Unreleased]`
+covers the read-only inspection paths (`signer_list`, `request_show`,
+`request_status`, `audit_verify`, `request_watch`, `signer_fetch_document`,
+`pdf_detect_signature_field`, `pdf_detect_date_field`, `profile_list`,
+`profile_show`) and the mutating paths (`sign`, `signer_decline`,
+`pdf_stamp_text`, `preview`, `document`). When the server is running with
+`mcp serve --read-only true`, the five mutating tools are blocked and return
+a `FORBIDDEN_READ_ONLY` envelope; the rest still work.
 
 ---
 
@@ -855,6 +867,43 @@ error.code == "PRE_RENDER_MISSING_PLACEHOLDERS"
 
 error.code == "INVALID_ARGS" and message mentions emails
   → same email passed twice. Pick a different one for party-b.
+```
+
+### After "escapes the working directory" path errors
+
+Any command that reads a `--document` / `--pdf` / `--input` or writes a
+`--out` / `--db` validates the path against the current working directory.
+Paths outside CWD are rejected unless the operator opts in.
+
+```text
+error message contains "escapes the working directory"
+  → the path is absolute (or `../..`-style relative) outside CWD.
+    Two recoveries:
+      a) Move the file inside CWD and retry with the relative path.
+         (Preferred — keeps the audit trail self-contained.)
+      b) Set SIGN_ALLOW_ABSOLUTE_DOCS=1 in the environment for that
+         specific invocation. Do NOT export it permanently — the
+         guard exists to stop a malicious or buggy caller writing
+         a sealed PDF anywhere on disk. Documented in
+         `TROUBLESHOOTING.md` under "Path traversal".
+```
+
+The same opt-in covers `validateConfigPath` (used by `sign profile init
+--db <path>`), but home-relative paths like `~/.sign-cli/prod.db` are
+accepted **without** the opt-in — that's the canonical example.
+
+### After `STORAGE_UNWRITABLE`
+
+```text
+error.code == "STORAGE_UNWRITABLE"
+  → openDatabase couldn't create or write the parent directory.
+    Apply `hint`; common fixes:
+      • SIGN_DB_PATH=~/.sign-cli/main.db (always writable)
+      • Pick a profile whose dbPath points somewhere writable
+        (sign profile use <name>)
+      • chmod/chown the offending parent directory
+    Do NOT silently fall back to /tmp — the operator may want
+    persistent storage.
 ```
 
 ---
