@@ -10,10 +10,13 @@ async function fetchPath(server: http.Server, urlPath: string, init: RequestInit
   return fetch(`http://127.0.0.1:${port}${urlPath}`, init);
 }
 
-test("READ_ONLY_BLOCKED_ROUTES covers the four lifecycle-mutating endpoints", () => {
+test("READ_ONLY_BLOCKED_ROUTES covers every lifecycle-mutating endpoint", () => {
   assert.deepEqual(
     [...READ_ONLY_BLOCKED_ROUTES].sort(),
     [
+      "POST /v1/document",
+      "POST /v1/pdf/stamp-text",
+      "POST /v1/preview",
       "POST /v1/request/receipt",
       "POST /v1/sign",
       "POST /v1/signer/decline",

@@ -108,6 +108,7 @@ test("dispatchMcp tools/list lists every signer-side tool", { concurrency: false
       const value = (dispatch as { kind: "result"; value: any }).value;
       const names = (value.tools as Array<{ name: string }>).map((t) => t.name).sort();
       assert.deepEqual(names, [
+        "audit_scan",
         "audit_verify",
         "document",
         "pdf_detect_date_field",
@@ -116,6 +117,7 @@ test("dispatchMcp tools/list lists every signer-side tool", { concurrency: false
         "preview",
         "profile_list",
         "profile_show",
+        "request_receipt",
         "request_show",
         "request_status",
         "request_watch",
@@ -123,6 +125,7 @@ test("dispatchMcp tools/list lists every signer-side tool", { concurrency: false
         "signer_decline",
         "signer_fetch_document",
         "signer_list",
+        "signer_reissue_token",
       ]);
     } finally {
       ctx.cleanup();

@@ -6,7 +6,7 @@ import { createDb, makeTempDb } from "./helpers.js";
 test("READ_ONLY_BLOCKED_TOOLS covers every MCP-facing mutating tool", () => {
   assert.deepEqual(
     [...READ_ONLY_BLOCKED_TOOLS].sort(),
-    ["document", "pdf_stamp_text", "preview", "sign", "signer_decline"],
+    ["document", "pdf_stamp_text", "preview", "request_receipt", "sign", "signer_decline", "signer_reissue_token"],
   );
 });
 

@@ -102,12 +102,19 @@ isn't there, it isn't a stable surface. The catalog is regenerated from
 **`sign mcp tools` is the truth for the MCP surface.** Don't hardcode tool
 names in agent loops; query it at startup. The catalog as of `[Unreleased]`
 covers the read-only inspection paths (`signer_list`, `request_show`,
-`request_status`, `audit_verify`, `request_watch`, `signer_fetch_document`,
-`pdf_detect_signature_field`, `pdf_detect_date_field`, `profile_list`,
-`profile_show`) and the mutating paths (`sign`, `signer_decline`,
+`request_status`, `audit_verify`, `audit_scan`, `request_watch`,
+`signer_fetch_document`, `pdf_detect_signature_field`,
+`pdf_detect_date_field`, `profile_list`, `profile_show`) and the mutating
+paths (`sign`, `signer_decline`, `signer_reissue_token`, `request_receipt`,
 `pdf_stamp_text`, `preview`, `document`). When the server is running with
-`mcp serve --read-only true`, the five mutating tools are blocked and return
-a `FORBIDDEN_READ_ONLY` envelope; the rest still work.
+`mcp serve --read-only true`, the seven mutating tools are blocked and
+return a `FORBIDDEN_READ_ONLY` envelope; the rest still work.
+
+**HTTP API parity.** The same surfaces are exposed via REST under
+`sign serve` — every MCP tool has a corresponding `POST /v1/<tool>` route
+(replace underscores with slashes for the namespaced ones — e.g.
+`pdf_detect_signature_field` → `POST /v1/pdf/detect-signature-field`).
+Authoritative spec: `GET /v1/openapi.json`.
 
 ---
 
