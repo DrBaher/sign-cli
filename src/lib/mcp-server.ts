@@ -1014,16 +1014,38 @@ const TOOLS: ToolDefinition[] = [
       },
       required: ["request_id", "out_dir"],
     },
+    // Mirrors ReceiptResult in signing-service.ts. The cert key on disk is
+    // `manifest.cert.pem` but the result field is `certPath`; the manifest's
+    // SHA-256 is `manifestSha256` (NOT `manifestHash`). `files` is an array
+    // of { name, sha256, bytes } objects — every artifact in the bundle.
     outputSchema: {
       type: "object",
       properties: {
-        requestId: { type: "string" },
         outDir: { type: "string" },
         manifestPath: { type: "string" },
-        manifestHash: { type: "string" },
+        manifestSha256: { type: "string" },
         signaturePath: { type: "string" },
-        certificatePath: { type: "string" },
-        files: { type: "array", items: { type: "string" } },
+        signatureBytes: { type: "number" },
+        certPath: { type: "string" },
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              sha256: { type: "string" },
+              bytes: { type: "number" },
+            },
+          },
+        },
+        chain: {
+          type: "object",
+          properties: {
+            valid: { type: "boolean" },
+            events: { type: "number" },
+            break: { type: ["object", "null"] },
+          },
+        },
       },
     },
     handler: async (db, args) => {

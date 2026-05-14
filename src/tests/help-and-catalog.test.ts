@@ -60,6 +60,13 @@ test("buildCatalogJson is machine-readable and matches HELP_CATALOG entries 1:1"
   }
 });
 
+test("buildCatalogJson includes the CLI version (matches the shape agent-guide §3 documents)", async () => {
+  const { SIGN_CLI_VERSION } = await import("../lib/help-catalog.js");
+  const catalog = buildCatalogJson();
+  assert.equal(catalog.version, SIGN_CLI_VERSION);
+  assert.match(catalog.version, /^\d+\.\d+\.\d+/);
+});
+
 test("formatExamples covers the canonical flows agents and humans care about", () => {
   const out = formatExamples();
   for (const expected of [
