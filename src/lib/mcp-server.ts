@@ -128,6 +128,17 @@ const TOOLS: ToolDefinition[] = [
         bytes: { type: "number" },
         sha256: { type: "string" },
         outPath: { type: ["string", "null"] },
+        existingSignatures: {
+          type: "object",
+          description: "Pre-sign view of any existing PADES signatures on the PDF. Always present even when the PDF has no signatures (count=0).",
+          properties: {
+            count: { type: "number" },
+            hasSignature: { type: "boolean" },
+            allDigestsOk: { type: "boolean" },
+            signers: { type: "array" },
+            warnings: { type: "array", items: { type: "string" } },
+          },
+        },
       },
     },
     handler: (db, args) =>
@@ -452,6 +463,41 @@ const TOOLS: ToolDefinition[] = [
         candidates: detection.dateCandidates,
         ...(verbose ? { textItemsByPage: detection.textItemsByPage, pageDimensions: detection.pageDimensions } : {}),
       };
+    },
+  },
+  // Inspect signatures on any PADES-signed PDF — read-only.
+  {
+    name: "pdf_inspect_signatures",
+    description:
+      "Inspect existing PADES signatures on ANY PDF — ours, Adobe's, DocuSign's, Dropbox Sign's, SignWell's. " +
+      "Returns per-signature signer CN/email, cert subject + issuer, validity window, fingerprint, " +
+      "trust label (self_signed_local | self_signed_other | ca_signed | unknown), message-digest match, " +
+      "and parse warnings. Trust label is structural (issuer vs subject); no chain validation, no expiry check. " +
+      "Pure read — no DB interaction, no audit events.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pdf_path: { type: "string", description: "Path to the PDF to inspect." },
+      },
+      required: ["pdf_path"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        fileSize: { type: "number" },
+        signatureCount: { type: "number" },
+        hasSignature: { type: "boolean" },
+        signatures: { type: "array" },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+    },
+    handler: async (_db, args) => {
+      const { validateDocumentPath } = await import("./validate.js");
+      const { inspectPdfSignatures } = await import("./pdf-signature.js");
+      const pdfPath = requiredStr(args, "pdf_path");
+      validateDocumentPath(pdfPath);
+      return inspectPdfSignatures(pdfPath);
     },
   },
   // Profile inspection — read-only.

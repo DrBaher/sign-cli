@@ -8,6 +8,11 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- **`sign pdf inspect`** — new top-level command that inspects PADES signatures on ANY signed PDF (ours, Adobe's, DocuSign's, Dropbox Sign's, SignWell's). Returns per-signature signer CN/email, cert subject + issuer, validity window, fingerprint, trust label (`self_signed_local` / `self_signed_other` / `ca_signed` / `unknown`), message-digest match, and parse warnings. Pure read — no DB interaction, no audit events. Exit `2` when the PDF has no signatures. Pairs with `request verify-signed-pdf` (which adds request-level signer-match against the local DB); use `pdf inspect` when you don't have a request to bind against (e.g. inspecting an incoming counterparty PDF). Trust label is structural (issuer vs subject); no chain validation, no expiry check. Companion: new MCP tool `pdf_inspect_signatures` and HTTP route `POST /v1/pdf/inspect-signatures` — same `validateDocumentPath` guard as the other PDF surfaces.
+- **Pre-sign signature visibility** — `signer fetch-document` (CLI + MCP `signer_fetch_document` + HTTP `POST /v1/signer/fetch-document`) now includes an `existingSignatures` field in every response: a compact summary of any PADES signatures already on the PDF when the signer fetches it. Fields: `count`, `hasSignature`, `allDigestsOk` (false if any prior signature is broken — tamper or parse failure), `signers[]` (subject / issuer / validity / fingerprint / trust / per-signer digestOk), `warnings[]`. Best-effort: if inspection throws on a malformed PDF, the field is populated with a degenerate summary plus a warning rather than failing the fetch. Same surface is added to `sign document`'s result for PDF (non-DOCX) inputs.
+
 ## [0.6.0] — 2026-05-14
 
 Headline: cross-surface parity (every CLI command that has any of MCP / HTTP / both has them all), the profile system (named bundles of provider + dbPath + credentials), security-grade path-traversal guards on every input/output flag, and a structured `STORAGE_UNWRITABLE` error code in place of raw Node EACCES stack traces.

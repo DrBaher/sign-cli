@@ -104,11 +104,20 @@ names in agent loops; query it at startup. The catalog as of `[Unreleased]`
 covers the read-only inspection paths (`signer_list`, `request_show`,
 `request_status`, `audit_verify`, `audit_scan`, `request_watch`,
 `signer_fetch_document`, `pdf_detect_signature_field`,
-`pdf_detect_date_field`, `profile_list`, `profile_show`) and the mutating
-paths (`sign`, `signer_decline`, `signer_reissue_token`, `request_receipt`,
-`pdf_stamp_text`, `preview`, `document`). When the server is running with
-`mcp serve --read-only true`, the seven mutating tools are blocked and
-return a `FORBIDDEN_READ_ONLY` envelope; the rest still work.
+`pdf_detect_date_field`, `pdf_inspect_signatures`, `profile_list`,
+`profile_show`) and the mutating paths (`sign`, `signer_decline`,
+`signer_reissue_token`, `request_receipt`, `pdf_stamp_text`, `preview`,
+`document`). When the server is running with `mcp serve --read-only true`,
+the seven mutating tools are blocked and return a `FORBIDDEN_READ_ONLY`
+envelope; the rest still work.
+
+**Pre-sign signature visibility.** `signer_fetch_document` (and the
+CLI `signer fetch-document` / HTTP `POST /v1/signer/fetch-document`)
+auto-attach an `existingSignatures` summary so the signer sees what's
+already on the PDF before they countersign — count, signer CN/email,
+trust label, and `allDigestsOk` (false = a prior signature is broken,
+treat as a red flag). For ad-hoc inspection of any signed PDF (no
+request needed), use `pdf_inspect_signatures` / `sign pdf inspect`.
 
 **HTTP API parity.** The same surfaces are exposed via REST under
 `sign serve` — every MCP tool has a corresponding `POST /v1/<tool>` route

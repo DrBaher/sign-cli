@@ -132,6 +132,13 @@ const ROUTES: Record<string, RouteHandler> = {
     };
   },
 
+  "POST /v1/pdf/inspect-signatures": async (_db, body) => {
+    const { inspectPdfSignatures } = await import("./pdf-signature.js");
+    const pdfPath = str(body, "pdf_path", true)!;
+    validateDocumentPath(pdfPath);
+    return inspectPdfSignatures(pdfPath);
+  },
+
   "POST /v1/pdf/detect-date-field": async (_db, body) => {
     const { detectSignatureFields } = await import("./signature-field-detection.js");
     const pdfPath = str(body, "pdf_path", true)!;

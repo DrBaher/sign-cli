@@ -89,8 +89,8 @@ test("getRequestSnapshot --metrics reports counters and time-to-first-sign / tim
       const aliceToken = created.tokens.find((t) => t.signer.email === "alice@example.com")!.token;
       const bobToken = created.tokens.find((t) => t.signer.email === "bob@example.com")!.token;
       // Two fetches and a sign — this exercises fetches_last_hour + signed_count counters.
-      fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token: aliceToken });
-      fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token: aliceToken });
+      await fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token: aliceToken });
+      await fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token: aliceToken });
       signSigningRequest(db, { requestId: created.requestId, token: aliceToken });
       signSigningRequest(db, { requestId: created.requestId, token: bobToken });
 

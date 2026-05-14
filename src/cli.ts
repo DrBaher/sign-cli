@@ -1457,6 +1457,33 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (root === "pdf" && sub === "inspect") {
+    // Inspect signatures on ANY signed PDF — ours, Adobe's, DocuSign's,
+    // Dropbox Sign's, SignWell's. Pure read; no DB interaction, no audit
+    // events. Returns the full PdfSignatureReport: signer CN/email, cert
+    // subject + issuer, validity window, fingerprint, trust label, message
+    // digest match, parse warnings, and the canonical /ByteRange bounds.
+    //
+    // Trust label is structural (issuer == subject → self-signed; issuer
+    // matches our built-in subject → self_signed_local; otherwise
+    // self_signed_other or ca_signed). We don't chain to any trust store
+    // and don't check expiry; for that, use an external verifier.
+    const pdfPath = flagValue(parsed, "pdf", true)!;
+    validateDocumentPath(pdfPath);
+    const { inspectPdfSignatures } = await import("./lib/pdf-signature.js");
+    const report = await inspectPdfSignatures(pdfPath);
+    process.stderr.write(
+      `[sign] pdf inspect: ${report.signatureCount} signature${report.signatureCount === 1 ? "" : "s"} ` +
+      `(hasSignature=${report.hasSignature}, warnings=${report.warnings.length})\n`,
+    );
+    console.log(JSON.stringify({ ok: true, ...report }, null, 2));
+    // Exit 2 when the file isn't signed — same convention as
+    // `pdf detect-signature-field` (no candidates → exit 2). Lets a CI
+    // gate "fail if not signed" with a one-line check.
+    if (!report.hasSignature) process.exit(2);
+    return;
+  }
+
   if (root === "pdf" && sub === "stamp-text") {
     // Stamp a text string (e.g. a date) onto a PDF. Mirrors `pdf stamp` for
     // images but uses Helvetica regular without italic/underline. Supports
@@ -1619,7 +1646,7 @@ async function main(): Promise<void> {
     const requestId = flagValue(parsed, "request-id", true)!;
     const token = flagValue(parsed, "token", true)!;
     const out = flagValue(parsed, "out");
-    const result = fetchUnsignedDocumentForSigner(db, {
+    const result = await fetchUnsignedDocumentForSigner(db, {
       requestId,
       token,
       signerEmail: flagValue(parsed, "signer-email"),

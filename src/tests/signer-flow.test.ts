@@ -278,7 +278,7 @@ test("signer fetch-document writes the unsigned PDF and records request.signer_f
     const outDir = mkdtempSync(path.join(os.tmpdir(), "sign-fetchdoc-out-"));
     const outPath = path.join(outDir, "fetched.pdf");
     try {
-      const result = fetchUnsignedDocumentForSigner(ctx.db, {
+      const result = await fetchUnsignedDocumentForSigner(ctx.db, {
         requestId: ctx.requestId,
         token: ctx.tokens.get("alice@example.com")!,
         outPath,
@@ -328,7 +328,7 @@ test("signer-side commands refuse non-local providers with a clear message", { c
         () => declineSigningRequestAsSigner(db, { requestId: created.requestId, token }),
         /only supports --provider local/u,
       );
-      assert.throws(
+      await assert.rejects(
         () => fetchUnsignedDocumentForSigner(db, { requestId: created.requestId, token }),
         /only supports --provider local/u,
       );

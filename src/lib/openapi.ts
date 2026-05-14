@@ -130,6 +130,14 @@ const ROUTES: RouteSpec[] = [
   },
   {
     method: "POST",
+    path: "/v1/pdf/inspect-signatures",
+    summary: "Inspect existing PADES signatures on any signed PDF (read-only).",
+    body: [
+      { name: "pdf_path", type: "string", required: true, description: "Path to the PDF to inspect; validated via validateDocumentPath." },
+    ],
+  },
+  {
+    method: "POST",
     path: "/v1/pdf/detect-date-field",
     summary: "Detect date-field placement candidates (with alreadyFilled flag).",
     body: [

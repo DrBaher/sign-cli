@@ -183,10 +183,16 @@ test("pre-sign safety, signer_already_signed, and non_local errors carry their c
         declineSigningRequestAsSigner(db, { requestId: dropbox.requestId, token: dropboxToken }),
       );
       assert.equal(nonLocalDecline.code, "NON_LOCAL_PROVIDER");
-      const nonLocalFetch = expectSignError(() =>
-        fetchUnsignedDocumentForSigner(db, { requestId: dropbox.requestId, token: dropboxToken }),
-      );
-      assert.equal(nonLocalFetch.code, "NON_LOCAL_PROVIDER");
+      // fetchUnsignedDocumentForSigner is async now (existingSignatures
+      // surface requires PDF inspection), so use await + try/catch.
+      let nonLocalFetchCode = "";
+      try {
+        await fetchUnsignedDocumentForSigner(db, { requestId: dropbox.requestId, token: dropboxToken });
+      } catch (err) {
+        if (err instanceof SignCliError) nonLocalFetchCode = err.code;
+        else throw err;
+      }
+      assert.equal(nonLocalFetchCode, "NON_LOCAL_PROVIDER");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       db.close();
