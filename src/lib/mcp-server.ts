@@ -8,6 +8,7 @@ import { subscribeResource } from "./resource-watch.js";
 import { formatCliError, SignCliError } from "./sign-error.js";
 import {
   declineSigningRequestAsSigner,
+  exportRequestReceipt,
   fetchUnsignedDocumentForSigner,
   getRequestSnapshot,
   getSigningRequestStatus,
@@ -15,6 +16,8 @@ import {
   listSignerInbox,
   listSigningRequests,
   readLocalDocumentForResource,
+  reissueSignerToken,
+  scanAllAuditChains,
   signSigningRequest,
   verifyRequestAuditChain,
   watchSigningRequestStatus,
@@ -923,6 +926,114 @@ const TOOLS: ToolDefinition[] = [
       return result;
     },
   },
+  // ─── Parity with HTTP API: signer_reissue_token, audit_scan, request_receipt ─
+  {
+    name: "signer_reissue_token",
+    description:
+      "Mint a new per-signer token for an existing request; the previous token is invalidated. " +
+      "Use when a signer lost their original token or it's about to expire. Mutating.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string" },
+        signer_email: { type: "string" },
+        token_ttl_minutes: { type: "number", description: "Optional TTL override; uses request default when omitted." },
+      },
+      required: ["request_id", "signer_email"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        signerEmail: { type: "string" },
+        token: { type: "string" },
+        tokenHint: { type: "string" },
+        expiresAt: { type: "string" },
+      },
+    },
+    handler: (db, args) =>
+      reissueSignerToken(db, {
+        requestId: requiredStr(args, "request_id"),
+        signerEmail: requiredStr(args, "signer_email"),
+        ...(typeof args.token_ttl_minutes === "number" ? { tokenTtlMinutes: args.token_ttl_minutes } : {}),
+      }),
+  },
+  {
+    name: "audit_scan",
+    description:
+      "Verify the audit chain of every request in the local DB (or filtered by provider/status). " +
+      "Returns per-request validity and any chain break. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["dropbox", "docusign", "signwell", "local"] },
+        status: { type: "string", description: "Filter to a specific request status (e.g. 'completed')." },
+        limit: { type: "number" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        total: { type: "number" },
+        valid: { type: "number" },
+        invalid: { type: "number" },
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              requestId: { type: "string" },
+              title: { type: "string" },
+              status: { type: "string" },
+              valid: { type: "boolean" },
+              events: { type: "number" },
+              break: { type: ["object", "null"] },
+            },
+          },
+        },
+      },
+    },
+    handler: (db, args) =>
+      scanAllAuditChains(db, {
+        provider: resolveProviderArg(args),
+        ...(str(args, "status") ? { status: str(args, "status") } : {}),
+        ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+      }),
+  },
+  {
+    name: "request_receipt",
+    description:
+      "Export a cryptographically-signed receipt bundle for a request: audit.json, signed.pdf, " +
+      "manifest.json, manifest.sig (RSA-SHA256 over manifest.json), manifest.cert.pem. " +
+      "Verifiable end-to-end with `sign request verify-receipt`. Mutating (writes to out_dir).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string" },
+        out_dir: { type: "string", description: "Directory to write the bundle (must pass validateOutputPath)." },
+      },
+      required: ["request_id", "out_dir"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        requestId: { type: "string" },
+        outDir: { type: "string" },
+        manifestPath: { type: "string" },
+        manifestHash: { type: "string" },
+        signaturePath: { type: "string" },
+        certificatePath: { type: "string" },
+        files: { type: "array", items: { type: "string" } },
+      },
+    },
+    handler: async (db, args) => {
+      const { validateOutputPath } = await import("./validate.js");
+      return exportRequestReceipt(db, {
+        requestId: requiredStr(args, "request_id"),
+        outDir: validateOutputPath(requiredStr(args, "out_dir")),
+      });
+    },
+  },
 ];
 
 function validateToolArgs(
@@ -1112,6 +1223,8 @@ export const READ_ONLY_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   "pdf_stamp_text",
   "preview",
   "document",
+  "signer_reissue_token",
+  "request_receipt",
 ]);
 
 export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchResult> {

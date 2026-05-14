@@ -1,9 +1,9 @@
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { SqliteDb } from "./db.js";
-import { formatCliError } from "./sign-error.js";
+import { formatCliError, SignCliError } from "./sign-error.js";
 import {
   declineSigningRequestAsSigner,
   exportRequestReceipt,
@@ -21,6 +21,7 @@ import { SIGN_CLI_VERSION } from "./help-catalog.js";
 import { buildOpenApiSpec } from "./openapi.js";
 import { renderPrometheusMetrics } from "./prom-metrics.js";
 import { TokenBucketLimiter } from "./rate-limit.js";
+import { validateDocumentPath, validateOutputPath } from "./validate.js";
 
 function clientKey(req: http.IncomingMessage): string {
   // Trust X-Forwarded-For if present (operators terminating TLS at a load
@@ -112,8 +113,251 @@ const ROUTES: Record<string, RouteHandler> = {
   "POST /v1/request/receipt": (db, body) =>
     exportRequestReceipt(db, {
       requestId: str(body, "request_id", true)!,
-      outDir: str(body, "out_dir", true)!,
+      outDir: validateOutputPath(str(body, "out_dir", true)!),
     }),
+
+  // ─── PDF detection / stamping (mirrors MCP tool surface) ─────────────────
+  "POST /v1/pdf/detect-signature-field": async (_db, body) => {
+    const { detectSignatureFields } = await import("./signature-field-detection.js");
+    const pdfPath = str(body, "pdf_path", true)!;
+    validateDocumentPath(pdfPath);
+    const verbose = body.verbose === true;
+    const detection = await detectSignatureFields(readFileSync(pdfPath), { verbose });
+    return {
+      pageCount: detection.pageCount,
+      acroFormFields: detection.acroFormFields,
+      anchorMatches: detection.signatureCandidates.length,
+      candidates: detection.signatureCandidates,
+      ...(verbose ? { textItemsByPage: detection.textItemsByPage, pageDimensions: detection.pageDimensions } : {}),
+    };
+  },
+
+  "POST /v1/pdf/detect-date-field": async (_db, body) => {
+    const { detectSignatureFields } = await import("./signature-field-detection.js");
+    const pdfPath = str(body, "pdf_path", true)!;
+    validateDocumentPath(pdfPath);
+    const verbose = body.verbose === true;
+    const detection = await detectSignatureFields(readFileSync(pdfPath), { verbose });
+    return {
+      pageCount: detection.pageCount,
+      anchorMatches: detection.dateCandidates.length,
+      candidates: detection.dateCandidates,
+      ...(verbose ? { textItemsByPage: detection.textItemsByPage, pageDimensions: detection.pageDimensions } : {}),
+    };
+  },
+
+  "POST /v1/pdf/stamp-text": async (_db, body) => {
+    const { parseAutoPlaceMode, selectAutoPlaceCandidates, InvalidAutoPlaceValue } =
+      await import("./auto-place-selector.js");
+    const { detectSignatureFields } = await import("./signature-field-detection.js");
+    const { stampPlainTextOnPdf } = await import("./pdf-image-stamp.js");
+    const { assessStampQuality } = await import("./stamp-quality.js");
+
+    const pdfPath = str(body, "pdf_path", true)!;
+    validateDocumentPath(pdfPath);
+    const text = str(body, "text", true)!;
+    const outPath = validateOutputPath(str(body, "out_path", true)!);
+    const overwriteFilled = body.overwrite_filled === true;
+
+    let pdfBytes: Buffer = readFileSync(pdfPath);
+    const explicitComplete = ["image_page", "image_x", "image_y", "image_width", "image_height"]
+      .every((k) => typeof body[k] === "number");
+    let mode;
+    try { mode = parseAutoPlaceMode(str(body, "auto_place")); }
+    catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) throw new SignCliError({ code: "INVALID_AUTO_PLACE_VALUE", message: err.message, hint: err.hint });
+      throw err;
+    }
+    let primary: { page: number; x: number; y: number; width: number; height: number } | undefined;
+    let extras: Array<{ page: number; x: number; y: number; width: number; height: number }> = [];
+    if (explicitComplete) {
+      primary = {
+        page: body.image_page as number, x: body.image_x as number, y: body.image_y as number,
+        width: body.image_width as number, height: body.image_height as number,
+      };
+    } else if (mode.kind !== "none") {
+      const detection = await detectSignatureFields(pdfBytes);
+      const datePool = overwriteFilled ? detection.dateCandidates : detection.dateCandidates.filter((c) => !c.alreadyFilled);
+      const result = selectAutoPlaceCandidates(datePool, mode);
+      if (!result.ok) {
+        throw new SignCliError({
+          code: result.errorCode, message: result.message, hint: result.hint,
+          details: { candidates: datePool, allDateCandidates: detection.dateCandidates },
+        });
+      }
+      const [first, ...rest] = result.chosen;
+      primary = { page: first.page, x: first.x, y: first.y, width: first.width, height: first.height };
+      extras = rest.map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.width, height: c.height }));
+    }
+    if (!primary) {
+      throw new SignCliError({ code: "MISSING_FLAG", message: "pdf/stamp-text requires auto_place or all of image_page/x/y/width/height." });
+    }
+    const positions = [primary, ...extras];
+    for (const pos of positions) pdfBytes = await stampPlainTextOnPdf(pdfBytes, text, pos);
+    writeFileSync(outPath, pdfBytes);
+    const warnings = [];
+    for (const pos of positions) {
+      warnings.push(...(await assessStampQuality({ pdfBytes, page: pos.page, x: pos.x, y: pos.y, width: pos.width, height: pos.height })));
+    }
+    return { ok: true, pdf: pdfPath, out: outPath, text, positions, bytes: pdfBytes.length, warnings };
+  },
+
+  "POST /v1/preview": async (_db, body) => {
+    const { parseImageInput, stampImageOnPdf, stampTextOnPdf } = await import("./pdf-image-stamp.js");
+    const { parseAutoPlaceMode, selectAutoPlaceCandidates, InvalidAutoPlaceValue } =
+      await import("./auto-place-selector.js");
+    const { detectSignatureFields } = await import("./signature-field-detection.js");
+    const { assessStampQuality } = await import("./stamp-quality.js");
+    const { verifyPdfStamp } = await import("./pdf-stamp-verify.js");
+
+    const pdfPath = str(body, "pdf_path", true)!;
+    validateDocumentPath(pdfPath);
+    const outPath = validateOutputPath(str(body, "out_path", true)!);
+    const imageFlag = str(body, "signature_image");
+    const nameSig = str(body, "name_signature");
+    if (!imageFlag && !nameSig) {
+      throw new SignCliError({ code: "MISSING_FLAG", message: "preview requires signature_image or name_signature." });
+    }
+    if (imageFlag && nameSig) {
+      throw new SignCliError({ code: "SIGN_VISIBLE_SIG_BOTH", message: "signature_image and name_signature are mutually exclusive." });
+    }
+    let pdfBytes: Buffer = readFileSync(pdfPath);
+    const explicitComplete = ["image_page", "image_x", "image_y", "image_width", "image_height"]
+      .every((k) => typeof body[k] === "number");
+    let mode;
+    try { mode = parseAutoPlaceMode(str(body, "auto_place")); }
+    catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) throw new SignCliError({ code: "INVALID_AUTO_PLACE_VALUE", message: err.message, hint: err.hint });
+      throw err;
+    }
+    let primary: { page: number; x: number; y: number; width: number; height: number } | undefined;
+    let extras: Array<{ page: number; x: number; y: number; width: number; height: number }> = [];
+    if (explicitComplete) {
+      primary = {
+        page: body.image_page as number, x: body.image_x as number, y: body.image_y as number,
+        width: body.image_width as number, height: body.image_height as number,
+      };
+    } else if (mode.kind !== "none") {
+      const detection = await detectSignatureFields(pdfBytes);
+      const result = selectAutoPlaceCandidates(detection.signatureCandidates, mode);
+      if (!result.ok) {
+        throw new SignCliError({
+          code: result.errorCode, message: result.message, hint: result.hint,
+          details: { candidates: result.allCandidates },
+        });
+      }
+      const [first, ...rest] = result.chosen;
+      primary = { page: first.page, x: first.x, y: first.y, width: first.width, height: first.height };
+      extras = rest.map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.width, height: c.height }));
+    }
+    if (!primary) {
+      throw new SignCliError({ code: "MISSING_FLAG", message: "preview requires auto_place or all of image_page/x/y/width/height." });
+    }
+    const stampOptions = {
+      ...(typeof body.preserve_aspect_ratio === "boolean" ? { preserveAspectRatio: body.preserve_aspect_ratio as boolean } : {}),
+      ...(typeof body.auto_crop === "boolean" ? { autoCrop: body.auto_crop as boolean } : {}),
+    };
+    const positions = [primary, ...extras];
+    for (const pos of positions) {
+      if (imageFlag) {
+        pdfBytes = await stampImageOnPdf(pdfBytes, parseImageInput(imageFlag), pos, stampOptions);
+      } else {
+        pdfBytes = await stampTextOnPdf(pdfBytes, nameSig!, pos);
+      }
+    }
+    writeFileSync(outPath, pdfBytes);
+    const warnings = [];
+    const drawnRects: Array<{ page: number; x: number; y: number; width: number; height: number }> = [];
+    for (const pos of positions) {
+      warnings.push(...(await assessStampQuality({ pdfBytes, page: pos.page, x: pos.x, y: pos.y, width: pos.width, height: pos.height })));
+      const probe = await verifyPdfStamp(pdfBytes, pos);
+      if (probe.found) {
+        drawnRects.push({ page: probe.found.page, x: probe.found.x, y: probe.found.y, width: probe.found.width, height: probe.found.height });
+      }
+    }
+    return { ok: true, pdf: pdfPath, out: outPath, positions, drawnRects, bytes: pdfBytes.length, sealed: false, stampOptions, warnings };
+  },
+
+  "POST /v1/document": async (_db, body) => {
+    const { parseImageInput } = await import("./pdf-image-stamp.js");
+    const { parseAutoPlaceMode, InvalidAutoPlaceValue } = await import("./auto-place-selector.js");
+    const { signDocumentOneShot } = await import("./sign-document.js");
+
+    const inputPath = str(body, "input_path", true)!;
+    validateDocumentPath(inputPath);
+    const outPath = validateOutputPath(str(body, "out_path", true)!);
+    const signerName = str(body, "signer_name", true)!;
+    const signatureImage = str(body, "signature_image");
+    const nameSig = str(body, "name_signature");
+
+    let autoPlaceMode;
+    try { autoPlaceMode = parseAutoPlaceMode(str(body, "auto_place")); }
+    catch (err) {
+      if (err instanceof InvalidAutoPlaceValue) throw new SignCliError({ code: "INVALID_AUTO_PLACE_VALUE", message: err.message, hint: err.hint });
+      throw err;
+    }
+    const explicitComplete = ["image_page", "image_x", "image_y", "image_width", "image_height"]
+      .every((k) => typeof body[k] === "number");
+    if (autoPlaceMode.kind === "none" && !explicitComplete) autoPlaceMode = { kind: "first" } as const;
+
+    return await signDocumentOneShot({
+      inputPath, outPath, signerName,
+      ...(str(body, "signer_email") ? { signerEmail: str(body, "signer_email") } : {}),
+      ...(str(body, "title") ? { title: str(body, "title") } : {}),
+      ...(signatureImage ? { signatureImage: parseImageInput(signatureImage) } : {}),
+      ...(nameSig ? { nameSignatureText: nameSig } : {}),
+      autoPlaceMode,
+      ...(explicitComplete ? { imagePosition: {
+        page: body.image_page as number, x: body.image_x as number, y: body.image_y as number,
+        width: body.image_width as number, height: body.image_height as number,
+      } } : {}),
+      ...(signatureImage ? { signatureImageOptions: {
+        ...(typeof body.preserve_aspect_ratio === "boolean" ? { preserveAspectRatio: body.preserve_aspect_ratio as boolean } : {}),
+        ...(typeof body.auto_crop === "boolean" ? { autoCrop: body.auto_crop as boolean } : {}),
+      } } : {}),
+    });
+  },
+
+  // ─── Profile inspection (read-only) ─────────────────────────────────────
+  "POST /v1/profile/list": async () => {
+    const { defaultUserFilePath, findProjectFile, readUserFile, loadProfileContext } =
+      await import("./profiles.js");
+    const userFilePath = defaultUserFilePath();
+    const file = readUserFile(userFilePath);
+    const projectFile = findProjectFile(process.cwd()) ?? null;
+    let active;
+    try { active = loadProfileContext({ userFilePath }).activeSource; }
+    catch { active = { kind: "none" }; }
+    return {
+      userFilePath,
+      defaultProfile: file?.defaultProfile ?? null,
+      profiles: file ? Object.keys(file.profiles).sort() : [],
+      projectFile,
+      active,
+    };
+  },
+
+  "POST /v1/profile/show": async (_db, body) => {
+    const { defaultUserFilePath, loadProfileContext, readUserFile, redactCredentials, resolveProfileView } =
+      await import("./profiles.js");
+    const userFilePath = defaultUserFilePath();
+    const showSecrets = body.show_secrets === true;
+    const name = str(body, "name");
+    if (name) {
+      const file = readUserFile(userFilePath);
+      if (!file || !file.profiles[name]) {
+        throw new SignCliError({
+          code: "PROFILE_NOT_FOUND",
+          message: `No profile named '${name}' in ${userFilePath}.`,
+          hint: file ? `Available: ${Object.keys(file.profiles).sort().join(", ")}.` : `No user profile file yet.`,
+        });
+      }
+      const profile = showSecrets ? file.profiles[name] : redactCredentials(file.profiles[name]);
+      return { name, userFilePath, profile };
+    }
+    const ctx = loadProfileContext({ userFilePath });
+    return resolveProfileView(ctx, { showSecrets });
+  },
 };
 
 async function readJsonBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -158,6 +402,9 @@ export const READ_ONLY_BLOCKED_ROUTES: ReadonlySet<string> = new Set([
   "POST /v1/signer/decline",
   "POST /v1/signer/reissue-token",
   "POST /v1/request/receipt",
+  "POST /v1/pdf/stamp-text",
+  "POST /v1/preview",
+  "POST /v1/document",
 ]);
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
