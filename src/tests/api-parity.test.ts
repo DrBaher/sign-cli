@@ -218,6 +218,23 @@ test("MCP request_receipt rejects out_dir traversal without SIGN_ALLOW_ABSOLUTE_
   }
 });
 
+test("MCP request_receipt outputSchema lists the exact field set that exportRequestReceipt returns", () => {
+  // Catches a silent drift: the lib's ReceiptResult uses `manifestSha256` / `certPath`,
+  // not `manifestHash` / `certificatePath`. If someone tweaks one and forgets the other
+  // an agent validating responses with the advertised schema breaks.
+  const tool = listMcpTools().find((t) => t.name === "request_receipt");
+  assert.ok(tool, "request_receipt tool missing");
+  const props = (tool!.outputSchema as { properties: Record<string, unknown> }).properties;
+  // Required ReceiptResult fields (from signing-service.ts):
+  for (const key of ["outDir", "manifestPath", "manifestSha256", "signaturePath", "signatureBytes", "certPath", "files", "chain"]) {
+    assert.ok(key in props, `outputSchema.properties.${key} missing`);
+  }
+  // Bad-name fields that previously slipped in:
+  for (const stale of ["manifestHash", "certificatePath", "requestId"]) {
+    assert.ok(!(stale in props), `outputSchema.properties.${stale} should not be advertised — handler doesn't return it`);
+  }
+});
+
 test("MCP signer_reissue_token + request_receipt blocked under --read-only true", { concurrency: false }, async () => {
   const { dbPath, cleanup } = makeTempDb();
   const db = createDb(dbPath);

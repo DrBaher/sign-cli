@@ -870,8 +870,12 @@ export function formatCommandHelp(spec: CommandSpec): string {
   return lines.join("\n");
 }
 
-export function buildCatalogJson(): { commands: Array<Pick<CommandSpec, "command" | "summary" | "flags" | "example">> } {
+export function buildCatalogJson(): {
+  version: string;
+  commands: Array<Pick<CommandSpec, "command" | "summary" | "flags" | "example">>;
+} {
   return {
+    version: SIGN_CLI_VERSION,
     commands: HELP_CATALOG.map((cmd) => ({
       command: cmd.command,
       summary: cmd.summary,
