@@ -23,6 +23,7 @@ sign mcp tools | jq '.tools[].name'
 # "request_watch"
 # "pdf_detect_signature_field"
 # "pdf_detect_date_field"
+# "pdf_inspect_signatures"
 # "profile_list"
 # "profile_show"
 # Mutating (gated by --read-only true)

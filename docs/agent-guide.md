@@ -874,6 +874,43 @@ jq -r '[.signatures[].signers[].trust] | min_by(
   else 0 end)'
 ```
 
+### After `signer_fetch_document` — branch on `existingSignatures`
+
+The fetch response always carries an `existingSignatures` summary (added
+in v0.7.0 / PR #183). Use it to decide whether to countersign or stop.
+
+```text
+existingSignatures.hasSignature == false
+  → fresh PDF, nothing pre-signed; proceed to `sign`.
+
+existingSignatures.hasSignature == true
+  AND existingSignatures.allDigestsOk == true
+  → at least one prior party has signed; the chain still verifies
+    against the embedded message digest. Safe to countersign;
+    your signature will extend the chain.
+
+existingSignatures.hasSignature == true
+  AND existingSignatures.allDigestsOk == false
+  → RED FLAG. A prior signature exists but its message digest no
+    longer matches the byte range — the doc was tampered with after
+    that signature was applied (or the cert is unparseable). Do NOT
+    countersign; surface to a human. Inspect details via
+    `pdf inspect` (CLI) or `pdf_inspect_signatures` (MCP) for the
+    full per-signature parse warnings.
+
+existingSignatures.warnings has entries
+  → inspector returned advisories; the fetch still succeeded.
+    Read them — typical entries are "No /ByteRange entries found"
+    (PDF is unsigned, expected) or PKCS#7 parse errors. Match each
+    warning to a `signers[]` entry by index.
+```
+
+For standalone ad-hoc inspection of any PADES-signed PDF (no request
+needed), use `sign pdf inspect --pdf <path>` (CLI) /
+`pdf_inspect_signatures` (MCP) / `POST /v1/pdf/inspect-signatures`
+(HTTP). Same shape, exit code `2` when the file has no signatures
+(useful CI gate).
+
 ### After `workflow nda` error
 
 ```text

@@ -463,18 +463,19 @@ npm run start -- audit show --request-id <request_id>
 
 ## MCP server (for LLM agents)
 
-Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server. An MCP-aware agent (Claude Code, Claude Desktop, anything else that speaks MCP) can then drive the signer-side flow without spawning the CLI on each call. The server exposes 18 tools (split read-only vs mutating), all backed by the same SignCliError envelopes you'd see at the CLI. **Don't hardcode the list** — call `sign mcp tools` at startup to get the current catalog with full JSON-Schema input + output contracts. Today's tools:
+Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server. An MCP-aware agent (Claude Code, Claude Desktop, anything else that speaks MCP) can then drive the signer-side flow without spawning the CLI on each call. The server exposes 19 tools (split read-only vs mutating), all backed by the same SignCliError envelopes you'd see at the CLI. **Don't hardcode the list** — call `sign mcp tools` at startup to get the current catalog with full JSON-Schema input + output contracts. Today's tools:
 
 **Read-only (always available):**
 
 - `signer_list` (`{ signer_email? }`) — pending inbox.
-- `signer_fetch_document` (`{ request_id, token, signer_email?, out_path? }`) — read the unsigned PDF + audit it as fetched.
+- `signer_fetch_document` (`{ request_id, token, signer_email?, out_path? }`) — read the unsigned PDF + audit it as fetched. Result includes `existingSignatures`: a compact summary of any PADES signatures already on the PDF when the signer fetches it, so they can see what they're countersigning.
 - `request_show` (`{ request_id }`) — enriched snapshot with `signedBy`, `nextSteps[]`, etc.
 - `request_status` (`{ request_id, provider? }`) — poll the provider; reads API keys from env (`DROPBOX_SIGN_API_KEY` / `SIGNWELL_API_KEY`) for hosted providers.
 - `request_watch` (`{ request_id, provider?, interval_ms?, timeout_ms? }`) — poll until terminal; emits MCP `notifications/progress` on each poll when the client supplies a `progressToken`.
 - `audit_verify` (`{ request_id }`) — verify the audit chain for one request.
 - `audit_scan` (`{ provider?, status?, limit? }`) — verify every request's audit chain.
 - `pdf_detect_signature_field` / `pdf_detect_date_field` (`{ pdf_path, verbose? }`) — return ranked placement candidates with confidence + adjustment method.
+- `pdf_inspect_signatures` (`{ pdf_path }`) — inspect existing PADES signatures on ANY signed PDF (ours, Adobe's, DocuSign's, Dropbox Sign's, SignWell's). Returns signer CN/email, cert subject + issuer, validity window, fingerprint, trust label (`self_signed_local` / `self_signed_other` / `ca_signed` / `unknown`), message-digest match. Exit 2 from the CLI form when the PDF has no signatures.
 - `profile_list` (`{}`) — configured profiles + active source.
 - `profile_show` (`{ name?, show_secrets? }`) — resolved view with per-field provenance; credentials redacted by default.
 
@@ -525,7 +526,7 @@ All responses are `{ ok: true, result: ... }` on success or the standard `format
 - **Signer-side:** `POST /v1/signer/list`, `POST /v1/signer/fetch-document`, `POST /v1/sign`, `POST /v1/signer/decline`, `POST /v1/signer/reissue-token`.
 - **Request lifecycle:** `POST /v1/request/show`, `POST /v1/request/status`, `POST /v1/request/receipt`.
 - **Audit:** `POST /v1/audit/verify`, `POST /v1/audit/scan`.
-- **PDF utilities (inputs validated against the working-directory traversal guard):** `POST /v1/pdf/detect-signature-field`, `POST /v1/pdf/detect-date-field`, `POST /v1/pdf/stamp-text`.
+- **PDF utilities (inputs validated against the working-directory traversal guard):** `POST /v1/pdf/detect-signature-field`, `POST /v1/pdf/detect-date-field`, `POST /v1/pdf/inspect-signatures`, `POST /v1/pdf/stamp-text`.
 - **One-shot signing:** `POST /v1/preview` (draft, no seal), `POST /v1/document` (DOCX/PDF → sealed PDF).
 - **Profile inspection:** `POST /v1/profile/list`, `POST /v1/profile/show` (credentials redacted unless `show_secrets: true`).
 
