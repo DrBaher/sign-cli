@@ -385,9 +385,12 @@ const TOOLS: ToolDefinition[] = [
     },
     handler: async (_db, args) => {
       const { readFileSync } = await import("node:fs");
+      const { validateDocumentPath } = await import("./validate.js");
       const { detectSignatureFields } = await import("./signature-field-detection.js");
       const verbose = Boolean(args.verbose);
-      const detection = await detectSignatureFields(readFileSync(requiredStr(args, "pdf_path")), { verbose });
+      const pdfPath = requiredStr(args, "pdf_path");
+      validateDocumentPath(pdfPath);
+      const detection = await detectSignatureFields(readFileSync(pdfPath), { verbose });
       // Return only signature candidates here (mirrors `sign pdf detect-signature-field` CLI behavior).
       return {
         pageCount: detection.pageCount,
@@ -434,9 +437,12 @@ const TOOLS: ToolDefinition[] = [
     },
     handler: async (_db, args) => {
       const { readFileSync } = await import("node:fs");
+      const { validateDocumentPath } = await import("./validate.js");
       const { detectSignatureFields } = await import("./signature-field-detection.js");
       const verbose = Boolean(args.verbose);
-      const detection = await detectSignatureFields(readFileSync(requiredStr(args, "pdf_path")), { verbose });
+      const pdfPath = requiredStr(args, "pdf_path");
+      validateDocumentPath(pdfPath);
+      const detection = await detectSignatureFields(readFileSync(pdfPath), { verbose });
       return {
         pageCount: detection.pageCount,
         anchorMatches: detection.dateCandidates.length,
@@ -572,7 +578,7 @@ const TOOLS: ToolDefinition[] = [
     },
     handler: async (_db, args) => {
       const { readFileSync, writeFileSync } = await import("node:fs");
-      const { validateOutputPath } = await import("./validate.js");
+      const { validateDocumentPath, validateOutputPath } = await import("./validate.js");
       const { parseAutoPlaceMode, selectAutoPlaceCandidates, InvalidAutoPlaceValue } =
         await import("./auto-place-selector.js");
       const { detectSignatureFields } = await import("./signature-field-detection.js");
@@ -580,6 +586,7 @@ const TOOLS: ToolDefinition[] = [
       const { assessStampQuality } = await import("./stamp-quality.js");
 
       const pdfPath = requiredStr(args, "pdf_path");
+      validateDocumentPath(pdfPath);
       const text = requiredStr(args, "text");
       const outPath = validateOutputPath(requiredStr(args, "out_path"));
       const overwriteFilled = Boolean(args.overwrite_filled);
@@ -696,7 +703,7 @@ const TOOLS: ToolDefinition[] = [
     },
     handler: async (_db, args) => {
       const { readFileSync, writeFileSync } = await import("node:fs");
-      const { validateOutputPath } = await import("./validate.js");
+      const { validateDocumentPath, validateOutputPath } = await import("./validate.js");
       const { parseImageInput, stampImageOnPdf } = await import("./pdf-image-stamp.js");
       const { stampTextOnPdf } = await import("./pdf-image-stamp.js");
       const { parseAutoPlaceMode, selectAutoPlaceCandidates, InvalidAutoPlaceValue } =
@@ -706,6 +713,7 @@ const TOOLS: ToolDefinition[] = [
       const { verifyPdfStamp } = await import("./pdf-stamp-verify.js");
 
       const pdfPath = requiredStr(args, "pdf_path");
+      validateDocumentPath(pdfPath);
       const outPath = validateOutputPath(requiredStr(args, "out_path"));
       const imageFlag = str(args, "signature_image");
       const nameSig = str(args, "name_signature");
@@ -856,12 +864,13 @@ const TOOLS: ToolDefinition[] = [
       },
     },
     handler: async (_db, args) => {
-      const { validateOutputPath } = await import("./validate.js");
+      const { validateDocumentPath, validateOutputPath } = await import("./validate.js");
       const { parseImageInput } = await import("./pdf-image-stamp.js");
       const { parseAutoPlaceMode, InvalidAutoPlaceValue } = await import("./auto-place-selector.js");
       const { signDocumentOneShot } = await import("./sign-document.js");
 
       const inputPath = requiredStr(args, "input_path");
+      validateDocumentPath(inputPath);
       const outPath = validateOutputPath(requiredStr(args, "out_path"));
       const signerName = requiredStr(args, "signer_name");
       const signatureImage = str(args, "signature_image");

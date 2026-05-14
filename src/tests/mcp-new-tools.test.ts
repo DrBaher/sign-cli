@@ -163,12 +163,15 @@ test("profile_show by name redacts credentials by default", async () => {
 });
 
 test("preview rejects when neither signature_image nor name_signature is given", async () => {
+  if (!existsSync(FIXTURE_PDF)) return;
   const { dbPath, cleanup } = makeTempDb();
   const db = createDb(dbPath);
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  process.env.SIGN_ALLOW_ABSOLUTE_DOCS = "1"; // input + output paths are absolute under tmpdir
   try {
     const dispatch = await dispatchMcp({
       method: "tools/call",
-      params: { name: "preview", arguments: { pdf_path: "x.pdf", out_path: "o.pdf" } },
+      params: { name: "preview", arguments: { pdf_path: FIXTURE_PDF, out_path: path.join(os.tmpdir(), "preview-out.pdf") } },
       db,
     });
     const value = (dispatch as { kind: "result"; value: any }).value;
@@ -176,19 +179,24 @@ test("preview rejects when neither signature_image nor name_signature is given",
     const envelope = parseEnvelope(value);
     assert.equal(envelope.error.code, "MISSING_FLAG");
   } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
     db.close();
     cleanup();
   }
 });
 
 test("preview rejects when both signature_image and name_signature are given", async () => {
+  if (!existsSync(FIXTURE_PDF)) return;
   const { dbPath, cleanup } = makeTempDb();
   const db = createDb(dbPath);
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  process.env.SIGN_ALLOW_ABSOLUTE_DOCS = "1";
   try {
     const dispatch = await dispatchMcp({
       method: "tools/call",
       params: { name: "preview", arguments: {
-        pdf_path: "x.pdf", out_path: "o.pdf",
+        pdf_path: FIXTURE_PDF, out_path: path.join(os.tmpdir(), "preview-out.pdf"),
         signature_image: "s.png", name_signature: "Alice",
       } },
       db,
@@ -198,21 +206,27 @@ test("preview rejects when both signature_image and name_signature are given", a
     const envelope = parseEnvelope(value);
     assert.equal(envelope.error.code, "SIGN_VISIBLE_SIG_BOTH");
   } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
     db.close();
     cleanup();
   }
 });
 
 test("pdf_stamp_text rejects unsafe absolute out_path without SIGN_ALLOW_ABSOLUTE_DOCS", async () => {
+  if (!existsSync(FIXTURE_PDF)) return;
   const { dbPath, cleanup } = makeTempDb();
   const db = createDb(dbPath);
   const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
   delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
   try {
+    // Use a fixture path inside the repo (validateDocumentPath accepts it
+    // because the repo's CWD is the test cwd). The /etc/ out_path then trips
+    // validateOutputPath's traversal guard — the behavior under test.
     const dispatch = await dispatchMcp({
       method: "tools/call",
       params: { name: "pdf_stamp_text", arguments: {
-        pdf_path: "x.pdf", text: "2026-05-13", out_path: "/etc/sign-out.pdf",
+        pdf_path: FIXTURE_PDF, text: "2026-05-13", out_path: "/etc/sign-out.pdf",
       } },
       db,
     });
@@ -220,6 +234,33 @@ test("pdf_stamp_text rejects unsafe absolute out_path without SIGN_ALLOW_ABSOLUT
     assert.equal(value.isError, true);
     const envelope = parseEnvelope(value);
     assert.match(envelope.error.message, /escapes the working directory/);
+  } finally {
+    if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;
+    db.close();
+    cleanup();
+  }
+});
+
+test("preview/document/pdf_stamp_text reject input-path traversal", async () => {
+  // The input PDF path must also pass validateDocumentPath. Without
+  // SIGN_ALLOW_ABSOLUTE_DOCS, an absolute path outside cwd is rejected before
+  // the file is read.
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  const saved = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+  try {
+    for (const tool of ["preview", "pdf_stamp_text", "pdf_detect_signature_field", "pdf_detect_date_field"] as const) {
+      const args: Record<string, unknown> = { pdf_path: "/etc/passwd" };
+      if (tool === "preview") { args.out_path = "out.pdf"; args.signature_image = "s.png"; }
+      if (tool === "pdf_stamp_text") { args.out_path = "out.pdf"; args.text = "x"; }
+      const dispatch = await dispatchMcp({ method: "tools/call", params: { name: tool, arguments: args }, db });
+      const value = (dispatch as { kind: "result"; value: any }).value;
+      assert.equal(value.isError, true, `${tool} should error on input-path traversal`);
+      const envelope = parseEnvelope(value);
+      assert.match(envelope.error.message, /escapes the working directory/, `${tool} envelope: ${envelope.error.message}`);
+    }
   } finally {
     if (saved === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
     else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = saved;

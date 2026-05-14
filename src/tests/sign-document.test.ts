@@ -228,7 +228,7 @@ test("CLI: sign document drawnRects round-trips through pdf stamp verify", async
       "--image-y", String(d.y),
       "--image-width", String(d.width),
       "--image-height", String(d.height),
-    ], { encoding: "utf8" });
+    ], { encoding: "utf8", env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" } });
     const verifyJson = JSON.parse(verify.stdout.slice(verify.stdout.indexOf("{")));
     assert.equal(verifyJson.verdict, "ok",
       `drawnRects should round-trip through stamp verify; got ${verifyJson.verdict}`);

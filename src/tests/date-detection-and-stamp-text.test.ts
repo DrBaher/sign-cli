@@ -88,7 +88,8 @@ test("CLI: pdf detect-signature-field returns only signature candidates (no date
   try {
     const pdfPath = path.join(tmp, "p.pdf");
     writeFileSync(pdfPath, await buildSigDatePdf());
-    const r = spawnSync("node", [CLI, "pdf", "detect-signature-field", "--pdf", pdfPath], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "pdf", "detect-signature-field", "--pdf", pdfPath],
+      { encoding: "utf8", env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" } });
     assert.equal(r.status, 0, `stderr=${r.stderr}`);
     const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
     assert.equal(payload.candidates.length, 1);
@@ -107,7 +108,8 @@ test("CLI: pdf detect-date-field returns date candidates with alreadyFilled flag
   try {
     const pdfPath = path.join(tmp, "p.pdf");
     writeFileSync(pdfPath, await buildSigDatePdf());
-    const r = spawnSync("node", [CLI, "pdf", "detect-date-field", "--pdf", pdfPath], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "pdf", "detect-date-field", "--pdf", pdfPath],
+      { encoding: "utf8", env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" } });
     assert.equal(r.status, 0, `stderr=${r.stderr}`);
     const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
     assert.equal(payload.candidates.length, 2);
@@ -130,7 +132,8 @@ test("CLI: pdf detect-date-field exits 2 when no date anchors found", async () =
     page.drawText("______________________", { x: 140, y: 500, font: helv, size: 12 });
     const pdfPath = path.join(tmp, "p.pdf");
     writeFileSync(pdfPath, Buffer.from(await doc.save()));
-    const r = spawnSync("node", [CLI, "pdf", "detect-date-field", "--pdf", pdfPath], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "pdf", "detect-date-field", "--pdf", pdfPath],
+      { encoding: "utf8", env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" } });
     assert.equal(r.status, 2, "no date candidates → exit 2");
     const payload = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
     assert.deepEqual(payload.candidates, []);

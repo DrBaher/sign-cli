@@ -84,7 +84,7 @@ test("CLI preview: emits drawnRects that round-trip through pdf stamp verify", a
       "--image-y", String(d.y),
       "--image-width", String(d.width),
       "--image-height", String(d.height),
-    ], { encoding: "utf8" });
+    ], { encoding: "utf8", env: { ...process.env, SIGN_ALLOW_ABSOLUTE_DOCS: "1" } });
     const verifyJson = JSON.parse(verify.stdout.slice(verify.stdout.indexOf("{")));
     assert.equal(verifyJson.verdict, "ok",
       "drawnRects[0] from sign preview should round-trip through pdf stamp verify");
