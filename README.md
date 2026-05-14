@@ -99,6 +99,8 @@ For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVI
 - **Exit codes** carry meaning across every command: `0` ok, `2` invalid input, `3` policy / chain / verification failure, `4` not found / out of range. `request watch` adds the same `0/2/3/4` semantics for terminal vs. timeout.
 - **Preflight.** Run `sign doctor preflight` first (the subcommand — bare `sign doctor` is the legacy env-report). Output is `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name,status:"ok"|"failed"|"skipped",detail,hint?}] }`. Exit `0` ok / `1` any failed. Branch on `checks[].name` for self-recovery — env-health (`runtime:node_version`, `storage:db_path`) runs on every provider, then provider-scoped checks layer on.
 - **Provider banner.** Every provider-touching command prints `[sign] resolved provider: <p> (<source>)` to stderr. Pass `--strict-provider true` to refuse mismatches between flag/env and the request's persisted provider (error code `STRICT_PROVIDER_MISMATCH`).
+- **Profiles.** Named bundles of provider + dbPath + credentials, activated by `--profile <name>` / `SIGN_PROFILE=<name>` / a discovered `sign-profile.json`. Credentials redacted in `sign profile show` unless `--show-secrets true`. See [`docs/profiles-design.md`](docs/profiles-design.md) and `docs/agent-guide.md` §6.7.
+- **Path-traversal guard.** Every `--document` / `--pdf` / `--input` / `--out` / profile `--db` flag is validated against the working directory by default. Opt out for a single call with `SIGN_ALLOW_ABSOLUTE_DOCS=1` — error message is `escapes the working directory` (see `TROUBLESHOOTING.md`).
 - **Recipes for agents.** [`docs/recipes/preflight.md`](docs/recipes/preflight.md), [`docs/recipes/agent-loop-mcp.md`](docs/recipes/agent-loop-mcp.md).
 
 ## Commands
@@ -461,16 +463,30 @@ npm run start -- audit show --request-id <request_id>
 
 ## MCP server (for LLM agents)
 
-Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server. An MCP-aware agent (Claude Code, Claude Desktop, anything else that speaks MCP) can then drive the signer-side flow without spawning the CLI on each call. The server exposes seven tools, all backed by the same SignCliError envelopes you'd see at the CLI:
+Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server. An MCP-aware agent (Claude Code, Claude Desktop, anything else that speaks MCP) can then drive the signer-side flow without spawning the CLI on each call. The server exposes 18 tools (split read-only vs mutating), all backed by the same SignCliError envelopes you'd see at the CLI. **Don't hardcode the list** — call `sign mcp tools` at startup to get the current catalog with full JSON-Schema input + output contracts. Today's tools:
+
+**Read-only (always available):**
 
 - `signer_list` (`{ signer_email? }`) — pending inbox.
 - `signer_fetch_document` (`{ request_id, token, signer_email?, out_path? }`) — read the unsigned PDF + audit it as fetched.
-- `sign` (`{ request_id, token, signer_email?, signer_name?, require_hash?, require_title?, require_signer_email? }`) — sign as the token holder.
-- `signer_decline` (`{ request_id, token, signer_email?, reason? }`) — decline.
 - `request_show` (`{ request_id }`) — enriched snapshot with `signedBy`, `nextSteps[]`, etc.
 - `request_status` (`{ request_id, provider? }`) — poll the provider; reads API keys from env (`DROPBOX_SIGN_API_KEY` / `SIGNWELL_API_KEY`) for hosted providers.
 - `request_watch` (`{ request_id, provider?, interval_ms?, timeout_ms? }`) — poll until terminal; emits MCP `notifications/progress` on each poll when the client supplies a `progressToken`.
-- `audit_verify` (`{ request_id }`) — verify the audit chain.
+- `audit_verify` (`{ request_id }`) — verify the audit chain for one request.
+- `audit_scan` (`{ provider?, status?, limit? }`) — verify every request's audit chain.
+- `pdf_detect_signature_field` / `pdf_detect_date_field` (`{ pdf_path, verbose? }`) — return ranked placement candidates with confidence + adjustment method.
+- `profile_list` (`{}`) — configured profiles + active source.
+- `profile_show` (`{ name?, show_secrets? }`) — resolved view with per-field provenance; credentials redacted by default.
+
+**Mutating (blocked by `mcp serve --read-only true`):**
+
+- `sign` (`{ request_id, token, ..., require_hash?, require_title?, require_signer_email?, idempotency_key? }`) — sign as the token holder; pre-sign safety checks return structured errors before any state mutation.
+- `signer_decline` (`{ request_id, token, signer_email?, reason? }`).
+- `signer_reissue_token` (`{ request_id, signer_email, token_ttl_minutes? }`) — mint a new per-signer token.
+- `request_receipt` (`{ request_id, out_dir }`) — write a cryptographically-signed receipt bundle (`out_dir` is validated against the working-directory traversal guard).
+- `pdf_stamp_text` (`{ pdf_path, text, out_path, auto_place?, overwrite_filled?, image_* }`) — stamp a text string (typically a date) at a detected date anchor or explicit coords.
+- `preview` (`{ pdf_path, out_path, signature_image | name_signature, auto_place?, image_* }`) — draft visible-signature preview WITHOUT PAdES sealing or signing-request mutation.
+- `document` (`{ input_path, out_path, signer_name, signer_email?, signature_image | name_signature, auto_place?, image_* }`) — one-shot DOCX/PDF → sealed PDF, isolated temp DB.
 
 Tool arguments are validated against each tool's `inputSchema` before the handler runs (missing required fields, wrong types, enum mismatches → `INVALID_ARGS`). Tool errors come back as `{ isError: true, content: [{ type: "text", text: "<JSON envelope>" }] }` with the same `code` values documented in `TROUBLESHOOTING.md`.
 
@@ -503,7 +519,17 @@ curl -s -X POST http://127.0.0.1:4000/v1/sign \
   -d '{"request_id":"req_abc","token":"alice-tok-..."}'
 ```
 
-All responses are `{ ok: true, result: ... }` on success or the standard `formatCliError` envelope (`{ ok: false, error: { code, message, ... } }`) on failure. Routes: `/v1/health`, `/v1/signer/list`, `/v1/signer/fetch-document`, `/v1/sign`, `/v1/signer/decline`, `/v1/signer/reissue-token`, `/v1/request/show`, `/v1/request/status`, `/v1/request/receipt`, `/v1/audit/verify`, `/v1/audit/scan`.
+All responses are `{ ok: true, result: ... }` on success or the standard `formatCliError` envelope (`{ ok: false, error: { code, message, ... } }`) on failure. Every MCP tool has a 1:1 HTTP route — query `GET /v1/openapi.json` for the authoritative spec. Routes:
+
+- **Health/introspection:** `GET /v1/health`, `GET /v1/metrics` (Prometheus text), `GET /v1/openapi.json`.
+- **Signer-side:** `POST /v1/signer/list`, `POST /v1/signer/fetch-document`, `POST /v1/sign`, `POST /v1/signer/decline`, `POST /v1/signer/reissue-token`.
+- **Request lifecycle:** `POST /v1/request/show`, `POST /v1/request/status`, `POST /v1/request/receipt`.
+- **Audit:** `POST /v1/audit/verify`, `POST /v1/audit/scan`.
+- **PDF utilities (inputs validated against the working-directory traversal guard):** `POST /v1/pdf/detect-signature-field`, `POST /v1/pdf/detect-date-field`, `POST /v1/pdf/stamp-text`.
+- **One-shot signing:** `POST /v1/preview` (draft, no seal), `POST /v1/document` (DOCX/PDF → sealed PDF).
+- **Profile inspection:** `POST /v1/profile/list`, `POST /v1/profile/show` (credentials redacted unless `show_secrets: true`).
+
+Mutating routes (`sign`, `signer/decline`, `signer/reissue-token`, `request/receipt`, `pdf/stamp-text`, `preview`, `document`) return `403 FORBIDDEN_READ_ONLY` when `sign serve --read-only true` is set.
 
 ## Signer-side flow (agent-friendly)
 
