@@ -11,7 +11,7 @@ import { redactErrorMessage } from "./lib/secret.js";
 import { attachPrettyAuditPrinter } from "./lib/audit-pretty.js";
 import { generateCompletionScript, type CompletionShell } from "./lib/completion.js";
 import { runAuditWatch } from "./lib/audit-watch.js";
-import { startHttpApiServer } from "./lib/http-api.js";
+import { listMockHttpRoutes, startHttpApiServer } from "./lib/http-api.js";
 import { diffRequests } from "./lib/request-diff.js";
 import { renderReceiptVerificationHtml } from "./lib/receipt-html.js";
 import { runSelftest } from "./lib/selftest.js";
@@ -2829,21 +2829,10 @@ async function main(): Promise<void> {
       readOnly,
       rateLimit: rateLimit ? { refillPerSec: rateLimit.refillPerSec, capacity: rateLimit.capacity } : null,
       webDemo: webDemoDir ? `${tls ? "https" : "http"}://${bind}:${port}/web-demo/index.html` : null,
-      routes: [
-        "GET /v1/health",
-        "GET /v1/metrics",
-        "GET /v1/openapi.json",
-        "POST /v1/signer/list",
-        "POST /v1/signer/fetch-document",
-        "POST /v1/sign",
-        "POST /v1/signer/decline",
-        "POST /v1/signer/reissue-token",
-        "POST /v1/request/show",
-        "POST /v1/request/status",
-        "POST /v1/request/receipt",
-        "POST /v1/audit/verify",
-        "POST /v1/audit/scan",
-      ],
+      // Pull from listMockHttpRoutes() so this banner can't drift from the
+      // actual route registry. /v1/metrics is handled inline (not in ROUTES)
+      // so include it explicitly.
+      routes: ["GET /v1/metrics", ...listMockHttpRoutes()].sort(),
     }, null, 2));
     return;
   }
