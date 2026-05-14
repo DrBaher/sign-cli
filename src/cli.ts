@@ -2536,7 +2536,11 @@ async function main(): Promise<void> {
 
   if (root === "request" && sub === "verify-signed-pdf") {
     const requestId = flagValue(parsed, "request-id", true)!;
-    const result = await inspectRequestSignedPdf(db, { requestId, path: flagValue(parsed, "path") });
+    const result = await inspectRequestSignedPdf(db, {
+      requestId,
+      path: flagValue(parsed, "path"),
+      ...(flagValue(parsed, "recipient") ? { recipient: flagValue(parsed, "recipient") } : {}),
+    });
     // One-line verdict on stderr so callers see the answer without parsing JSON.
     // The same fields are in result.summary on stdout for programmatic use.
     process.stderr.write(
