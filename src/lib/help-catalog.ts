@@ -277,7 +277,12 @@ export const HELP_CATALOG: CommandSpec[] = [
   },
   {
     command: "request verify-signed-pdf",
-    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF. Per signer, the output includes a structural `trust` label: `self_signed_local` (this CLI's built-in signer), `self_signed_other` (issuer==subject, but not from this CLI), `ca_signed` (issuer!=subject), or `unknown` (parse error). Labels are descriptive, not enforced — no trust-store lookup or chain validation.",
+    summary: "Inspect the embedded PKCS#7 signature(s) of a final PDF. Per signer, the output includes a structural `trust` label: `self_signed_local` (this CLI's built-in signer), `self_signed_other` (issuer==subject, but not from this CLI), `ca_signed` (issuer!=subject), or `unknown` (parse error). Labels are descriptive, not enforced — no trust-store lookup or chain validation. Pass `--recipient <email>` to scope the signer-match check to one expected signer (vs. requiring the full persisted-signer roster — useful for mid-flight multi-signer requests).",
+    flags: [
+      { name: "--request-id", required: true, description: "Request whose signed PDF should be verified." },
+      { name: "--path", description: "Inspect a specific PDF path instead of the latest signed artifact." },
+      { name: "--recipient", description: "Narrow the signer-match check to a single recipient email (the rest of the persisted-signer roster is ignored for that one check)." },
+    ],
   },
   {
     command: "pdf stamp",

@@ -2975,7 +2975,15 @@ function worstTrust(report: PdfSignatureReport): TrustLabel {
 
 function emailMatchesSubject(subject: string | null, email: string): boolean {
   if (!subject) return false;
-  return subject.toLowerCase().includes(email.toLowerCase());
+  // Node's X509Certificate.subject returns the RFC 4514 / LDAP DN string,
+  // which escapes reserved chars (`+`, `<`, `>`, `,`, `"`, `;`, `\`, leading
+  // `#`, leading/trailing whitespace) with backslashes. A literal email
+  // like `baher+dcc@example.com` shows up as `baher\+dcc@example.com` in
+  // the subject string — our matcher must compare the *unescaped* value or
+  // valid signatures from local per-signer certs flag as signer_mismatch
+  // (real bug surfaced by the GBrain DCC NDA smoke test on 2026-05-14).
+  const unescaped = subject.toLowerCase().replace(/\\(.)/g, "$1");
+  return unescaped.includes(email.toLowerCase());
 }
 
 /** @internal Exposed for unit testing — call sites should use the higher-level
@@ -3024,7 +3032,7 @@ export function verifyVerdictExitCode(verdict: VerifyVerdict): 0 | 2 | 3 | 4 | 5
 
 export async function inspectRequestSignedPdf(
   db: SqliteDb,
-  input: { requestId: string; path?: string; now?: Date },
+  input: { requestId: string; path?: string; recipient?: string; now?: Date },
 ): Promise<{ source: "request" | "path"; report: PdfSignatureReport; summary: VerifySummary }> {
   let pdfPath = input.path;
   let source: "request" | "path" = "path";
@@ -3050,6 +3058,23 @@ export async function inspectRequestSignedPdf(
       // truth: zero persisted signers means everyone in PDF is acceptable).
       persistedSigners = [];
     }
+  }
+  // Optional recipient narrowing: when --recipient is passed, scope the
+  // signer_match check to JUST that recipient (Persisted ⊆ PDF for the one
+  // signer we care about, ignoring co-signers who haven't signed yet).
+  // Matches the semantics of `request show --recipient`. Refuses unknown
+  // recipients to fail loud rather than silently degrading to vacuous-truth.
+  if (input.recipient) {
+    const norm = input.recipient.trim().toLowerCase();
+    const filtered = persistedSigners.filter((s) => s.email.trim().toLowerCase() === norm);
+    if (filtered.length === 0 && persistedSigners.length > 0) {
+      throw new SignCliError({
+        code: "SIGNER_NOT_RECIPIENT",
+        message: `Recipient ${input.recipient} is not on request ${input.requestId}.`,
+        hint: `Available: ${persistedSigners.map((s) => s.email).sort().join(", ")}.`,
+      });
+    }
+    persistedSigners = filtered;
   }
   const report = await inspectPdfSignatures(pdfPath);
   const summary = computeVerifySummary(report, persistedSigners);

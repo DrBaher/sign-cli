@@ -139,6 +139,25 @@ test("computeVerifySummary: email match is case-insensitive", () => {
   assert.equal(summary.signer_match, true);
 });
 
+test("computeVerifySummary: matcher strips RFC 4514 backslash escapes in the cert subject", () => {
+  // Node's X509Certificate.subject returns the LDAP-format DN string where
+  // reserved chars like `+`, `<`, `>` are backslash-escaped. A real per-
+  // signer cert subject is e.g. `CN=Baher Test \<baher\+dcc@example.com\>`.
+  // A raw `subject.includes("baher+dcc@example.com")` would FALSELY return
+  // signer_mismatch on a perfectly valid signature. Regression test for the
+  // GBrain DCC NDA smoke test (2026-05-14).
+  const summary = computeVerifySummary(
+    report([finding({ signers: [{
+      subject: "CN=Baher Test \\<baher\\+dcc@example.com\\>\nO=Sign CLI Local Provider",
+      issuer: null, validFrom: null, validTo: null, serialNumber: null,
+      fingerprintSha256: null, trust: "self_signed_local",
+    }] })]),
+    [signer("baher+dcc@example.com")],
+  );
+  assert.equal(summary.signer_match, true, "signer_match must hold against an RFC 4514-escaped subject");
+  assert.equal(summary.verdict, "ok");
+});
+
 test("computeVerifySummary: no_signature precedence — even with warnings, no_signature wins", () => {
   const summary = computeVerifySummary(report([], ["top-level warn"]), [signer("alice@example.com")]);
   assert.equal(summary.verdict, "no_signature");
