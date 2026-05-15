@@ -45,7 +45,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Publish to npm
-        if: env.NODE_AUTH_TOKEN != ''
+        if: ${{ secrets.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
@@ -66,9 +66,9 @@ jobs:
         run: |
           set -euo pipefail
           tar -czf "sign-cli-${{ needs.guard-version.outputs.version }}-dist.tar.gz" \
-            dist README.md CHANGELOG.md ONBOARDING.md PROVIDER_SELECTION.md CHECKLIST.md \
-            TROUBLESHOOTING.md SIGNWELL_SETUP.md EMBEDDED_SETUP.md DISTRIBUTION.md RELEASE.md \
-            LICENSE fixtures package.json scripts/smoke-signwell.sh
+            dist README.md AGENTS.md CHANGELOG.md TROUBLESHOOTING.md \
+            DISTRIBUTION.md RELEASE.md MIGRATION.md LICENSE \
+            docs fixtures package.json scripts/smoke-signwell.sh
           shasum -a 256 sign-cli-*.tar.gz > sign-cli-${{ needs.guard-version.outputs.version }}-dist.tar.gz.sha256
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v4
