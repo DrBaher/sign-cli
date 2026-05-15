@@ -1,6 +1,6 @@
 # sign-cli
 
-> Part of the three-CLI contract suite. [**nda-review-cli**](https://github.com/DrBaher/nda-review-cli) (draft, review, negotiate) → [**docx2pdf-cli**](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit). [Showcase site](https://drbaher-cli.vercel.app/).
+> Part of the three-CLI contract suite. [**nda-review-cli**](https://github.com/DrBaher/nda-review-cli) (draft, review, negotiate) → [**docx2pdf-cli**](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit). [Showcase site](https://cli.drbaher.com/).
 
 Fully-offline e-signature CLI. The built-in PAdES signer (PKCS#7 in `/ByteRange`, self-issued cert) produces real, cryptographically verifiable signed PDFs with no signup and no third-party provider — or routes through Dropbox Sign / DocuSign / SignWell when you need an external trust anchor. Per-signer approval tokens (TTL-bounded, scoped to one email), hash-chained audit events, RFC 3161 timestamping, named profiles, a 19-tool MCP server, and a 20-route HTTP API.
 
