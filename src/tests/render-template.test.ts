@@ -79,7 +79,7 @@ test("end-to-end: rendering the bundled NDA template with example vars produces 
   assert.ok(!/\{\{[A-Z0-9_]+\}\}/.test(substituted), "no placeholders left after substitution");
 
   // The method-consent clause must be present in the rendered source —
-  // that's the whole point of the template per docs/legal-posture.md.
+  // that's the whole point of the template per docs/reference/legal.md.
   assert.match(substituted, /electronic signature/i);
   assert.match(substituted, /method of execution/i);
 

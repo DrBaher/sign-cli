@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Scans user-facing docs + landing page for legal claims that exceed what
-// docs/legal-posture.md says we'll defend. Prevents accidental drift —
+// docs/reference/legal.md says we'll defend. Prevents accidental drift —
 // e.g., a future README edit that says "eIDAS-compliant" or
 // "legally binding" without a jurisdiction qualifier.
 //
@@ -33,7 +33,7 @@ const FORBIDDEN_PATTERNS = [
   {
     name: "eIDAS-compliant claim",
     pattern: /\beIDAS[- ]?compliant\b/giu,
-    hint: "We produce a Simple Electronic Signature admissible under eIDAS Article 25(1) — not 'eIDAS-compliant' as a whole. Rephrase or move the discussion to docs/legal-posture.md.",
+    hint: "We produce a Simple Electronic Signature admissible under eIDAS Article 25(1) — not 'eIDAS-compliant' as a whole. Rephrase or move the discussion to docs/reference/legal.md.",
   },
   {
     name: "AdES-compliant claim",
@@ -63,10 +63,10 @@ const FORBIDDEN_PATTERNS = [
 ];
 
 // Files that are exempted because they're the authoritative source for the
-// nuance (legal-posture.md), historical record (CHANGELOG), or not
+// nuance (docs/reference/legal.md), historical record (CHANGELOG), or not
 // user-facing copy.
 const EXEMPT_FILES = new Set([
-  "docs/legal-posture.md",
+  "docs/reference/legal.md",
   "CHANGELOG.md",
 ]);
 
@@ -79,15 +79,11 @@ const SCAN_FILE_EXTS = new Set([".md", ".html"]);
 // Top-level files we always scan (when they exist).
 const SCAN_TOP_LEVEL = [
   "README.md",
-  "ONBOARDING.md",
-  "PROVIDER_SELECTION.md",
-  "CHECKLIST.md",
+  "AGENTS.md",
   "TROUBLESHOOTING.md",
   "DISTRIBUTION.md",
   "MIGRATION.md",
   "RELEASE.md",
-  "SIGNWELL_SETUP.md",
-  "EMBEDDED_SETUP.md",
 ];
 
 function walk(dir, acc = []) {
@@ -178,8 +174,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   console.error(`[lint:legal-claims] ${violations.length} violation(s) found:\n`);
   for (const v of violations) console.error(formatViolation(v));
-  console.error(`\nSee docs/legal-posture.md → "What we'll never claim" for the rationale.`);
+  console.error(`\nSee docs/reference/legal.md → "What we'll never claim" for the rationale.`);
   console.error(`If a match is legitimate, either rephrase, add a jurisdiction qualifier, or`);
-  console.error(`move the discussion into docs/legal-posture.md (which is exempt from the lint).`);
+  console.error(`move the discussion into docs/reference/legal.md (which is exempt from the lint).`);
   process.exit(1);
 }

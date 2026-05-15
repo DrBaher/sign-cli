@@ -1,704 +1,281 @@
 # sign-cli
 
-**Built for an agent-driven workflow: agents send, track, and verify; humans approve the signature.**
-An e-signature CLI that runs **fully offline** — the built-in PAdES signer (PKCS#7 in `/ByteRange`, self-issued cert) produces cryptographically verifiable signed PDFs with no signup and no third-party provider — or routes through Dropbox Sign / DocuSign / SignWell when you need an external provider. Per-signer approval tokens (TTL-bounded, scoped to a single signer's email), declarative policies, an MCP server, RFC 3161 timestamping, and re-verifiable receipt bundles. The asymmetry is the whole architecture — an agent can drive every step except the actual signing gesture, which stays gated behind a human.
+> Part of the three-CLI contract suite. [**nda-review-cli**](https://github.com/DrBaher/nda-review-cli) (draft, review, negotiate) → [**docx2pdf-cli**](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit). [Showcase site](https://drbaher-cli.vercel.app/).
 
-Part of a [three-CLI suite](https://drbaher-cli.vercel.app/) for end-to-end contract operations: [nda-review-cli](https://github.com/DrBaher/nda-review-cli) (drafting, reviewing, negotiating) → [docx2pdf-cli](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit trail). See the [MCP guide](https://drbaher-cli.vercel.app/mcp/) for how the suite plugs into Claude Code, Cursor, or any MCP-aware client.
+Fully-offline e-signature CLI. The built-in PAdES signer (PKCS#7 in `/ByteRange`, self-issued cert) produces real, cryptographically verifiable signed PDFs with no signup and no third-party provider — or routes through Dropbox Sign / DocuSign / SignWell when you need an external trust anchor. Per-signer approval tokens (TTL-bounded, scoped to one email), hash-chained audit events, RFC 3161 timestamping, named profiles, a 19-tool MCP server, and a 20-route HTTP API.
 
-```bash
-npx sign-cli demo
-```
+**The asymmetry is the architecture**: an agent can drive every step except the actual signing gesture, which stays gated behind a human.
 
-That single command runs the entire lifecycle — create → send → sign → verify
-chain → export receipt — against an offline local provider, then deletes
-everything. No signup. No keys. About 5 seconds.
-
-> **[Try the live demo →](https://sign-cli-demo-production.up.railway.app/web-demo/)** — read-only, resets every 4 hours. Or self-host: see [`deploy/README.md`](deploy/README.md) for Fly / Render / Railway configs.
-
-## Read in this order
-
-1. **[Recipes](docs/recipes/README.md)** — short end-to-end guides (preflight for agents, sign as Alice, weekly anchor, auditor handoff, agent loop over MCP).
-2. **[Agent guide](docs/agent-guide.md)** — canonical reference for driving `sign-cli` from an LLM or non-interactive client (output schemas, exit-code map, per-command side effects + idempotency, decision rules). Start here if you're an agent.
-3. **[Regression testing](docs/regression-testing.md)** — per-item manual tests for every surface in `[Unreleased]`, with expected exit codes. Use it to validate a build outside `npm test`.
-4. **[Architecture](docs/architecture.md)** — what the boxes are and how data moves between them.
-5. **[How it compares](docs/comparison.md)** — frank pros/cons vs. SaaS providers and DIY.
-6. **[Compliance posture](docs/compliance-posture.md)** — the threat model + what the audit chain actually proves.
-7. **[Legal posture](docs/legal-posture.md)** — when a `sign-cli` signature is enforceable, by jurisdiction and use case (US ESIGN/UETA, EU eIDAS, NDA deep-dive). Read this before signing anything you care about.
-8. **[Integrations](integrations/README.md)** — drop-in starters for Claude Desktop, langchain, etc.
-9. **[Hosted demo](deploy/README.md)** — deploy a public read-only sandbox on Fly / Render / Railway.
-10. **[CHANGELOG](CHANGELOG.md)** — what landed and when.
-
-## Why this exists
-
-Most signing tools assume a human at a browser, drag-and-drop fields, click-here-to-sign emails. This one assumes the operating model is shifting: an LLM agent does the operational work — sending documents, tracking status, verifying receipts, reporting back — and a human's role is to approve the gates that legitimately need a human gesture.
-
-| Agent does                                        | Human approves                                                  |
-|---------------------------------------------------|-----------------------------------------------------------------|
-| Sends documents to one or many signers            | The signature itself — every signer needs an explicit token     |
-| Tracks status, retries, rotates providers         | Provider configuration changes (`init`, secret writes)          |
-| Verifies signed PDFs + audit chains offline       | Audit-chain anomalies surfaced for human investigation          |
-| Anchors with RFC 3161 timestamps                  | Anything outside the declared per-signer / TTL guardrails       |
-
-What that gives you concretely:
-
-- **Agent-friendly**: stdio MCP server with typed input/output schemas, capability scoping, allow-list tools, NDJSON replay log.
-- **Human-gated**: per-signer approval tokens (single-use, TTL-bounded, tied to one signer's email). Tokens are emitted to the human, not the agent.
-- **No provider required**: the built-in PAdES signer (PKCS#7 in `/ByteRange`, self-issued cert) produces real digital signatures that `request verify-signed-pdf` validates end-to-end. Zero signup, no API keys, no third-party SaaS. When you do want a hosted provider, the same surface routes through Dropbox Sign / DocuSign / SignWell.
-- **Verifiable**: hash-chained audit events, append-only triggers, RFC 3161 cross-request anchors, self-contained receipt bundles. An auditor can re-verify a year-old signature without trusting today's database.
-- **Operator-friendly**: swap providers or run offline without rewriting automation; offline `--provider local` for tests and CI.
-
-## Quick start (no clone)
+## Run this
 
 ```bash
 npx sign-cli demo
 ```
-or download the standalone binary from the [GitHub Releases page](https://github.com/DrBaher/sign-cli/releases) and run `./sign-linux-x64 demo`. See [DISTRIBUTION.md](./DISTRIBUTION.md) for all the install options.
 
-If you've cloned the repo:
-```bash
-npm install && npm run build
-node dist/cli.js demo
-```
-`sign demo` runs the entire pipeline end-to-end against a built-in **local** provider — create + approve + send + watch + fetch-final + PKCS#7 inspect + audit verify + bundle export — with no signups and no API keys. The signed PDF it produces is a real PAdES-style PDF signed by a self-issued cert, so `request verify-signed-pdf` validates the full chain.
+That single command runs the entire lifecycle — create → send → sign → verify chain → export receipt — against the offline local provider, then deletes everything. No signup. No keys. ~5 seconds.
 
-When you're ready to wire up a real provider:
+> **[Live demo →](https://sign-cli-demo-production.up.railway.app/web-demo/)** — read-only, resets every 4 hours. Self-host: see [`deploy/README.md`](deploy/README.md).
+
+## Where to go next
+
+| If you are… | Start here |
+|---|---|
+| **A new user** evaluating the tool | This README's [Quick start](#quick-start), then [Standard user journey](#standard-user-journey) |
+| **An operator** wiring up a hosted provider | [docs/setup/](docs/setup/) — Dropbox / DocuSign / SignWell / embedded |
+| **An LLM agent** driving the CLI | [AGENTS.md](AGENTS.md) → [docs/agent-guide.md](docs/agent-guide.md) → [docs/recipes/](docs/recipes/) |
+| **An auditor** verifying a signed bundle | [docs/reference/audit-chain.md](docs/reference/audit-chain.md), [docs/reference/legal.md](docs/reference/legal.md) |
+| **A contributor** | [docs/reference/architecture.md](docs/reference/architecture.md), [docs/regression-testing.md](docs/regression-testing.md) |
+
+Concept deep-dives live in [docs/reference/](docs/reference/); task-oriented recipes in [docs/recipes/](docs/recipes/).
+
+## Quick start
+
 ```bash
-node dist/cli.js init
-node dist/cli.js doctor providers
+# Install
+npm i -g sign-cli
+
+# Or run without installing
+npx sign-cli demo
+
+# After install, the binary is named `sign`
+sign --version
+sign demo
+sign init        # wizard: provider selection + .env
+sign doctor preflight   # structured per-check readiness report
 ```
-`sign init` walks you through provider selection and writes a `.env`. `doctor providers` confirms it's wired up. See [ONBOARDING.md](./ONBOARDING.md) for the longer path.
+
+Or download a standalone binary from [Releases](https://github.com/DrBaher/sign-cli/releases) — `./sign-linux-x64 demo`. See [DISTRIBUTION.md](./DISTRIBUTION.md) for every install path.
 
 ## What this gives you
-- Human approval tokens (single-use, TTL)
-- Local append-only audit chain (`hash_prev`, `hash_self`) with `audit verify`
-- Multi-signer support
-- Built-in `--provider local` that simulates the entire flow with no API keys, plus a self-signed PAdES PDF signer so `request verify-signed-pdf` validates a real chain
-- Production hardening: input validation (path-traversal/email/return-url/sizes), secret redaction in errors and HTTP debug logs, idempotent `request send` (refuses to double-send unless `--force true`), `db backup` / `db verify` (SQLite WAL mode), and `--verbose` HTTP tracing with header redaction
-- Provider abstraction for send + status + watch + final download + cancel + remind
-- Multi-document requests (`--document` repeatable on `request create` / `run-email` / `bulk`)
-- CSV-driven bulk send (`request bulk --csv`)
-- Interactive `init` wizard that writes `.env`
-- Dropbox Sign / DocuSign / SignWell — email send, embedded signing, and webhook ingest (DocuSign embedded uses `clientUserId` + recipient view)
-- Provider capability matrix via `doctor providers`
-- PDF signature inspection (`request verify-signed-pdf`) — parses `/ByteRange`, recomputes the digest, extracts X.509 signer cert
-- RFC 3161 timestamping (`audit timestamp`) — anchors the audit head against a public TSA
-- Tamper-evident bundle export (`audit export`) — bundleVersion 2 writes `audit.json` + `signed.pdf` + `original.pdf` + `manifest.json` + `README.md` + `receipts/<signer-email>.json` (per-signer event subsets, isolated — Bob's receipt never contains Alice's events)
-- HTTP retry with `Retry-After`-aware 429 handling on every provider call
-- Structured logging for `request watch` (`--log json` / `--log human`)
-- Live SignWell smoke test (`smoke signwell` / `scripts/smoke-signwell.sh`)
-- Persisted provider, provider request ID, and signer IDs on requests
 
-For an end-to-end onboarding bundle see [ONBOARDING.md](./ONBOARDING.md), [PROVIDER_SELECTION.md](./PROVIDER_SELECTION.md), [CHECKLIST.md](./CHECKLIST.md), and [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+- **Offline PAdES signing** with a self-issued cert — real PKCS#7 signed PDFs, no signup, no API keys.
+- **Three hosted providers** when you need them: Dropbox Sign, DocuSign, SignWell. Same surface across all four.
+- **Per-signer approval tokens** (single-use, TTL-bounded, tied to one email). Tokens go to the human, not the agent.
+- **Hash-chained audit chain** with append-only DB triggers + RFC 3161 anchors. See [docs/reference/audit-chain.md](docs/reference/audit-chain.md).
+- **Idempotent `request send`** — refuses to double-send unless `--force true`; pair with `--idempotency-key` for safe retries.
+- **Multi-document + multi-signer** requests; CSV-driven bulk send.
+- **Templates** from each provider's dashboard via `request from-template`.
+- **Auto-detect signature field** (`sign pdf detect-signature-field` + `sign sign --auto-place`). Detects AcroForm `/Sig` widgets and anchor text in English + French/EU conventions.
+- **Inspect any signed PDF** with `sign pdf inspect` — parses PAdES PKCS#7 from sign-cli or any other producer (Adobe, DocuSign, Dropbox Sign, SignWell). Returns signer CN/email, cert subject + issuer, validity window, fingerprint, trust label (`self_signed_local` / `self_signed_other` / `ca_signed` / `unknown`), and message-digest match.
+- **Counter-sign visibility** — `signer fetch-document` and the MCP `signer_fetch_document` tool surface `existingSignatures`, so a signer can see what they're countersigning before they sign.
+- **One-shot DOCX → sealed PDF** via `sign document` (chains the bundled docx2pdf-cli, auto-place, stamp, PAdES-seal, verify in one call against a scoped temp DB).
+- **Sandbox via `--read-only true`** on both `mcp serve` and `serve`. Mutating tools/routes return `FORBIDDEN_READ_ONLY`.
+- **Path-traversal guards** on every input and output path. See [docs/reference/security-controls.md](docs/reference/security-controls.md).
+- **Named profiles** bundle provider + dbPath + credentials (with `{{env:VAR}}` references for shell-managed secrets). See [docs/reference/profiles.md](docs/reference/profiles.md).
+- **PDF verification** end-to-end offline: `request verify-signed-pdf` recomputes the digest, extracts X.509 signer certs, supports `--recipient <email>` for a redacted single-signer view, and reports per-signer `trust` labels.
 
-## For agents (TL;DR)
+## Standard user journey
 
-`sign-cli` treats agents as a first-class client. The canonical agent reference is **[`docs/agent-guide.md`](docs/agent-guide.md)**. Highlights:
-
-- **Introspection.** `sign --catalog json` returns every command + flag in one document. `sign mcp tools` returns the MCP tool catalog (with `inputSchema` + `outputSchema` per tool).
-- **Output contract.** Successful commands print JSON to stdout. Errors print `{ ok: false, error: { code, message, hint?, details? } }` to stderr (toggleable to plain text via `SIGN_ERROR_FORMAT=text`). Stable error codes — see `TROUBLESHOOTING.md`.
-- **Exit codes** carry meaning across every command: `0` ok, `2` invalid input, `3` policy / chain / verification failure, `4` not found / out of range. `request watch` adds the same `0/2/3/4` semantics for terminal vs. timeout.
-- **Preflight.** Run `sign doctor preflight` first (the subcommand — bare `sign doctor` is the legacy env-report). Output is `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name,status:"ok"|"failed"|"skipped",detail,hint?}] }`. Exit `0` ok / `1` any failed. Branch on `checks[].name` for self-recovery — env-health (`runtime:node_version`, `storage:db_path`) runs on every provider, then provider-scoped checks layer on.
-- **Provider banner.** Every provider-touching command prints `[sign] resolved provider: <p> (<source>)` to stderr. Pass `--strict-provider true` to refuse mismatches between flag/env and the request's persisted provider (error code `STRICT_PROVIDER_MISMATCH`).
-- **Profiles.** Named bundles of provider + dbPath + credentials, activated by `--profile <name>` / `SIGN_PROFILE=<name>` / a discovered `sign-profile.json`. Credentials redacted in `sign profile show` unless `--show-secrets true`. See [`docs/profiles-design.md`](docs/profiles-design.md) and `docs/agent-guide.md` §6.7.
-- **Path-traversal guard.** Every `--document` / `--pdf` / `--input` / `--out` / profile `--db` flag is validated against the working directory by default. Opt out for a single call with `SIGN_ALLOW_ABSOLUTE_DOCS=1` — error message is `escapes the working directory` (see `TROUBLESHOOTING.md`).
-- **Recipes for agents.** [`docs/recipes/preflight.md`](docs/recipes/preflight.md), [`docs/recipes/agent-loop-mcp.md`](docs/recipes/agent-loop-mcp.md).
-
-## Commands
-- `request create`
-- `request run-email` (one command: create + auto-approve + send email)
-- `approve`
-- `request send`
-- `request send-embedded` (Dropbox Sign / SignWell)
-- `request sign-url` (Dropbox Sign / SignWell)
-- `request status`
-- `request watch`
-- `request launch-embedded` (Dropbox Sign / SignWell)
-- `request from-template` (provider templates: Dropbox/DocuSign/SignWell)
-- `request fetch-final`
-- `request remind` (Dropbox / DocuSign / SignWell)
-- `request cancel` (Dropbox cancel / DocuSign void / SignWell delete; requires `--yes true`)
-- `request bulk --csv` (one request per CSV row; `--document` repeatable)
-- `request list` (local SQLite; filterable by `--provider` and `--status`)
-- `request show` (enriched: `signedBy`, per-approval `tokenHint`/`expiresAt`/`expired`/`signed`, and a `nextSteps[]` array telling humans/agents what to do next)
-- `request create --spec ./request.json` (declarative alternative to long `--signer/--field/--prefill` flag chains; example at `fixtures/request-spec.example.json`)
-- `signer policy run --request-id <id> --token <t> --spec ./policy.json [--dry-run true]` (declarative sign/decline rules + non-negotiable expectations; example at `fixtures/signer-policy.example.json`)
-- `signer policy run-all --tokens-file ./tokens.json --spec ./policy.json` (apply a policy across every pending request the agent has a token for; per-row results, exits 3 if any row failed)
-- `request receipt --request-id <id> --out ./receipt/` (audit-export bundle plus a detached `manifest.sig` + `manifest.cert.pem`; openssl-verifiable)
-- `SIGN_LOCAL_NOTIFY_URL=https://...` (fires a fire-and-forget JSON POST on `request.signed_by_signer` / `request.signer_declined` / `request.final_pdf_downloaded` / `request.receipt_signed` / `request.signer_token_reissued` / `request.signer_policy_evaluated` / `request.canceled`)
-- `init` (interactive `.env` wizard)
-- `smoke signwell` (live SignWell smoke test; no-ops without `SIGNWELL_API_KEY`)
-- `doctor` (unstructured env + key-detection report; always exits 0; for a machine-readable check use `doctor preflight`)
-- `doctor preflight` (per-check status. Env-health: `runtime:node_version`, `storage:db_path`. Provider-scoped: `env:*`, `connectivity:*`, `permissions:*`, `fixture:canonical_unsigned`. Output `{ provider, summary:{passed,failed,skipped,verdict}, checks:[{name,status:"ok"|"failed"|"skipped",detail,hint?}] }`. Exit `0` ok / `1` any failed.)
-- `doctor account-check`
-- `doctor providers` (capability + config matrix)
-- `workflow nda` (one-shot: render bundled mutual-NDA template → PDF → request; see [`docs/recipes/eu-nda.md`](docs/recipes/eu-nda.md))
-- `pdf stamp` (stamp an image onto a PDF without a signing request)
-- `pdf stamp verify` (confirm a stamp is at the expected position ±1pt; exit `0` ok, `3` wrong position, `4` missing or page out-of-range)
-- `audit show`
-- `audit verify` (walks `hash_prev`/`hash_self` chain; exits 3 on tamper)
-- `audit timestamp` (RFC 3161 — issues + verifies a TSA token over the chain head)
-- `audit export` (signed PDF + audit JSON + TSR + manifest with sha256s)
-- `request verify-signed-pdf` (parses `/ByteRange`, recomputes digest, extracts signer cert)
-- `webhook verify [--provider dropbox|signwell]`
-- `webhook ingest [--provider dropbox|signwell]`
-- `webhook listen [--provider dropbox|signwell]`
-
----
-
-## Onboarding for a new Dropbox user (10 min)
-
-## 1) Prereqs
-- Node 22+
-- Dropbox Sign account with API access
-
-## 2) Install
 ```bash
-git clone https://github.com/DrBaher/sign-cli.git
-cd sign-cli
-npm install
-cp .env.example .env
-```
-
-## 3) Configure `.env`
-```env
-SIGN_DB_PATH=./data/sign.db
-SIGN_PROVIDER=dropbox
-
-DROPBOX_SIGN_API_KEY=your_api_key_here
-DROPBOX_SIGN_TEST_MODE=true
-DROPBOX_SIGN_CLIENT_ID=your_client_id_for_embedded
-
-SIGNWELL_API_KEY=your_signwell_api_key
-SIGNWELL_BASE_URL=https://www.signwell.com/api/v1
-SIGNWELL_TEST_MODE=true
-
-DOCUSIGN_INTEGRATION_KEY=your_integration_key
-DOCUSIGN_USER_ID=your_impersonated_user_guid
-DOCUSIGN_ACCOUNT_ID=your_account_id
-DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
-DOCUSIGN_PRIVATE_KEY_PATH=./keys/docusign-private.key
-```
-
-`SIGN_PROVIDER` defaults to `dropbox`. Every request command that talks to a remote provider also accepts `--provider dropbox|docusign|signwell`, and the CLI uses that flag over the env var when both are present. **Resolution order** is `--provider flag > SIGN_PROVIDER env > default`. Every provider-touching command echoes the resolved provider + source to stderr as `[sign] resolved provider: <p> (<source>)` so you never sign against the wrong account by accident.
-
-**Strict provider mode.** Pass `--strict-provider true` (or set `SIGN_STRICT_PROVIDER=true`) to refuse mismatches between the resolved provider and the request's persisted provider. This catches the "I created the request as `dropbox` but I'm about to sign with `--provider local`" footgun. Error code: `STRICT_PROVIDER_MISMATCH`, with a hint pointing at the flag to use instead. Off by default — opt in for production scripts and CI.
-
-## 4) Build
-```bash
-npm run build
-```
-
-## 5) Optional: start a local webhook receiver
-```bash
-npm run webhook:listen -- --port 3000 --path /dropbox/callback
-```
-
-This listens locally, verifies Dropbox Sign `event_hash` values with your API key, and appends webhook audit events through the existing ingest path.
-
----
-
-## Standard user journey (email signing)
-
-### A) Create request
-```bash
-npm run start -- request create \
-  --title "Consent Test" \
-  --document ./your.pdf \
-  --signer name:You,email:you@gmail.com,order:1 \
-  --signer name:Work,email:you@company.com,order:2 \
-  --token-ttl-minutes 30
-```
-
-### B) Approve (agent permission gate)
-```bash
-npm run start -- approve --request-id <request_id> --token <token1>
-npm run start -- approve --request-id <request_id> --token <token2>
-```
-
-### C) Send
-```bash
-npm run start -- request send --request-id <request_id> --provider dropbox --test-mode true
-```
-
-Both `request send` and `request send-embedded` persist the selected provider plus the remote request/envelope ID into SQLite. Dropbox signer `signatureIds` are also persisted when Dropbox returns them. `request show` and `request status` expose those values as `request.provider`, `request.provider_request_id`, and `request.signatureIds`.
-
-### D) Track
-```bash
-npm run start -- request status --request-id <request_id>
-npm run start -- request watch --request-id <request_id> --interval-ms 5000 --fetch-final true
-npm run start -- audit show --request-id <request_id>
-```
-
-You can add `--provider docusign` or `--provider signwell` to `request send`, `request status`, `request watch`, and `request fetch-final` when working with those providers. Once a request has been sent, the persisted provider is reused for later polling and downloads.
-
-`request watch` exit codes:
-- `0`: completed
-- `2`: declined, rejected, expired, or canceled
-- `3`: error or invalid remote status
-- `4`: timeout before a terminal status
-
-`request watch` also accepts `--interval-seconds` and `--timeout-seconds` as aliases for the millisecond flags. The final JSON now includes:
-- `startedAt`
-- `elapsedMs`
-- `lastRemoteStatus`
-
-While polling, stderr prints concise progress lines only on the first poll, status changes, and terminal states.
-
----
-
-## Embedded signing journey (API-driven signing UI)
-
-Embedded signing is supported across all three providers:
-- Dropbox Sign — HelloSign Embedded JS (requires `--client-id`)
-- SignWell — iframe over per-recipient `embedded_signing_url`
-- DocuSign — recipient view (`clientUserId` is set when sending via `send-embedded`; `sign-url` and `launch-embedded` require `--return-url`)
-
-### 1) Send embedded request
-```bash
-npm run start -- request send-embedded \
-  --request-id <request_id> \
-  --provider dropbox \
-  --client-id <dropbox_client_id> \
-  --test-mode true
-```
-
-The response includes the signer `signatureIds`, and they remain available later through `request show` and `request status`.
-
-### 2) Generate sign URL per signer signature ID
-```bash
-npm run start -- request sign-url \
-  --request-id <request_id> \
-  --provider dropbox \
-  --signature-id <signature_id>
-```
-
-### 3) Open with HelloSign Embedded JS
-You must open `sign_url` through the embedded SDK with `clientId`.
-Directly opening `sign_url` can fail with `Missing parameter: client_id`.
-
----
-
-## Callback URL / domain rules
-- `localhost` is not accepted as embedded app domain.
-- Use a public domain/tunnel (e.g. `https://good-ravens-drum.loca.lt`).
-- Put that domain in Dropbox Sign API App settings.
-- Callback URL can be like `https://good-ravens-drum.loca.lt/dropbox/callback`.
-- Dropbox Sign sends callbacks as `multipart/form-data` with a `json` field. The local receiver handles `multipart/form-data`, `application/x-www-form-urlencoded`, and raw JSON.
-
----
-
-## Troubleshooting
-- `Missing parameter: client_id`
-  - You opened embedded `sign_url` directly instead of via embedded JS + `clientId`.
-- `DocuSign embedded signing requires --return-url.`
-  - DocuSign's recipient view requires a return URL the user is bounced back to after signing. Pass `--return-url https://...` to `request sign-url`/`request launch-embedded`.
-- `SignWell document <id> did not return an embedded signing URL for recipient <id>.`
-  - The document was sent via `request send` instead of `request send-embedded` for SignWell. Re-run with `request send-embedded --provider signwell`.
-- `localhost is not a valid domain`
-  - Use a public tunnel/domain and register it in API App.
-- `command not found: ngrok`
-  - Use localtunnel/cloudflared, or install/configure ngrok account+authtoken.
-
----
-
-## DocuSign setup
-
-### Agent onboarding (operator/setup checklist)
-1. Create a DocuSign app (Integration Key) in the correct account/environment.
-2. Enable JWT Grant and configure user impersonation.
-3. Generate/download the RSA private key and store it locally (never commit it).
-4. Grant consent for the impersonated user for the integration key.
-5. Set env vars (below), then run `npm run start -- doctor` and confirm DocuSign fields are present.
-6. Run a smoke flow in demo/sandbox: `request create` → `approve` → `request send --provider docusign` → `request watch --provider docusign`.
-
-### User onboarding (daily usage)
-1. Keep default provider as Dropbox, or switch default by setting `SIGN_PROVIDER=docusign`.
-2. For per-request control, add `--provider docusign` only on DocuSign flows.
-3. Create + approve request, then send.
-4. Use `request watch` for completion and optional auto-download.
-
-### Required env vars
-```env
-SIGN_PROVIDER=docusign
-DOCUSIGN_INTEGRATION_KEY=your_integration_key
-DOCUSIGN_USER_ID=your_impersonated_user_guid
-DOCUSIGN_ACCOUNT_ID=your_account_id
-DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
-DOCUSIGN_PRIVATE_KEY_PATH=./keys/docusign-private.key
-```
-
-### JWT prerequisites
-- Create a DocuSign integration key.
-- Configure JWT auth for that integration key.
-- Grant consent for the impersonated user.
-- Store the RSA private key locally and point `DOCUSIGN_PRIVATE_KEY_PATH` at it.
-
-### Send, watch, and download
-```bash
-npm run start -- request create \
-  --title "DocuSign Consent Test" \
-  --document ./your.pdf \
-  --signer name:Alice,email:alice@example.com,order:1 \
-  --provider docusign
-
-npm run start -- approve --request-id <request_id> --token <token>
-
-npm run start -- request send \
-  --request-id <request_id> \
-  --provider docusign
-
-npm run start -- request watch \
-  --request-id <request_id> \
-  --provider docusign \
-  --interval-seconds 5 \
-  --fetch-final true \
-  --out ./artifacts/<request_id>-signed.pdf
-```
-
-DocuSign terminal states are normalized into the same watch exit codes as Dropbox Sign: `completed` exits `0`, `declined/rejected/expired/voided` exits `2`, provider errors exit `3`, and timeouts exit `4`.
-
----
-
-## SignWell setup
-
-### Agent onboarding (operator/setup checklist)
-1. Create a SignWell API key from `Settings -> API`.
-2. Store it locally as `SIGNWELL_API_KEY` and never commit it.
-3. Optionally override `SIGNWELL_BASE_URL`; otherwise the CLI uses `https://www.signwell.com/api/v1`.
-4. Keep `SIGNWELL_TEST_MODE=true` while validating the integration.
-5. Run `npm run start -- doctor` and confirm the SignWell env fields are present.
-6. Run `npm run start -- doctor account-check --provider signwell`.
-7. Run a smoke flow: `request create` → `approve` → `request send --provider signwell` → `request watch --provider signwell`.
-
-### User onboarding (daily usage)
-1. Set `SIGN_PROVIDER=signwell` to make SignWell the default provider, or use `--provider signwell` per command.
-2. Create + approve the request as usual.
-3. Send the request with SignWell.
-4. Use `request watch` or `request fetch-final` to complete the workflow.
-
-### Required env vars
-```env
-SIGN_PROVIDER=signwell
-SIGNWELL_API_KEY=your_signwell_api_key
-SIGNWELL_BASE_URL=https://www.signwell.com/api/v1
-SIGNWELL_TEST_MODE=true
-```
-
-### Send, watch, and download
-```bash
-npm run start -- request create \
-  --title "SignWell Consent Test" \
-  --document ./your.pdf \
-  --signer name:Alice,email:alice@example.com,order:1 \
+sign request create \
+  --title "Mutual NDA" \
+  --document ./nda.pdf \
+  --signer name:Alice,email:alice@acme.com,order:1 \
+  --signer name:Bob,email:bob@beta.com,order:2 \
   --provider signwell
 
-npm run start -- approve --request-id <request_id> --token <token>
+sign approve --request-id <id> --token <token1>
+sign approve --request-id <id> --token <token2>
 
-npm run start -- request send \
-  --request-id <request_id> \
-  --provider signwell \
-  --test-mode true
+sign request send --request-id <id> --provider signwell --test-mode true
 
-npm run start -- request watch \
-  --request-id <request_id> \
-  --provider signwell \
-  --interval-seconds 5 \
-  --fetch-final true \
-  --out ./artifacts/<request_id>-signed.pdf
+sign request watch \
+  --request-id <id> --provider signwell \
+  --interval-seconds 5 --fetch-final true \
+  --out ./signed.pdf
+
+sign audit show --request-id <id>
 ```
 
-SignWell terminal states are normalized into the same watch exit codes as the other providers: `completed` exits `0`, `declined/expired/canceled` exits `2`, `bounced/error` exits `3`, and timeouts exit `4`.
-
-See [SIGNWELL_SETUP.md](./SIGNWELL_SETUP.md) for the full setup and troubleshooting guide.
-
----
-
-## Security notes
-- Never commit `.env` or API keys.
-- Rotate keys if shared in chat/logs.
-- Keep test mode on during development.
-
-
-## Detailed embedded setup
-See `EMBEDDED_SETUP.md` for Dropbox-side setup (API App, domain, callback URL, and troubleshooting).
-
-## End-to-end callback setup
-
-### 1) Start the local receiver
-```bash
-npm run webhook:listen -- --port 3000 --path /dropbox/callback
-```
-
-### 2) Expose it with a tunnel
-```bash
-npx localtunnel --port 3000
-```
-
-Use the resulting public URL plus `/dropbox/callback` as your Dropbox Sign account callback URL or API app callback URL.
-
-### 3) Create, approve, and send a request
-```bash
-npm run start -- request create \
-  --title "Consent Test" \
-  --document ./your.pdf \
-  --signer name:Alice,email:alice@example.com,order:1
-
-npm run start -- approve --request-id <request_id> --token <token>
-npm run start -- request send --request-id <request_id> --test-mode true
-```
-
-### 4) Watch for completion and fetch the signed PDF
-```bash
-npm run start -- request watch \
-  --request-id <request_id> \
-  --interval-seconds 5 \
-  --fetch-final true \
-  --out ./artifacts/<request_id>-signed.pdf
-```
-
-### 5) Inspect the local audit trail
-```bash
-npm run start -- audit show --request-id <request_id>
-```
-
-## MCP server (for LLM agents)
-
-Run `node dist/cli.js mcp serve` to start a stdio Model Context Protocol server. An MCP-aware agent (Claude Code, Claude Desktop, anything else that speaks MCP) can then drive the signer-side flow without spawning the CLI on each call. The server exposes 19 tools (split read-only vs mutating), all backed by the same SignCliError envelopes you'd see at the CLI. **Don't hardcode the list** — call `sign mcp tools` at startup to get the current catalog with full JSON-Schema input + output contracts. Today's tools:
-
-**Read-only (always available):**
-
-- `signer_list` (`{ signer_email? }`) — pending inbox.
-- `signer_fetch_document` (`{ request_id, token, signer_email?, out_path? }`) — read the unsigned PDF + audit it as fetched. Result includes `existingSignatures`: a compact summary of any PADES signatures already on the PDF when the signer fetches it, so they can see what they're countersigning.
-- `request_show` (`{ request_id }`) — enriched snapshot with `signedBy`, `nextSteps[]`, etc.
-- `request_status` (`{ request_id, provider? }`) — poll the provider; reads API keys from env (`DROPBOX_SIGN_API_KEY` / `SIGNWELL_API_KEY`) for hosted providers.
-- `request_watch` (`{ request_id, provider?, interval_ms?, timeout_ms? }`) — poll until terminal; emits MCP `notifications/progress` on each poll when the client supplies a `progressToken`.
-- `audit_verify` (`{ request_id }`) — verify the audit chain for one request.
-- `audit_scan` (`{ provider?, status?, limit? }`) — verify every request's audit chain.
-- `pdf_detect_signature_field` / `pdf_detect_date_field` (`{ pdf_path, verbose? }`) — return ranked placement candidates with confidence + adjustment method.
-- `pdf_inspect_signatures` (`{ pdf_path }`) — inspect existing PADES signatures on ANY signed PDF (ours, Adobe's, DocuSign's, Dropbox Sign's, SignWell's). Returns signer CN/email, cert subject + issuer, validity window, fingerprint, trust label (`self_signed_local` / `self_signed_other` / `ca_signed` / `unknown`), message-digest match. Exit 2 from the CLI form when the PDF has no signatures.
-- `profile_list` (`{}`) — configured profiles + active source.
-- `profile_show` (`{ name?, show_secrets? }`) — resolved view with per-field provenance; credentials redacted by default.
-
-**Mutating (blocked by `mcp serve --read-only true`):**
-
-- `sign` (`{ request_id, token, ..., require_hash?, require_title?, require_signer_email?, idempotency_key? }`) — sign as the token holder; pre-sign safety checks return structured errors before any state mutation.
-- `signer_decline` (`{ request_id, token, signer_email?, reason? }`).
-- `signer_reissue_token` (`{ request_id, signer_email, token_ttl_minutes? }`) — mint a new per-signer token.
-- `request_receipt` (`{ request_id, out_dir }`) — write a cryptographically-signed receipt bundle (`out_dir` is validated against the working-directory traversal guard).
-- `pdf_stamp_text` (`{ pdf_path, text, out_path, auto_place?, overwrite_filled?, image_* }`) — stamp a text string (typically a date) at a detected date anchor or explicit coords.
-- `preview` (`{ pdf_path, out_path, signature_image | name_signature, auto_place?, image_* }`) — draft visible-signature preview WITHOUT PAdES sealing or signing-request mutation.
-- `document` (`{ input_path, out_path, signer_name, signer_email?, signature_image | name_signature, auto_place?, image_* }`) — one-shot DOCX/PDF → sealed PDF, isolated temp DB.
-
-Tool arguments are validated against each tool's `inputSchema` before the handler runs (missing required fields, wrong types, enum mismatches → `INVALID_ARGS`). Tool errors come back as `{ isError: true, content: [{ type: "text", text: "<JSON envelope>" }] }` with the same `code` values documented in `TROUBLESHOOTING.md`.
-
-**Resources** — `resources/list` enumerates `request://<id>` (snapshot), `request://<id>/document` (unsigned PDF, base64), and `request://<id>/audit` (audit chain) for every local-provider request. Use `resources/read` to fetch any of them. This lets MCP clients browse and prefetch without needing prior knowledge of the tool catalog.
-
-**Prompts** — `prompts/list` advertises four agent-as-signer templates (`review_and_sign`, `policy_check`, `inbox_triage`, `verify_receipt`). `prompts/get` fills in the request id / token / paths and returns a fully-formed user-message text the LLM can act on. Reduces cognitive load: agents don't have to re-derive the safety contract each session.
-
-Example wiring (Claude Desktop's `claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "sign-cli": {
-      "command": "node",
-      "args": ["/path/to/sign-cli/dist/cli.js", "mcp", "serve"],
-      "env": { "SIGN_DB_PATH": "/path/to/sign.db", "SIGN_LOCAL_AUTOCOMPLETE": "false" }
-    }
-  }
-}
-```
-
-## HTTP API (for non-MCP clients)
-
-`sign serve --port 4000 [--bind 127.0.0.1] [--auth-token <t>]` exposes the same surface as the MCP server but over plain HTTP/JSON. Bearer auth via `--auth-token` or `SIGN_HTTP_AUTH_TOKEN`.
+Or fully offline:
 
 ```bash
-curl -s http://127.0.0.1:4000/v1/health
-curl -s -X POST http://127.0.0.1:4000/v1/sign \
-  -H "content-type: application/json" \
-  -d '{"request_id":"req_abc","token":"alice-tok-..."}'
-```
-
-All responses are `{ ok: true, result: ... }` on success or the standard `formatCliError` envelope (`{ ok: false, error: { code, message, ... } }`) on failure. Every MCP tool has a 1:1 HTTP route — query `GET /v1/openapi.json` for the authoritative spec. Routes:
-
-- **Health/introspection:** `GET /v1/health`, `GET /v1/metrics` (Prometheus text), `GET /v1/openapi.json`.
-- **Signer-side:** `POST /v1/signer/list`, `POST /v1/signer/fetch-document`, `POST /v1/sign`, `POST /v1/signer/decline`, `POST /v1/signer/reissue-token`.
-- **Request lifecycle:** `POST /v1/request/show`, `POST /v1/request/status`, `POST /v1/request/receipt`.
-- **Audit:** `POST /v1/audit/verify`, `POST /v1/audit/scan`.
-- **PDF utilities (inputs validated against the working-directory traversal guard):** `POST /v1/pdf/detect-signature-field`, `POST /v1/pdf/detect-date-field`, `POST /v1/pdf/inspect-signatures`, `POST /v1/pdf/stamp-text`.
-- **One-shot signing:** `POST /v1/preview` (draft, no seal), `POST /v1/document` (DOCX/PDF → sealed PDF).
-- **Profile inspection:** `POST /v1/profile/list`, `POST /v1/profile/show` (credentials redacted unless `show_secrets: true`).
-
-Mutating routes (`sign`, `signer/decline`, `signer/reissue-token`, `request/receipt`, `pdf/stamp-text`, `preview`, `document`) return `403 FORBIDDEN_READ_ONLY` when `sign serve --read-only true` is set.
-
-## Signer-side flow (agent-friendly)
-
-For `--provider local`, an automated agent can act as a signer end-to-end without an email link. The hosted providers (Dropbox Sign / DocuSign / SignWell) still require their own email/embedded UI; these signer commands refuse non-local providers with a clear error.
-
-Set `SIGN_LOCAL_AUTOCOMPLETE=false` so the local provider holds at `sent` until each signer explicitly runs `sign sign` (otherwise the local simulator auto-completes after the first poll, which is convenient for demos but not for agent-as-signer testing).
-
-**Per-signer token auth.** `request create` already mints one token per signer (`tokens[]` in the response). For `sign`, `signer fetch-document`, and `signer decline`, the agent must present the matching token via `--token`. The token resolves the signer; `--signer-email`, if also passed, must agree with the token's signer (a friendly typo catch). `signer list` does not require a token.
-
-```bash
-# As the requester
-node dist/cli.js request create \
-  --title "Mutual NDA" --document ./nda.pdf \
+sign request create --title "Mutual NDA" --document ./nda.pdf \
   --signer name:Alice,email:alice@example.com,order:1 \
   --signer name:Bob,email:bob@example.com,order:2 \
   --provider local --auto-approve true
-# response includes:
-# "tokens": [
-#   { "signer": { "email": "alice@example.com" }, "token": "alice-tok-abc...", "expiresAt": "..." },
-#   { "signer": { "email": "bob@example.com"   }, "token": "bob-tok-123...",   "expiresAt": "..." }
-# ]
-node dist/cli.js request send --request-id <id> --provider local
-# requester DMs each signer their token + the request ID
-
-# As the signer (agent), with their token
-node dist/cli.js signer list --signer-email alice@example.com
-node dist/cli.js signer fetch-document --request-id <id> --token alice-tok-abc... --out ./nda-to-review.pdf
-node dist/cli.js sign --request-id <id> --token alice-tok-abc... \
-  --require-hash <expected sha256> --require-title "^Mutual NDA$" --require-signer-email alice@example.com
-# or, instead of signing:
-node dist/cli.js signer decline --request-id <id> --token alice-tok-abc... --reason "Terms changed"
+sign request send --request-id <id> --provider local
+# Each signer runs:
+sign sign --request-id <id> --token <their-token> \
+  --require-hash <sha256> --require-title "^Mutual NDA$"
 ```
 
-Behavior the requester can rely on:
+For full provider-specific setup, see [docs/setup/](docs/setup/).
 
-- Multi-signer: the request status only flips to `completed` when every signer is in `signedBy[]`.
-- Token auth: `sign`, `signer decline`, and `signer fetch-document` require the per-signer token. Wrong, missing, or expired tokens are rejected before any state mutation. Each token can sign its slot at most once.
-- Pre-sign safety checks (`--require-hash`, `--require-title`, `--require-signer-email`) throw before any state mutation if the request doesn't match what the agent was told to expect — protecting a misbehaving requester from silently swapping the document or title.
-- Each signer-side action appends an audit event to the chain: `request.signed_by_signer`, `request.signer_declined`, `request.signer_fetched_document`. Run `audit verify --request-id <id>` to confirm the chain after signing.
+## One-shot DOCX → sealed PDF
 
-## Seamless mode (recommended)
+```bash
+sign document \
+  --input contract.docx \
+  --signer-name "Alice Founder" --signer-email "alice@acme.com" \
+  --name-signature true --auto-place first \
+  --out contract.sealed.pdf
+```
 
-1. `npm run start -- doctor`
-2. `request create` + `approve` tokens
-3. `request send-embedded`
-4. `request launch-embedded` (opens signer UI-ready HTML)
-5. `webhook listen`
-6. `request watch`
+`sign document` chains: convert (via the bundled docx2pdf-cli) → detect signature field → stamp → PAdES-seal → verify chain. All intermediate state lives in a scoped temp DB.
 
+## MCP server (for LLM agents)
+
+```bash
+sign mcp serve                  # stdio MCP server
+sign mcp serve --read-only true # sandboxed: mutating tools return FORBIDDEN_READ_ONLY
+sign mcp tools                  # print the catalog (live; don't hardcode the list)
+```
+
+19 tools, split read-only vs mutating. Backed by the same `SignCliError` envelopes you'd see at the CLI. The full discovery contract, wire-up snippets (Claude Desktop, Cursor), and read-only walkthrough are in [AGENTS.md](AGENTS.md). Three resource shapes (`request://<id>` snapshot, `.../document` PDF blob, `.../audit` chain) and four agent-as-signer prompt templates (`review_and_sign`, `policy_check`, `inbox_triage`, `verify_receipt`) are also exposed.
+
+## HTTP API (for non-MCP clients)
+
+```bash
+sign serve --port 4000 --auth-token <t> --read-only true --rate-limit 5
+curl http://127.0.0.1:4000/v1/openapi.json    # discover the route catalog
+```
+
+Twenty routes under `/v1/*`, 1:1 parity with the MCP tool surface — same input shape, same path-traversal guards, same read-only gating. Bearer auth via `--auth-token` or `SIGN_HTTP_AUTH_TOKEN`. Responses are `{ ok, result }` on success or the standard error envelope on failure.
+
+## Signer-side flow (agent-friendly)
+
+For `--provider local`, an agent can act as a signer end-to-end without an email link. Set `SIGN_LOCAL_AUTOCOMPLETE=false` so the local provider holds at `sent` until each signer explicitly runs `sign sign`.
+
+```bash
+# As the requester (agent or human)
+sign request create --title "Mutual NDA" --document ./nda.pdf \
+  --signer name:Alice,email:alice@example.com,order:1 \
+  --signer name:Bob,email:bob@example.com,order:2 \
+  --provider local --auto-approve true
+# response includes per-signer tokens
+sign request send --request-id <id> --provider local
+
+# As the signer, with their token
+sign signer list --signer-email alice@example.com
+sign signer fetch-document --request-id <id> --token alice-tok-... --out ./nda.pdf
+# fetch-document surfaces `existingSignatures` so the signer can see what they're countersigning
+sign sign --request-id <id> --token alice-tok-... \
+  --require-hash <sha256> --require-title "^Mutual NDA$" --require-signer-email alice@example.com
+# or
+sign signer decline --request-id <id> --token alice-tok-... --reason "Terms changed"
+```
+
+Multi-signer: status only flips to `completed` when every signer is in `signedBy[]`. Pre-sign safety checks (`--require-hash` / `--require-title` / `--require-signer-email`) throw `PRE_SIGN_*_MISMATCH` before any state mutation.
 
 ## Templates
 
-Reuse a template you defined in your provider's dashboard, no PDF upload required:
+Reuse a template defined in the provider dashboard (no PDF upload):
 
 ```bash
-node dist/cli.js request from-template \
-  --template-id tmpl_abc \
-  --provider dropbox \
+sign request from-template \
+  --template-id tmpl_abc --provider dropbox \
   --signer role:Buyer,name:Alice,email:alice@example.com,order:1 \
   --signer role:Seller,name:Bob,email:bob@example.com,order:2 \
   --prefill name:purchase_price,value:1000 \
   --auto-approve true
 
-node dist/cli.js request send --request-id <id> --provider dropbox --test-mode true
+sign request send --request-id <id> --provider dropbox --test-mode true
 ```
 
-- `--template-id` is the template identifier from the provider dashboard.
-- Each `--signer` must include `role:<roleName>` matching a template role/placeholder.
-- `--prefill name:K,value:V[,signer:N]` populates template fields. DocuSign maps prefills to per-signer text tabs (use `signer:N` to scope); Dropbox uses `custom_fields`; SignWell uses `placeholders`.
-- The request stores `template_id` + `prefills_json`. `request send` and `request send-embedded` automatically route to the provider's template send endpoint instead of uploading a document.
-- `--template-id` and `--document` cannot be combined on the same request.
+Each `--signer` must include `role:<roleName>` matching a template role. `--prefill name:K,value:V[,signer:N]` populates template fields. Per-provider behavior: DocuSign uses per-signer text tabs; Dropbox uses `custom_fields`; SignWell uses `placeholders`.
 
 ## Field placement
 
-By default the upstream provider (Dropbox Sign, DocuSign, SignWell) auto-appends a generic signature page at the end of the document — this is provider behavior at `request create` time, separate from the `--auto-place` flag on `sign sign` (see [Auto-detect signature field](#auto-detect-signature-field) below). For real contracts you usually need each signature, date, or text field on a specific spot. Pass `--field` (repeatable) on `request create` / `run-email`:
+By default the hosted providers auto-append a generic signature page. For real contracts, pass `--field` (repeatable) on `request create`:
 
 ```bash
-node dist/cli.js request create \
-  --title "NDA" \
-  --document ./contract.pdf \
+sign request create \
+  --title "NDA" --document ./contract.pdf \
   --signer name:Alice,email:alice@example.com,order:1 \
   --field signer:1,page:1,x:100,y:200,type:signature \
-  --field signer:1,page:1,x:100,y:240,type:date \
-  --provider dropbox
+  --field signer:1,page:1,x:100,y:240,type:date
 ```
 
-Field spec keys:
-- `signer:<order>` — required; matches a `--signer order:N`.
-- `doc:<index>` — 0-based document index (defaults to 0). Use with multi-doc requests.
-- `type:<signature|initials|date|text|name|email>` — defaults to `signature`.
-- `page:<n>` `x:<pt>` `y:<pt>` — coordinate placement (required unless `anchor:` is given).
-- `width:<pt>` `height:<pt>` — optional; sensible defaults applied.
-- `required:true|false` — defaults to true.
-- `anchor:"text"` — DocuSign-only anchor strings (Dropbox/SignWell return a clear error). Optional `x-offset:<n>` / `y-offset:<n>` / `anchor-units:pixels|inches|mms|cms|points`.
-
-The fields are persisted on the request and forwarded to the provider at send time:
-- Dropbox Sign — `form_fields_per_document`
-- DocuSign — per-signer `tabs` (`signHereTabs`, `dateSignedTabs`, etc.) with anchor or coordinate
-- SignWell — `files[].fields` keyed by recipient_id
+Spec: `signer:<order>` (required), `doc:<i>` (multi-doc index), `type:signature|initials|date|text|name|email`, `page:<n>` `x:<pt>` `y:<pt>` (coordinate), or DocuSign-only `anchor:"text"` with optional `x-offset` / `y-offset` / `anchor-units`. The fields persist on the request and forward to the provider at send time.
 
 ## Auto-detect signature field
 
-For `--provider local` flows, the signer-side `sign sign` command can auto-detect where to stamp a visible signature instead of requiring explicit `--image-page/--image-x/--image-y/--image-width/--image-height` coords. Two surfaces:
+For `--provider local`, `sign sign --auto-place` calls the detector and uses the top candidate iff there's a **unique** high-confidence (`≥0.8`) match.
 
-- `sign pdf detect-signature-field --pdf <path>` — returns ranked candidates as JSON. AcroForm `/Sig` widgets (confidence `1.0`) rank first; anchor-text matches (`Signature:`, `Sign here`, `Signed by:`, `Initial:`, `X____`) follow with overlap-adjusted rectangles at `0.50`–`0.95`. Pass `--verbose true` to also dump the raw pdfjs-extracted text items (debugging zero-candidate outcomes).
-- `sign sign --auto-place true --name-signature "Alice"` — calls the detector and uses the top candidate iff there's a **unique** high-confidence (`≥0.8`) match. Multiple high-confidence matches → `AUTO_PLACE_AMBIGUOUS` with the candidate list. No high-confidence matches → `AUTO_PLACE_NO_HIGH_CONFIDENCE`. The detector never silently picks a low-confidence rectangle, and the emitted rectangle is guaranteed not to overlap any text on the page.
+```bash
+# Inspect candidates first
+sign pdf detect-signature-field --pdf ./contract.pdf
 
-Adjustment strategies, in priority order:
+# Auto-place (errors loudly on ambiguity)
+sign sign --request-id <id> --token <t> --name-signature "Alice" \
+  --auto-place first   # or true | last | all | page:N | index:N
+```
 
-| Method | Confidence | When it fires |
-|---|---|---|
-| `underline-snap` | `0.95` | Anchor + adjacent `_______` line on same baseline → snap to its width |
-| `below-anchor-probe` | `0.85` | Anchor alone on its line + space below (French / European convention) |
-| `whitespace-probe` | `0.75` / `0.60` | Anchor + clear space on the same line (English form convention) |
-| `shrink-to-fit` | `0.50` | Default rect iteratively shrunk to avoid overlap |
-
-Full reference + caveats: [`docs/agent-guide.md` §6.4a](docs/agent-guide.md#64a-sign-pdf-detect-signature-field--sign-sign---auto-place).
+Adjustment strategies in priority order: `underline-snap` (0.95), `below-anchor-probe` (0.85, French/EU conventions), `whitespace-probe` (0.75), `shrink-to-fit` (0.50). Date anchors are detected separately via `sign pdf detect-date-field`. Full reference in [`docs/agent-guide.md` §6.4a](docs/agent-guide.md).
 
 ## Bulk send
 
-Drive a CSV of `name,email` columns to send one request per row:
-
 ```bash
-node dist/cli.js request bulk \
-  --csv ./fixtures/sample-bulk-signers.csv \
-  --document ./contract.pdf \
-  --provider dropbox \
-  --title "Q2 NDA for {{email}}" \
-  --test-mode true
+sign request bulk \
+  --csv ./signers.csv \
+  --document ./contract.pdf --provider dropbox \
+  --title "Q2 NDA for {{email}}" --test-mode true
 ```
 
-Each row becomes its own request with `autoApprove: true`, and the title template supports `{{email}}`, `{{name}}`, and `{{row}}`. The exit code is `3` if any row failed; the JSON output lists per-row results.
-
-## Reminders
-
-```bash
-# Dropbox Sign requires --email <signer@example.com>; DocuSign and SignWell don't.
-node dist/cli.js request remind --request-id <id> --email signer@example.com
-```
+Each row becomes its own request with `autoApprove: true`. Title template supports `{{email}}`, `{{name}}`, `{{row}}`. Exit code `3` if any row failed; JSON output lists per-row results.
 
 ## Trust beyond the provider
 
-The CLI doesn't just ask the provider "did this get signed?" — it also gives you tooling to verify
-the result independently of the provider:
-
 ```bash
-# Inspect the embedded PKCS#7 signature in the downloaded signed PDF.
-node dist/cli.js request verify-signed-pdf --request-id <id>
+# Inspect any signed PDF (ours, Adobe's, DocuSign's, …) — no DB lookup required
+sign pdf inspect --pdf ./signed.pdf
 
-# Anchor the audit head against a public RFC 3161 TSA (digicert by default).
-node dist/cli.js audit timestamp --request-id <id>
+# Inspect the embedded PKCS#7 of a request we sent
+sign request verify-signed-pdf --request-id <id>
+sign request verify-signed-pdf --request-id <id> --recipient alice@example.com   # single-signer view
 
-# Bundle audit JSON + signed PDF + TSA token + sha256 manifest for archival.
-node dist/cli.js audit export --request-id <id> --out ./bundle/
+# Anchor the audit head against a public RFC 3161 TSA
+sign audit anchor --request-id <id>
+
+# Bundle for archival
+sign audit export --request-id <id> --out ./bundle/
 ```
 
-`audit verify` walks the local hash chain. `request verify-signed-pdf` recomputes the SHA-256
-over the `/ByteRange` of the signed PDF and compares it to the `messageDigest` in the embedded
-PKCS#7 — exit code 3 if anything was modified after signing. `audit timestamp` issues a TimeStamp
-token from a TSA so the archive proves "the chain looked like this at time T."
+`audit verify` walks the local hash chain. `request verify-signed-pdf` recomputes the SHA-256 over the `/ByteRange` and compares to the `messageDigest` in the embedded PKCS#7 — exit `3` if anything was modified post-signing. `sign pdf inspect` works on any signed PDF (no request id required). `audit anchor` issues a TimeStamp token from a TSA. See [docs/reference/audit-chain.md](docs/reference/audit-chain.md) for the full model.
 
-## Account compatibility checks
-Use these before onboarding:
+## Profiles
 
 ```bash
-npm run start -- doctor account-check --provider dropbox
-npm run start -- doctor account-check --provider docusign
-npm run start -- doctor account-check --provider signwell
+sign profile init --name prod --provider signwell --db "~/.sign-cli/prod.db" --strict-provider true
+sign profile set --name prod --key credentials.SIGNWELL_API_KEY --value "{{env:SIGNWELL_API_KEY}}"
+sign --profile prod request show --request-id <id>
+# Or implicitly via a project-level sign-profile.json (git/npm-style upward discovery)
 ```
 
-This verifies API access for each provider (Dropbox account endpoint, DocuSign JWT+account endpoint, SignWell `/me` endpoint) and returns a machine-readable summary.
+Resolution order: flag > env > project profile > user profile > built-in default. Credentials redacted by default in `profile show` (`--show-secrets true` to reveal). See [docs/reference/profiles.md](docs/reference/profiles.md).
+
+## Doctor
+
+```bash
+sign doctor                       # legacy env-report; always exits 0
+sign doctor preflight             # structured per-check report; exit 0 ok, 1 failed
+sign doctor providers             # capability matrix across all providers
+sign doctor account-check --provider signwell   # provider /me check
+```
+
+`preflight` runs env-health checks (`runtime:node_version`, `storage:db_path`) on every provider, then provider-scoped checks layer on top. Branch on `checks[].name` for agent self-recovery.
+
+## Security notes
+
+- Never commit `.env` or API keys.
+- Rotate keys if shared in chat/logs.
+- Keep test mode on during development.
+- For path-traversal guards, secret redaction, idempotency, and read-only mode, see [docs/reference/security-controls.md](docs/reference/security-controls.md).
+- For what the chain proves vs. what it doesn't, see [docs/reference/security-model.md](docs/reference/security-model.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## See also
+
+- [AGENTS.md](AGENTS.md) — the agent quickstart (output contract, exit codes, discovery, failure recovery).
+- [docs/agent-guide.md](docs/agent-guide.md) — canonical agent reference (per-command schemas, side effects, idempotency).
+- [docs/setup/](docs/setup/) — provider setup (Dropbox, DocuSign, SignWell, embedded).
+- [docs/recipes/](docs/recipes/) — task-oriented recipes (preflight, agent-loop-mcp, weekly anchor, auditor handoff, sign as Alice, EU NDA).
+- [docs/reference/](docs/reference/) — concept deep-dives (audit chain, exit codes, profiles, security model, architecture, legal posture, comparison).
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — error catalog.
+- [CHANGELOG.md](CHANGELOG.md) — what landed and when.
+- [integrations/](integrations/) — Claude Desktop config, langchain starter.
+- [deploy/](deploy/) — Fly / Render / Railway configs for the hosted demo.

@@ -20,7 +20,7 @@ test("lint:legal-claims passes on the current repo", () => {
     }) => `  ${v.file}:${v.line}  [${v.rule}]  matched "${v.match}"\n    → ${v.hint}`).join("\n");
     assert.fail(
       `Expected zero legal-claim violations in the current repo, got ${violations.length}:\n${formatted}\n\n` +
-      `See docs/legal-posture.md → "What we'll never claim" for the rationale.`,
+      `See docs/reference/legal.md → "What we'll never claim" for the rationale.`,
     );
   }
 });
@@ -28,7 +28,7 @@ test("lint:legal-claims passes on the current repo", () => {
 test("lint:legal-claims catches each forbidden pattern in a fixture repo", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "lint-legal-fixture-"));
   try {
-    mkdirSync(path.join(tmp, "docs"), { recursive: true });
+    mkdirSync(path.join(tmp, "docs", "reference"), { recursive: true });
     // README contains one violation per rule. The lint should flag all of them.
     writeFileSync(path.join(tmp, "README.md"), [
       "Produces a legally binding signature.",                 // unqualified legally-binding
@@ -39,8 +39,8 @@ test("lint:legal-claims catches each forbidden pattern in a fixture repo", () =>
       "Legal equivalent of a handwritten signature.",          // wet-sig equivalence
       "Produces a qualified electronic signature.",            // QES claim
     ].join("\n\n"), "utf8");
-    // docs/legal-posture.md is exempt — its mentions of forbidden phrases shouldn't count.
-    writeFileSync(path.join(tmp, "docs", "legal-posture.md"),
+    // docs/reference/legal.md is exempt — its mentions of forbidden phrases shouldn't count.
+    writeFileSync(path.join(tmp, "docs", "reference", "legal.md"),
       "We never claim eIDAS-compliant, court-ready, or legally binding signatures.", "utf8");
 
     const violations = lintLegalClaims(tmp);
@@ -57,9 +57,9 @@ test("lint:legal-claims catches each forbidden pattern in a fixture repo", () =>
     for (const rule of expectedRules) {
       assert.ok(rulesHit.has(rule), `expected rule "${rule}" to fire, didn't. fired: ${[...rulesHit].join(", ") || "(none)"}`);
     }
-    // legal-posture.md is exempt — none of its hits should appear.
-    const fromExempt = violations.filter((v: { file: string }) => v.file.includes("legal-posture.md"));
-    assert.equal(fromExempt.length, 0, `legal-posture.md is exempt; got ${fromExempt.length} hits from it`);
+    // legal.md is exempt — none of its hits should appear.
+    const fromExempt = violations.filter((v: { file: string }) => v.file.includes("legal.md"));
+    assert.equal(fromExempt.length, 0, `legal.md is exempt; got ${fromExempt.length} hits from it`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
