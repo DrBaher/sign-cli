@@ -1,6 +1,6 @@
 {
-  "name": "sign-cli",
-  "version": "0.6.1",
+  "name": "@drbaher/sign-cli",
+  "version": "0.6.2",
   "description": "Signing CLI for AI agents and ops people who want a verifiable audit trail. Runs fully offline with a built-in PAdES signer (no signup, no third-party provider) — or routes through Dropbox Sign / DocuSign / SignWell. Per-signer tokens, declarative policies, an MCP server, RFC 3161 timestamping, and re-verifiable receipt bundles.",
   "private": false,
   "type": "module",

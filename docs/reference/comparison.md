@@ -8,7 +8,7 @@ sales pitch. If something here is wrong, please open an issue.
 
 | | sign-cli | Dropbox Sign / DocuSign / SignWell SaaS | DIY (raw provider SDK) | OpenSign / open-source SaaS |
 |---|---|---|---|---|
-| **Account / signup needed to try** | No (`npx sign-cli demo`) | Yes (free trial) | Yes (provider key) | Self-host required |
+| **Account / signup needed to try** | No (`npx @drbaher/sign-cli demo`) | Yes (free trial) | Yes (provider key) | Self-host required |
 | **Native UI for signers** | No (use the provider's, or build your own on `/v1/*`) | Yes — full web app | No | Yes |
 | **Programmatic policy** | Declarative spec (`signer policy run-watch`) | Workflow rules in their UI | Roll your own | Workflow rules in their UI |
 | **MCP server for LLM agents** | Yes (stdio + typed tool catalog) | No | No | No |

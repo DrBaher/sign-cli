@@ -55,7 +55,7 @@ How to ship a new `sign-cli` version. Each step that requires authenticated GitH
     ```
 12. Verify the published artifact resolves:
     ```bash
-    npx sign-cli@X.Y.Z --version
+    npx @drbaher/sign-cli@X.Y.Z --version
     ```
 
 ## Rollback

@@ -8,6 +8,27 @@ release.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-05-15
+
+Headline: published to npm under the scoped name **`@drbaher/sign-cli`**. The unscoped `sign-cli` on npm was registered by someone unrelated to this project before this codebase existed. To avoid confusion (and because npm doesn't allow taking over a name owned by another account), this CLI now lives at `@drbaher/sign-cli`. The repo name (`DrBaher/sign-cli`), the bin name (`sign`), and the project identity are unchanged.
+
+### Changed
+
+- `package.json` `name` field: `"sign-cli"` → `"@drbaher/sign-cli"`.
+- Install commands across README, AGENTS.md, DISTRIBUTION.md, docs/, and the showcase site now use the scoped name.
+- The bin name is **still `sign`** — once installed globally (`npm i -g @drbaher/sign-cli`), every CLI invocation works identically (`sign demo`, `sign request create`, etc.).
+
+### Migration
+
+```bash
+# If you previously installed the unrelated `sign-cli` package, uninstall it first:
+npm uninstall -g sign-cli
+
+# Install ours:
+npm i -g @drbaher/sign-cli
+sign --version    # → 0.6.2
+```
+
 ## [0.6.1] — 2026-05-15
 
 Headline: **`sign pdf inspect`** — verify ANY signed PDF (ours, Adobe's, DocuSign's, Dropbox Sign's, SignWell's). Pairs with `request verify-signed-pdf` for the request-bound check. **Pre-sign signature visibility** on `signer fetch-document` so signers see what they're countersigning. **`--recipient <email>`** filter on `verify-signed-pdf` for mid-flight multi-signer verification. Fixes a false `signer_mismatch` on RFC 4514-escaped certificate subjects.

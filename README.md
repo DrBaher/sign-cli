@@ -9,7 +9,7 @@ Fully-offline e-signature CLI. The built-in PAdES signer (PKCS#7 in `/ByteRange`
 ## Run this
 
 ```bash
-npx sign-cli demo
+npx @drbaher/sign-cli demo
 ```
 
 That single command runs the entire lifecycle — create → send → sign → verify chain → export receipt — against the offline local provider, then deletes everything. No signup. No keys. ~5 seconds.
@@ -32,10 +32,10 @@ Concept deep-dives live in [docs/reference/](docs/reference/); task-oriented rec
 
 ```bash
 # Install
-npm i -g sign-cli
+npm i -g @drbaher/sign-cli
 
 # Or run without installing
-npx sign-cli demo
+npx @drbaher/sign-cli demo
 
 # After install, the binary is named `sign`
 sign --version
