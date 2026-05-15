@@ -36,7 +36,7 @@ sales pitch. If something here is wrong, please open an issue.
 
 ## When we're a good fit
 
-- You're building **agent-driven workflows** — Claude / langchain / your own — and want a typed tool catalog with capability scoping.
+- You're building **agent-first workflows** — Claude / langchain / your own — and want a typed tool catalog with capability scoping.
 - You need **independent audit verifiability**: hash chains, RFC 3161 anchors, self-contained receipts that verify offline a year later.
 - You want **provider portability**: prototype on the local provider, ship on Dropbox Sign, swap to DocuSign, without rewriting business logic.
 - You're an **ops person** who'd rather grep, jq, and pipe than click.
