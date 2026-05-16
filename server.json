@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.drbaher/sign-cli",
-  "description": "Agent-first e-signature MCP server. Fully-offline PAdES signer (PKCS#7, self-issued cert) — or hosted providers (Dropbox/DocuSign/SignWell). 19 tools: send, sign, decline, verify-audit-chain, inspect-signatures, detect-fields, stamp, preview, profile management, and more. Per-signer approval tokens gate the human gesture.",
+  "description": "Agent-first e-signature MCP server with offline PAdES signing and hash-chained audit.",
   "repository": {
     "url": "https://github.com/DrBaher/sign-cli",
     "source": "github"
