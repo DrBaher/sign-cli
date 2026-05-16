@@ -1,0 +1,28 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      readOnly:
+        type: boolean
+        description: When true, mutating tools return FORBIDDEN_READ_ONLY. Useful for sandboxed agents that should inspect and track without signing.
+        default: false
+      signDbPath:
+        type: string
+        description: Path to the persistent SQLite database. Defaults to ./data/sign.db.
+      localAutocomplete:
+        type: boolean
+        description: When false, the local provider holds at "sent" until a signer explicitly runs `sign sign`. Required for the agent-as-signer flow. Defaults to true (demo-friendly).
+        default: true
+  commandFunction: |
+    (config) => ({
+      command: 'npx',
+      args: [
+        '-y', '@drbaher/sign-cli', 'mcp', 'serve',
+        ...(config.readOnly ? ['--read-only', 'true'] : []),
+      ],
+      env: {
+        ...(config.signDbPath ? { SIGN_DB_PATH: config.signDbPath } : {}),
+        ...(config.localAutocomplete === false ? { SIGN_LOCAL_AUTOCOMPLETE: 'false' } : {}),
+      },
+    })
