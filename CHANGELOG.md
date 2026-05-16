@@ -8,6 +8,24 @@ release.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-16
+
+Headline: **`sign mcp serve --http`** — second MCP transport that speaks JSON-RPC 2.0 over HTTP, so the same 19 tools / 4 prompts / 12 resources can be reached from remote MCP aggregators (Smithery, OpenAI Agents SDK over HTTP, custom services) without spawning a local `npx` process. Stdio remains the default. Listed on Smithery at [`drbaher/sign-cli`](https://smithery.ai/server/drbaher/sign-cli).
+
+### Added
+
+- **`sign mcp serve --http true`** — boots the MCP server over `node:http` instead of stdio. Flags: `--http-port` (default `$PORT` or `8080`), `--http-bind` (default `0.0.0.0`), `--http-path` (default `/mcp`), `--http-auth-token` (also reads `$SIGN_MCP_HTTP_AUTH_TOKEN`). CORS open, OPTIONS preflight handled, 1 MiB max body, JSON-RPC dispatched through the same code path as stdio (so `--read-only`, `--capability`, `--tool` allow-lists, `--emit-events` all apply). `GET /health` returns `{ ok, mcp, endpoint }` and is always unauthenticated. When a bearer token is set, every `/mcp` request must include `Authorization: Bearer <token>`; mismatched/missing tokens get a 401 with `WWW-Authenticate: Bearer realm="sign-cli MCP"`.
+- **`deploy/Dockerfile.mcp-http` + `entrypoint-mcp-http.sh`** — hosted container variant that runs `sign mcp serve --http` on `$PORT`. Read-only + ephemeral SQLite + 4h TTL reset, same demo-safety model as the existing `serve` container. Powers [sign-cli-mcp-production.up.railway.app/mcp](https://sign-cli-mcp-production.up.railway.app/mcp).
+
+### Changed
+
+- `deploy/Dockerfile` and `Dockerfile.mcp-http` now copy `scripts/` **before** `npm install` so the postinstall `trim-pdfjs-dist.mjs` step can find itself. Fixes silent build breakage introduced when the postinstall hook was added.
+- `railway.toml` no longer pins `dockerfilePath`; each service selects its Dockerfile via the `RAILWAY_DOCKERFILE_PATH` env variable. This lets the same repo deploy both `sign-cli-demo` (HTTP `/v1/*`) and `sign-cli-mcp` (MCP-over-HTTP) services from one config.
+
+### Fixed
+
+- `signer_list`'s `outputSchema` was the only tool whose top-level `type` was `"array"`. Per the MCP spec and Smithery's scanner, `outputSchema.type` must be `"object"` (it describes `structuredContent`, which is always an object). Dropped the schema annotation for this one tool rather than wrapping the wire payload — the actual JSON-RPC response shape is unchanged for existing clients.
+
 ## [0.6.2] — 2026-05-15
 
 Headline: published to npm under the scoped name **`@drbaher/sign-cli`**. The unscoped `sign-cli` on npm was registered by someone unrelated to this project before this codebase existed. To avoid confusion (and because npm doesn't allow taking over a name owned by another account), this CLI now lives at `@drbaher/sign-cli`. The repo name (`DrBaher/sign-cli`), the bin name (`sign`), and the project identity are unchanged.

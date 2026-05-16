@@ -5,7 +5,7 @@
 //   sign examples                → walkthrough snippets
 
 // Bumped manually on each release; mirrored in package.json.
-export const SIGN_CLI_VERSION = "0.6.2";
+export const SIGN_CLI_VERSION = "0.6.3";
 
 export type FlagSpec = {
   name: string;          // e.g. "--request-id" or "--token"

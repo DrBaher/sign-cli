@@ -1,22 +1,22 @@
-# Railway deploy config for the sign-cli hosted demo.
+# Railway deploy config for sign-cli's hosted services.
 #   railway login
 #   railway init
 #   railway up
 #
 # Railway auto-discovers railway.toml at the repo root. The Dockerfile
-# stays under deploy/ — dockerfilePath is relative to the build context
-# (the repo root, where this file lives). PORT is provided by Railway
-# and honoured inside entrypoint.sh; defaults still apply when running
-# locally via docker-compose.
+# stays under deploy/, selected per-service via the RAILWAY_DOCKERFILE_PATH
+# env variable. We deploy two services from the same repo:
+#   - sign-cli-demo:    deploy/Dockerfile         (HTTP /v1/* read-only demo)
+#   - sign-cli-mcp:     deploy/Dockerfile.mcp-http (MCP-over-HTTP for Smithery/mcp.run)
+#
+# PORT is provided by Railway and honoured inside the entrypoint scripts;
+# defaults still apply when running locally via docker-compose.
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "deploy/Dockerfile"
 
 [deploy]
-healthcheckPath = "/web-demo/"
-healthcheckTimeout = 30
-# entrypoint.sh exits cleanly (code 0) after DEMO_TTL_SECONDS so the platform
+# entrypoint exits cleanly (code 0) after DEMO_TTL_SECONDS so the platform
 # brings us back up with a fresh seed. That reset loop only works if Railway
 # restarts on *any* exit, not just non-zero ones — hence ALWAYS, not
 # ON_FAILURE. (Fly and Render restart on any exit by default.)

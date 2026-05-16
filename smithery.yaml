@@ -1,3 +1,17 @@
+# Smithery registry config — sign-cli MCP server.
+#
+# We expose the same 19-tool MCP surface via stdio (for direct integrations:
+# Claude Desktop, Claude Code, Cursor, Codex) and via HTTP at a hosted
+# Railway endpoint (for Smithery / mcp.run-style aggregators that need
+# remote MCP). The local-only stdio path stays the source of truth.
+#
+# Submit via: smithery publish https://sign-cli-mcp-production.up.railway.app/mcp
+# Or via the Smithery web UI: https://smithery.ai/new
+#
+# Auth: a bearer token is required at the /mcp endpoint. Smithery clients
+# pass it via the Authorization header. Token is rotated on each Railway
+# redeploy — see RELEASE.md.
+
 startCommand:
   type: stdio
   configSchema:

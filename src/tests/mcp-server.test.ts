@@ -225,15 +225,27 @@ test("listMcpTools shapes match the input schema contract", () => {
   }
 });
 
-test("listMcpTools exposes outputSchema for every tool so generic agents can validate responses", () => {
+test("listMcpTools exposes object-typed outputSchema for tools that have one", () => {
+  // Tool `signer_list` intentionally has no outputSchema: it returns a JSON
+  // array, but the MCP spec / Smithery scanner require outputSchema.type to
+  // be "object" (it describes structuredContent). We strip the schema rather
+  // than rewrap the wire payload — the wire response is still a raw array.
   const tools = listMcpTools();
+  const arrayShaped = new Set(["signer_list"]);
   for (const tool of tools) {
+    if (arrayShaped.has(tool.name)) {
+      assert.ok(
+        tool.outputSchema === undefined,
+        `tool "${tool.name}" returns an array; its outputSchema should be omitted`,
+      );
+      continue;
+    }
     assert.ok(
       tool.outputSchema && typeof tool.outputSchema === "object",
       `tool "${tool.name}" should expose an outputSchema`,
     );
     const t = (tool.outputSchema as { type?: string }).type;
-    assert.ok(t === "object" || t === "array", `tool "${tool.name}" outputSchema.type must be object or array`);
+    assert.strictEqual(t, "object", `tool "${tool.name}" outputSchema.type must be "object"`);
   }
 });
 

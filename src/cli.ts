@@ -26,7 +26,7 @@ import {
   HELP_CATALOG,
 } from "./lib/help-catalog.js";
 import { formatCliError, SignCliError } from "./lib/sign-error.js";
-import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio } from "./lib/mcp-server.js";
+import { listMcpTools, renderMcpToolsAsMarkdown, serveMcpStdio, startMcpHttpServer } from "./lib/mcp-server.js";
 import { validateBulkRowCount, validateConfigPath, validateDocumentPath, validateEmail, validateFieldCount, validateOutputPath, validateReturnUrl, validateSignerCount } from "./lib/validate.js";
 import {
   resolveSignProvider,
@@ -2957,6 +2957,33 @@ async function main(): Promise<void> {
       : undefined;
     const emitEventsPath = flagValue(parsed, "emit-events");
     const emitEventsRedact = (flagValue(parsed, "emit-events-redact") ?? "false") === "true";
+
+    // HTTP transport — Streamable HTTP MCP for Smithery / remote agent
+    // clients. `--http true` switches the transport from stdio.
+    const useHttp = (flagValue(parsed, "http") ?? "false") === "true";
+    if (useHttp) {
+      const port = Number(flagValue(parsed, "http-port") ?? process.env.PORT ?? "8080");
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: `--http-port must be a port in 1..65535; got ${JSON.stringify(flagValue(parsed, "http-port"))}.`,
+        });
+      }
+      const bind = flagValue(parsed, "http-bind") ?? "0.0.0.0";
+      const endpointPath = flagValue(parsed, "http-path") ?? "/mcp";
+      const authToken = flagValue(parsed, "http-auth-token") ?? process.env.SIGN_MCP_HTTP_AUTH_TOKEN;
+      const server = startMcpHttpServer({
+        port, bind, endpointPath, authToken,
+        db, readOnly, allowedTools, capabilities, emitEventsPath, emitEventsRedact,
+      });
+      await new Promise<void>((resolve) => {
+        const shutdown = () => server.close(() => resolve());
+        process.on("SIGINT", shutdown);
+        process.on("SIGTERM", shutdown);
+      });
+      return;
+    }
+
     await serveMcpStdio({ input: process.stdin, output: process.stdout, db, readOnly, allowedTools, capabilities, emitEventsPath, emitEventsRedact });
     return;
   }

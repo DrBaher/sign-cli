@@ -1,6 +1,8 @@
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import readline from "node:readline";
+import { timingSafeEqual } from "node:crypto";
 import type { SqliteDb } from "./db.js";
 import { resolveSignProvider, type SignProvider } from "./providers.js";
 import { getMcpPrompt, listMcpPrompts } from "./mcp-prompts.js";
@@ -87,20 +89,10 @@ const TOOLS: ToolDefinition[] = [
       type: "object",
       properties: { signer_email: { type: "string", description: "Signer email to filter by." } },
     },
-    outputSchema: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          documentId: { type: "string" },
-          requestId: { type: ["string", "null"] },
-          title: { type: "string" },
-          status: { type: "string" },
-          signers: { type: "array" },
-          tokens: { type: "array" },
-        },
-      },
-    },
+    // outputSchema omitted: this tool returns a JSON array, but the MCP spec
+    // and Smithery require outputSchema.type to be "object". Rather than break
+    // the wire shape that existing clients (Claude Code, Cursor, etc.) consume,
+    // we expose no outputSchema and let clients introspect the array directly.
     handler: (db, args) => listSignerInbox(db, { signerEmail: str(args, "signer_email") }),
   },
   {
@@ -1650,4 +1642,252 @@ export async function serveMcpStdio(opts: {
       await new Promise<void>((resolve) => emitStream!.end(resolve));
     }
   }
+}
+
+// Constant-time bearer-token comparison. Returns true iff `provided` matches
+// `expected` exactly. Pads the shorter input to avoid leaking length, then
+// uses timingSafeEqual.
+function constantTimeBearerEq(expected: string, provided: string): boolean {
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(provided, "utf8");
+  // timingSafeEqual requires equal length; pad the shorter side so we
+  // always run the same number of comparisons, returning false at the end
+  // if the lengths differed.
+  const maxLen = Math.max(a.length, b.length);
+  const padA = Buffer.concat([a, Buffer.alloc(maxLen - a.length)]);
+  const padB = Buffer.concat([b, Buffer.alloc(maxLen - b.length)]);
+  const sameContents = timingSafeEqual(padA, padB);
+  return sameContents && a.length === b.length;
+}
+
+export type ServeMcpHttpOptions = {
+  port: number;
+  bind?: string;
+  // Path the MCP endpoint listens on. Default "/mcp". Streamable HTTP spec
+  // calls for a single endpoint; clients POST JSON-RPC bodies and read the
+  // single JSON-RPC response from the body.
+  endpointPath?: string;
+  db: SqliteDb;
+  // Optional bearer token. When set, every request to the MCP endpoint must
+  // present `Authorization: Bearer <token>` or get a 401. Compared in
+  // constant time.
+  authToken?: string;
+  readOnly?: boolean;
+  allowedTools?: ReadonlySet<string>;
+  capabilities?: ReadonlySet<"tools" | "resources" | "prompts">;
+  // Optional NDJSON replay log of every JSON-RPC message (in + out). Same
+  // shape as serveMcpStdio's emitEventsPath.
+  emitEventsPath?: string;
+  emitEventsRedact?: boolean;
+};
+
+// Streamable HTTP MCP transport. One POST per JSON-RPC message; response is
+// the corresponding JSON-RPC message (or HTTP 202 with no body for
+// notifications). CORS-open so browser-based MCP clients can connect.
+// Health probe at GET / and GET /health for hosting platforms (Smithery,
+// Railway, etc.) that ping the root before routing real traffic.
+//
+// Not implemented: SSE for server-pushed messages (resource subscribe
+// updates, request_watch progress). Those clients would need to fall back
+// to stdio for now. The 90% case — tools/list, tools/call, request/show,
+// audit_verify — is handled here.
+export function startMcpHttpServer(opts: ServeMcpHttpOptions): http.Server {
+  const endpointPath = opts.endpointPath ?? "/mcp";
+  const bind = opts.bind ?? "0.0.0.0";
+  let emitStream: WriteStream | null = null;
+  if (opts.emitEventsPath) {
+    const resolved = path.resolve(opts.emitEventsPath);
+    mkdirSync(path.dirname(resolved), { recursive: true });
+    emitStream = createWriteStream(resolved, { flags: "a" });
+  }
+  const redactForEmit = opts.emitEventsRedact === true;
+  const recordEmit = (direction: "in" | "out", message: JsonRpcMessage): void => {
+    if (!emitStream) return;
+    const at = new Date().toISOString();
+    const entry = { direction, at, message: redactForEmit ? redactSecrets(message) : message };
+    emitStream.write(JSON.stringify(entry) + "\n");
+  };
+
+  const writeCorsHeaders = (res: http.ServerResponse): void => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
+    res.setHeader("Access-Control-Max-Age", "86400");
+  };
+
+  const writeJsonRpcError = (
+    res: http.ServerResponse,
+    id: JsonRpcMessage["id"] | undefined,
+    code: number,
+    message: string,
+    httpStatus = 200,
+  ): void => {
+    const body: JsonRpcMessage = {
+      jsonrpc: JSON_RPC_VERSION,
+      id: id ?? null,
+      error: { code, message },
+    };
+    recordEmit("out", body);
+    writeCorsHeaders(res);
+    res.setHeader("Content-Type", "application/json");
+    res.statusCode = httpStatus;
+    res.end(JSON.stringify(body));
+  };
+
+  const server = http.createServer((req, res) => {
+    // CORS preflight.
+    if (req.method === "OPTIONS") {
+      writeCorsHeaders(res);
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    // Health probe — anything at / or /health that's not the MCP endpoint
+    // returns a small JSON object so deployment platforms see a 200.
+    if (req.method === "GET") {
+      writeCorsHeaders(res);
+      res.setHeader("Content-Type", "application/json");
+      res.statusCode = 200;
+      res.end(JSON.stringify({ ok: true, mcp: "sign-cli", endpoint: endpointPath }));
+      return;
+    }
+
+    if (req.method !== "POST") {
+      writeCorsHeaders(res);
+      res.statusCode = 405;
+      res.setHeader("Allow", "POST, GET, OPTIONS");
+      res.end();
+      return;
+    }
+
+    // Path check. The Streamable HTTP spec uses a single configurable
+    // endpoint — we only accept POSTs to exactly that path.
+    const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    if (reqUrl.pathname !== endpointPath) {
+      writeCorsHeaders(res);
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+
+    // Optional bearer-token auth.
+    if (opts.authToken) {
+      const provided = req.headers.authorization;
+      const prefix = "Bearer ";
+      if (!provided || !provided.startsWith(prefix) || !constantTimeBearerEq(opts.authToken, provided.slice(prefix.length))) {
+        writeCorsHeaders(res);
+        res.statusCode = 401;
+        res.setHeader("WWW-Authenticate", 'Bearer realm="sign-cli MCP"');
+        res.end();
+        return;
+      }
+    }
+
+    // Buffer the body (small, JSON-RPC bodies are kilobytes at most).
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const MAX_BODY = 1024 * 1024; // 1 MiB
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_BODY) {
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      void (async () => {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        let message: JsonRpcMessage;
+        try {
+          message = JSON.parse(raw) as JsonRpcMessage;
+        } catch {
+          writeJsonRpcError(res, null, -32700, "Parse error");
+          return;
+        }
+        recordEmit("in", message);
+
+        const id = message.id;
+        const isNotification = id === null || id === undefined;
+        if (typeof message.method !== "string") {
+          if (isNotification) {
+            // Bare response — nothing to do.
+            writeCorsHeaders(res);
+            res.statusCode = 204;
+            res.end();
+            return;
+          }
+          writeJsonRpcError(res, id, -32600, "Invalid Request");
+          return;
+        }
+
+        try {
+          const dispatched = await dispatchMcp({
+            method: message.method,
+            params: message.params,
+            db: opts.db,
+            readOnly: opts.readOnly,
+            allowedTools: opts.allowedTools,
+            capabilities: opts.capabilities,
+            // emitProgress is intentionally omitted — Streamable HTTP would
+            // need an SSE response for progress, which this minimal
+            // implementation doesn't offer.
+          });
+          if (dispatched.kind === "ignored") {
+            if (isNotification) {
+              writeCorsHeaders(res);
+              res.statusCode = 202;
+              res.end();
+              return;
+            }
+            writeJsonRpcError(res, id, -32601, `Method not found: ${message.method}`);
+            return;
+          }
+          if (isNotification) {
+            // Notifications get HTTP 202 with no body even if dispatchMcp
+            // returned a result.
+            writeCorsHeaders(res);
+            res.statusCode = 202;
+            res.end();
+            return;
+          }
+          const body: JsonRpcMessage = {
+            jsonrpc: JSON_RPC_VERSION,
+            id: id ?? null,
+            result: dispatched.value,
+          };
+          recordEmit("out", body);
+          writeCorsHeaders(res);
+          res.setHeader("Content-Type", "application/json");
+          res.statusCode = 200;
+          res.end(JSON.stringify(body));
+        } catch (err: unknown) {
+          const envelope = formatCliError(err);
+          const errMessage = envelope.error.message;
+          const errCode = envelope.error.code === "INVALID_ARGS" ? -32602 : -32603;
+          writeJsonRpcError(res, id, errCode, errMessage);
+        }
+      })();
+    });
+    req.on("error", () => {
+      try { res.destroy(); } catch { /* noop */ }
+    });
+  });
+
+  server.listen(opts.port, bind, () => {
+    const addr = server.address();
+    const actualPort = typeof addr === "object" && addr ? addr.port : opts.port;
+    process.stderr.write(
+      `[sign] mcp http server listening on http://${bind}:${actualPort}${endpointPath}\n` +
+      `[sign]   health: http://${bind}:${actualPort}/health\n` +
+      (opts.authToken ? `[sign]   auth: bearer token required\n` : `[sign]   auth: open (set --http-auth-token to lock down)\n`) +
+      (opts.readOnly ? `[sign]   read-only: mutating tools return FORBIDDEN_READ_ONLY\n` : "") +
+      (opts.allowedTools ? `[sign]   tool allow-list: ${[...opts.allowedTools].join(", ")}\n` : ""),
+    );
+  });
+
+  // Best-effort cleanup. emitStream gets flushed when the process exits;
+  // we don't need a hook here because Node closes WriteStreams on exit.
+  return server;
 }

@@ -1,12 +1,18 @@
-# Hosted-demo container for sign-cli.
+# MCP-over-HTTP container for sign-cli.
 #
 # Builds the CLI from source, then on each container start:
-#   1. Wipes the data dir (ephemeral DB).
-#   2. Runs deploy/seed-demo.mjs to create a handful of sample requests.
-#   3. Starts `sign serve --read-only true --web-demo true` on $PORT.
-#   4. Exits after $DEMO_TTL_SECONDS so the platform restarts us with fresh state.
+#   1. Wipes the data dir (ephemeral DB) and runs deploy/seed-demo.mjs.
+#   2. Starts `sign mcp serve --http true` on $PORT.
+#   3. Exits after $DEMO_TTL_SECONDS so the platform restarts with fresh state.
 #
-# Read-only + rate-limited + no auth token: safe to expose publicly.
+# Read-only mode + bearer-auth token guards expose: safe to publish via
+# Smithery and mcp.run.
+#
+# Required env at runtime:
+#   SIGN_MCP_HTTP_AUTH_TOKEN — bearer token required from clients.
+# Optional:
+#   PORT (default 4000) — set by Railway/Fly/Render automatically.
+#   DEMO_TTL_SECONDS (default 14400) — restart cadence for fresh state.
 
 FROM node:22-alpine AS build
 
@@ -40,12 +46,12 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/fixtures ./fixtures
 COPY deploy/seed-demo.mjs ./deploy/seed-demo.mjs
-COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
-RUN chmod +x ./deploy/entrypoint.sh
+COPY deploy/entrypoint-mcp-http.sh ./deploy/entrypoint-mcp-http.sh
+RUN chmod +x ./deploy/entrypoint-mcp-http.sh
 
 EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:${PORT}/web-demo/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1:${PORT}/health >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["./deploy/entrypoint.sh"]
+ENTRYPOINT ["./deploy/entrypoint-mcp-http.sh"]
