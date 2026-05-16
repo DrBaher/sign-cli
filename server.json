@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.drbaher/sign-cli",
+  "name": "io.github.DrBaher/sign-cli",
   "description": "Agent-first e-signature MCP server with offline PAdES signing and hash-chained audit.",
   "repository": {
     "url": "https://github.com/DrBaher/sign-cli",
     "source": "github"
   },
-  "version": "0.6.3",
+  "version": "0.6.4",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@drbaher/sign-cli",
-      "version": "0.6.3",
+      "version": "0.6.4",
       "transport": {
         "type": "stdio"
       }

@@ -8,6 +8,14 @@ release.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-16
+
+Fix-only release. The v0.6.3 npm tarball shipped `mcpName` as `io.github.drbaher/sign-cli` (lowercase), but the official MCP registry namespaces by GitHub login (`DrBaher`) and rejected the publish. v0.6.4 corrects the casing in `package.json` and `server.json` so the registry submission succeeds — every other surface is unchanged.
+
+### Fixed
+
+- `package.json` `mcpName` and `server.json` `name` now use `io.github.DrBaher/sign-cli`. The MCP registry validates the npm tarball's `mcpName` field against the GitHub login (case-sensitive), so the previous lowercase value blocked the registry publish even after the npm publish succeeded.
+
 ## [0.6.3] — 2026-05-16
 
 Headline: **`sign mcp serve --http`** — second MCP transport that speaks JSON-RPC 2.0 over HTTP, so the same 19 tools / 4 prompts / 12 resources can be reached from remote MCP aggregators (Smithery, OpenAI Agents SDK over HTTP, custom services) without spawning a local `npx` process. Stdio remains the default. Listed on Smithery at [`drbaher/sign-cli`](https://smithery.ai/server/drbaher/sign-cli).
