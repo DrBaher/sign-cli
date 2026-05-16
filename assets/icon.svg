@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#fdfcf9"/>
+  <!-- pen nib triangle, pointing down-left, suggesting a signature stroke -->
+  <path d="M 360 110 L 410 160 L 220 350 L 165 365 L 145 345 L 160 290 Z"
+        fill="#1f7d5d" stroke="#1f7d5d" stroke-width="6" stroke-linejoin="round"/>
+  <!-- pen ferrule -->
+  <path d="M 360 110 L 380 90 L 430 140 L 410 160 Z"
+        fill="#0e4a37" stroke="#0e4a37" stroke-width="6" stroke-linejoin="round"/>
+  <!-- nib tip detail -->
+  <line x1="155" y1="345" x2="170" y2="330" stroke="#fdfcf9" stroke-width="6" stroke-linecap="round"/>
+  <!-- signature flourish: a flowing stroke beneath, suggesting a written line -->
+  <path d="M 95 410 Q 150 380 220 410 T 360 410 Q 400 410 420 395"
+        fill="none" stroke="#1f7d5d" stroke-width="14" stroke-linecap="round"/>
+</svg>
