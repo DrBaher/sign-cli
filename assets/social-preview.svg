@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#fdfcf9"/>
+  <!-- icon left -->
+  <g transform="translate(110, 145)">
+    <rect width="350" height="350" rx="64" fill="#fdfcf9" stroke="#1f7d5d" stroke-width="6" stroke-opacity="0.2"/>
+    <g transform="translate(0, 0) scale(0.683)">
+      <path d="M 360 110 L 410 160 L 220 350 L 165 365 L 145 345 L 160 290 Z"
+            fill="#1f7d5d" stroke="#1f7d5d" stroke-width="6" stroke-linejoin="round"/>
+      <path d="M 360 110 L 380 90 L 430 140 L 410 160 Z"
+            fill="#0e4a37" stroke="#0e4a37" stroke-width="6" stroke-linejoin="round"/>
+      <line x1="155" y1="345" x2="170" y2="330" stroke="#fdfcf9" stroke-width="6" stroke-linecap="round"/>
+      <path d="M 95 410 Q 150 380 220 410 T 360 410 Q 400 410 420 395"
+            fill="none" stroke="#1f7d5d" stroke-width="14" stroke-linecap="round"/>
+    </g>
+  </g>
+  <!-- text right side -->
+  <text x="520" y="260" font-family="Helvetica, Arial, sans-serif" font-size="92" font-weight="700" fill="#1f7d5d">sign-cli</text>
+  <text x="520" y="320" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="#0e4a37">Agent-first e-signature MCP server</text>
+  <text x="520" y="370" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#0e4a37" opacity="0.7">Offline PAdES · 19-tool MCP · hash-chained audit</text>
+  <text x="520" y="400" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#0e4a37" opacity="0.7">RFC 3161 timestamps · per-signer approval tokens</text>
+  <text x="520" y="465" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#0e4a37" opacity="0.45">cli.drbaher.com · MIT · no telemetry, no SaaS account</text>
+</svg>
