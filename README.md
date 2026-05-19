@@ -4,7 +4,7 @@
 
 # sign-cli
 
-> Part of the contract-operations CLI suite. [**draft-cli**](https://github.com/DrBaher/Draft-CLI) (fill placeholders) → [**nda-review-cli**](https://github.com/DrBaher/nda-review-cli) (draft, review, negotiate) → [**docx2pdf-cli**](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit). [Showcase site](https://cli.drbaher.com/).
+> Part of the contract-operations CLI suite. [**template-vault-cli**](https://github.com/DrBaher/template-vault-cli) (storage) feeds the pipeline: [**draft-cli**](https://github.com/DrBaher/draft-cli) (fill placeholders) → [**nda-review-cli**](https://github.com/DrBaher/nda-review-cli) (review, redline, negotiate) → [**docx2pdf-cli**](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit). Drift detection via [**compare-cli**](https://github.com/DrBaher/compare-cli). [Showcase site](https://cli.drbaher.com/).
 
 Fully-offline e-signature CLI. The built-in PAdES signer (PKCS#7 in `/ByteRange`, self-issued cert) produces real, cryptographically verifiable signed PDFs with no signup and no third-party provider — or routes through Dropbox Sign / DocuSign / SignWell when you need an external trust anchor. Per-signer approval tokens (TTL-bounded, scoped to one email), hash-chained audit events, RFC 3161 timestamping, named profiles, a 19-tool MCP server, and a 20-route HTTP API.
 
