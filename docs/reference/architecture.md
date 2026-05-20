@@ -129,7 +129,7 @@ without any signup.
 `audit anchor` snapshots every chain head and gets a single TSA timestamp
 over the digest. Re-running over time produces a continuity proof:
 tampering with any old chain breaks the digest in every later anchor that
-covered it. `audit verify-anchor` and `audit chain-bundle verify` do the
+covered it. `audit verify-anchor` and `audit verify-chain-bundle` do the
 re-check.
 
 ### 6. Bundles + receipts

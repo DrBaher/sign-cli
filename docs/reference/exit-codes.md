@@ -12,7 +12,7 @@ Every `sign-cli` command honors the same exit-code semantics. This is the canoni
 | `3` | Policy / chain / verification failed | Audit chain tampered (`chainValid: false`), pre-sign safety check failed, strict-quality violation, declined-by-policy, signed-by-mismatch. |
 | `4` | Not found / out of range | Request id doesn't exist, page index exceeds page count, candidate index out of range, no anchor matches. |
 
-`request watch` adds a parallel `0/2/3/4` for terminal vs. timeout: `0` reached `completed`, `3` declined or chain broke during the watch, `4` timed out before terminal.
+`request watch` adds a parallel `0/2/3/4` for terminal vs. timeout: `0` reached `completed`, `2` declined/rejected/expired/canceled, `3` provider error or invalid remote status during the watch, `4` timed out before terminal.
 
 ## The success envelope
 

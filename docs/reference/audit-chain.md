@@ -39,8 +39,8 @@ Two layers:
 sign audit verify --request-id req_abc
 # → { "requestId": "...", "valid": true, "events": 7, "break": null }
 
-# Cross-request (the full log)
-sign audit verify --all
+# Cross-request (every chain in the DB)
+sign audit scan
 ```
 
 Exit `0` if `chainValid: true`. Exit `3` if any break.
@@ -50,7 +50,7 @@ Exit `0` if `chainValid: true`. Exit `3` if any break.
 `audit anchor` (or the legacy `audit timestamp`) sends the current chain head to a public Timestamp Authority, gets back a signed token, and stores the (`anchor_id`, `tsa_response`, `head_hash`, `timestamp`) tuple in the `audit_anchors` table. Subsequent verification:
 
 ```bash
-sign audit verify-anchor --anchor-id <id>
+sign audit verify-anchor --manifest ./artifacts/audit-anchor-<ts>.manifest.json
 ```
 
 re-parses the TSA token and confirms the head hash hasn't drifted. This is what makes the chain *durably* tamper-evident — even if your DB and your machine are both compromised, the TSA's signature proves the chain looked a certain way at a specific UTC instant.
@@ -69,7 +69,7 @@ Companion commands: `audit anchors-list` (history), `audit chain-bundle` (export
 - `original.pdf` — the unsigned source (byte-identical to what was sent).
 - `receipts/<signer-email>.json` — per-signer event subsets.
 
-`sign request verify-receipt ./receipt/` re-checks all of this offline. The auditor doesn't need access to your DB.
+`sign request verify-receipt --bundle ./receipt/` re-checks all of this offline. The auditor doesn't need access to your DB.
 
 ## See also
 

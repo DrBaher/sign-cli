@@ -109,10 +109,9 @@ For full provider-specific setup, see [docs/setup/](docs/setup/).
 ## One-shot DOCX → sealed PDF
 
 ```bash
-sign document \
-  --input contract.docx \
-  --signer-name "Alice Founder" --signer-email "alice@acme.com" \
-  --name-signature true --auto-place first \
+sign document contract.docx \
+  --signer "Alice Founder" --signer-email "alice@acme.com" \
+  --name-signature "Alice Founder" --auto-place first \
   --out contract.sealed.pdf
 ```
 

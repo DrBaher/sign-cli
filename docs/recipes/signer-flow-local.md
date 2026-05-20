@@ -36,7 +36,7 @@ assume you saved it as `$TOKEN` and the id as `$REQ`.
 
 ```bash
 sign request send --request-id "$REQ" --provider local --test-mode true
-sign sign sign --request-id "$REQ" --token "$TOKEN"
+sign sign --request-id "$REQ" --token "$TOKEN"
 ```
 
 The local provider doesn't actually email anyone — it just records the

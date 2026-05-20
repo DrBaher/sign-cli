@@ -707,8 +707,10 @@ Side effects: writes the output PDF. **No** DB interaction, **no** request state
 The output's per-signer report carries a `trust` label classifying the certificate so an agent can branch without a trust-store lookup. The label is **descriptive, not enforced** — it tells you what kind of cert produced the signature, not whether to accept it.
 
 ```bash
-sign request verify-signed-pdf --pdf ./signed.pdf
+sign request verify-signed-pdf --request-id <id> --path ./signed.pdf
 ```
+
+(For a loose PDF with no signing request, use `sign pdf inspect --pdf ./signed.pdf` — same trust labels, no request id required.)
 
 **Label values** (every `signatures[].signers[].trust`, defined in `src/lib/pdf-signature.ts:128`):
 
@@ -1012,7 +1014,7 @@ export SIGN_PROVIDER=dropbox          # canonical for this script
 ### Pattern C — verify trust, fail closed
 
 ```bash
-sign request verify-signed-pdf --pdf "$PDF" > /tmp/inspect.json
+sign pdf inspect --pdf "$PDF" > /tmp/inspect.json
 # Reject anything that isn't a CA-signed cert (adjust to your policy).
 WORST=$(jq -r '[.signatures[].signers[].trust] | min_by(
   if . == "ca_signed" then 3

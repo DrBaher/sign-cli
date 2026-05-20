@@ -759,7 +759,7 @@ The enum has 4 values, defined at `src/lib/pdf-signature.ts:128`:
 
 ```bash
 # Using the bundle/signed.pdf produced in Item 8
-node "$SIGN" request verify-signed-pdf --pdf bundle/signed.pdf | \
+node "$SIGN" pdf inspect --pdf bundle/signed.pdf | \
   jq -r '.signatures[].signers[].trust'
 ```
 

@@ -122,7 +122,7 @@ sign sign --request-id <id> --token <dieter-token> \
 ```bash
 sign request fetch-final --request-id <id> --out my-nda.signed.pdf
 sign audit timestamp --request-id <id>     # RFC 3161 anchor (optional but recommended)
-sign audit export --request-id <id> --out-dir ./nda-bundle/
+sign audit export --request-id <id> --out ./nda-bundle/
 ```
 
 `./nda-bundle/` contains everything an auditor would need:
