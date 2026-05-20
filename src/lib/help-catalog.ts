@@ -884,17 +884,32 @@ export function formatCommandHelp(spec: CommandSpec): string {
 }
 
 export function buildCatalogJson(): {
+  name: string;
+  bin: string;
   version: string;
-  commands: Array<Pick<CommandSpec, "command" | "summary" | "flags" | "example">>;
+  description: string;
+  commands: Array<{ name: string; help: string } & Partial<Pick<CommandSpec, "flags" | "example">>>;
+  exitCodes: Record<string, string>;
 } {
   return {
+    // Shared suite catalog contract: name/bin/version/description/commands/exitCodes
+    // (matches draft-cli, compare-cli, docx2pdf-cli, template-vault-cli, nda-review-cli).
+    name: "sign-cli",
+    bin: "sign",
     version: SIGN_CLI_VERSION,
+    description: "Consent-gated, auditable e-sign CLI.",
     commands: HELP_CATALOG.map((cmd) => ({
-      command: cmd.command,
-      summary: cmd.summary,
+      name: cmd.command,
+      help: cmd.summary,
       ...(cmd.flags ? { flags: cmd.flags } : {}),
       ...(cmd.example ? { example: cmd.example } : {}),
     })),
+    exitCodes: {
+      "0": "success",
+      "2": "invalid input (missing/malformed flag, schema fail)",
+      "3": "policy / chain / verification failed",
+      "4": "not found / out of range",
+    },
   };
 }
 

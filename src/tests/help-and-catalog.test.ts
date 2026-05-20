@@ -53,10 +53,15 @@ test("buildCatalogJson is machine-readable and matches HELP_CATALOG entries 1:1"
   // Round-trip through JSON to verify there are no functions/symbols leaking through.
   const roundTripped = JSON.parse(JSON.stringify(catalog));
   assert.equal(roundTripped.commands.length, HELP_CATALOG.length);
-  // Each entry has at least command + summary.
+  // Uniform suite catalog contract: name/bin/version/description/exitCodes.
+  assert.equal(catalog.name, "sign-cli");
+  assert.equal(catalog.bin, "sign");
+  assert.equal(typeof catalog.description, "string");
+  assert.equal(typeof catalog.exitCodes["0"], "string");
+  // Each entry has at least name + help.
   for (const cmd of catalog.commands) {
-    assert.equal(typeof cmd.command, "string");
-    assert.equal(typeof cmd.summary, "string");
+    assert.equal(typeof cmd.name, "string");
+    assert.equal(typeof cmd.help, "string");
   }
 });
 
