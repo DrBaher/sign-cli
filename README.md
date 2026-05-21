@@ -29,6 +29,7 @@ That single command runs the entire lifecycle — create → send → sign → v
 | **An LLM agent** driving the CLI | [AGENTS.md](AGENTS.md) → [docs/agent-guide.md](docs/agent-guide.md) → [docs/recipes/](docs/recipes/) |
 | **An auditor** verifying a signed bundle | [docs/reference/audit-chain.md](docs/reference/audit-chain.md), [docs/reference/legal.md](docs/reference/legal.md) |
 | **A contributor** | [docs/reference/architecture.md](docs/reference/architecture.md), [docs/regression-testing.md](docs/regression-testing.md) |
+| **Adding a new CLI to the suite** | The [build-a-CLI playbook](https://cli.drbaher.com/build-a-cli) — the conventions every suite CLI follows |
 
 Concept deep-dives live in [docs/reference/](docs/reference/); task-oriented recipes in [docs/recipes/](docs/recipes/).
 
