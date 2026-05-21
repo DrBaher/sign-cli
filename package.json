@@ -1,6 +1,6 @@
 {
   "name": "@drbaher/sign-cli",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "mcpName": "io.github.DrBaher/sign-cli",
   "publishConfig": {
     "access": "public"
