@@ -4,11 +4,11 @@
 
 # sign-cli
 
-> Part of the contract-ops CLI suite. [**template-vault-cli**](https://github.com/DrBaher/template-vault-cli) (storage) feeds the pipeline: [**draft-cli**](https://github.com/DrBaher/draft-cli) (fill placeholders) → [**nda-review-cli**](https://github.com/DrBaher/nda-review-cli) (review, redline, negotiate) → [**docx2pdf-cli**](https://github.com/DrBaher/docx2pdf-cli) (DOCX → PDF) → **sign-cli** (signing + audit). Drift detection via [**compare-cli**](https://github.com/DrBaher/compare-cli). [Showcase site](https://cli.drbaher.com/).
-
 Fully-offline e-signature CLI. The built-in PAdES signer (PKCS#7 in `/ByteRange`, self-issued cert) produces real, cryptographically verifiable signed PDFs with no signup and no third-party provider — or routes through Dropbox Sign / DocuSign / SignWell when you need an external trust anchor. Per-signer approval tokens (TTL-bounded, scoped to one email), hash-chained audit events, RFC 3161 timestamping, named profiles, a 19-tool MCP server, and a 20-route HTTP API.
 
 **The asymmetry is the architecture**: an agent can drive every step except the actual signing gesture, which stays gated behind a human.
+
+> **Part of the contract-ops CLI suite — optional.** sign-cli works entirely on its own; it's also the **signing + audit** step of the [contract-ops suite](https://cli.drbaher.com/): [template-vault-cli](https://github.com/DrBaher/template-vault-cli) → [draft-cli](https://github.com/DrBaher/draft-cli) → [nda-review-cli](https://github.com/DrBaher/nda-review-cli) → [docx2pdf-cli](https://github.com/DrBaher/docx2pdf-cli) → **sign-cli**, with drift detection via [compare-cli](https://github.com/DrBaher/compare-cli).
 
 ## Run this
 

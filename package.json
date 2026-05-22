@@ -5,7 +5,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Part of the contract-ops CLI suite. Signing CLI for AI agents and ops people who want a verifiable audit trail. Runs fully offline with a built-in PAdES signer (no signup, no third-party provider) — or routes through Dropbox Sign / DocuSign / SignWell. Per-signer tokens, declarative policies, an MCP server, RFC 3161 timestamping, and re-verifiable receipt bundles.",
+  "description": "Signing CLI for AI agents and ops people who want a verifiable audit trail. Runs fully offline with a built-in PAdES signer (no signup, no third-party provider) — or routes through Dropbox Sign / DocuSign / SignWell. Per-signer tokens, declarative policies, an MCP server, RFC 3161 timestamping, and re-verifiable receipt bundles. Part of the contract-ops CLI suite.",
   "private": false,
   "type": "module",
   "license": "MIT",
