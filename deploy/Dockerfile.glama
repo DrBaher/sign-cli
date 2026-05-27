@@ -1,0 +1,42 @@
+# Glama sandbox build of the sign-cli stdio MCP server.
+#
+# Glama uses this image to evaluate tool definitions (TDQS) and run
+# server-coherence checks. The container starts the stdio MCP server
+# and waits for the standard MCP handshake on stdin/stdout — no ports,
+# no external credentials required. The local provider is fully
+# self-contained, so every tool in the catalog is exercisable inside
+# the sandbox without secrets.
+
+FROM node:22-alpine AS build
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+COPY scripts/ ./scripts/
+RUN npm install --no-audit --no-fund
+
+COPY tsconfig.json ./
+COPY src/ ./src/
+COPY fixtures/ ./fixtures/
+
+RUN npm run build
+
+FROM node:22-alpine AS runtime
+
+ENV NODE_ENV=production
+ENV SIGN_DB_PATH=/app/data/sign.db
+ENV SIGN_LOCAL_STORE_DIR=/app/data/store
+ENV SIGN_LOCAL_KEY_DIR=/app/data/keys
+ENV SIGN_LOCAL_AUTOCOMPLETE=true
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+COPY scripts/ ./scripts/
+RUN npm ci --omit=dev --no-audit --no-fund
+
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/fixtures ./fixtures
+
+RUN mkdir -p /app/data /app/data/store /app/data/keys
+
+ENTRYPOINT ["node", "dist/cli.js", "mcp", "serve"]
