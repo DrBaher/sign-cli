@@ -3096,7 +3096,7 @@ export async function inspectRequestSignedPdf(
 
 export async function timestampRequestAuditChain(
   db: SqliteDb,
-  input: { requestId: string; tsaUrl?: string; outPath?: string; now?: Date },
+  input: { requestId: string; tsaUrl?: string; outPath?: string; now?: Date; trustAnchors?: Array<string | Buffer> },
 ): Promise<{
   tsaUrl: string;
   hashSelf: string;
@@ -3131,7 +3131,7 @@ export async function timestampRequestAuditChain(
     createdAt: nowIso(now),
   });
 
-  const inspection = inspectTimestampResponse(result.responseBuffer, digest);
+  const inspection = inspectTimestampResponse(result.responseBuffer, digest, input.trustAnchors);
 
   appendAuditEvent(db, {
     requestId: input.requestId,
@@ -3141,6 +3141,8 @@ export async function timestampRequestAuditChain(
       bytes: result.responseBuffer.length,
       hashSelf: lastEvent.hash_self,
       granted: inspection.granted,
+      cryptographicallyVerified: inspection.cryptographicallyVerified,
+      genTime: inspection.verification?.genTime ?? null,
     },
     now,
   });
