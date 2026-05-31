@@ -35,7 +35,7 @@ export type AnchorReport = {
 
 export async function anchorAllAuditChainHeads(
   db: SqliteDb,
-  input: { tsaUrl?: string; outDir?: string; now?: Date; since?: string } = {},
+  input: { tsaUrl?: string; outDir?: string; now?: Date; since?: string; trustAnchors?: Array<string | Buffer> } = {},
 ): Promise<AnchorReport> {
   const path = await import("node:path");
   const fs = await import("node:fs");
@@ -77,7 +77,7 @@ export async function anchorAllAuditChainHeads(
   const digest = Buffer.from(digestHex, "hex");
 
   const result = await issueRfc3161Timestamp({ digest, tsaUrl: input.tsaUrl });
-  const inspection = inspectTimestampResponse(result.responseBuffer, digest);
+  const inspection = inspectTimestampResponse(result.responseBuffer, digest, input.trustAnchors);
 
   const now = input.now ?? new Date();
   const stamp = nowIso(now).replace(/[:.]/g, "-");
@@ -118,6 +118,7 @@ export async function anchorAllAuditChainHeads(
         manifestBytes,
         coveredRequests: manifest.length,
         granted: inspection.granted,
+        cryptographicallyVerified: inspection.cryptographicallyVerified,
       },
       now,
     });

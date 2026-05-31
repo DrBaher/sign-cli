@@ -73,3 +73,31 @@ An agent driving the requester side never sees signer tokens — `request show` 
 - `--require-signer-email <email>` — the resolved signer must match.
 
 All three throw `PRE_SIGN_*_MISMATCH` errors (exit `3`) before the sign attempt is recorded. The audit chain doesn't grow on a failed pre-sign check.
+
+## Verified RFC 3161 timestamps
+
+`audit timestamp` and `audit anchor` obtain an RFC 3161 timestamp token over the audit chain head (or a manifest of all heads) and store it as a re-verifiable artifact. The token is **cryptographically verified**, not merely status-checked:
+
+- The TSA's CMS (`SignedData`) signature over the `TSTInfo` is verified with the signer certificate's public key.
+- The signer certificate must carry `extendedKeyUsage = id-kp-timeStamping` (RFC 3161 §2.3).
+- The token's `messageImprint` must equal the digest we asked to be stamped — a valid token over *different* data is rejected.
+- Optionally, the signer can be required to chain to a supplied trust anchor.
+
+The authoritative result is surfaced as `cryptographicallyVerified` and recorded into the `audit.timestamped` / `audit.anchored` events. The legacy `granted` (PKIStatus) and `containsDigest` fields are retained for compatibility but are **not** trustworthy on their own.
+
+TSA transport is HTTPS-only: `issueRfc3161Timestamp` refuses a plaintext `http://` TSA URL (a timestamp is a trust anchor and must not be downgradeable). A localhost TSA, or `SIGN_ALLOW_INSECURE_TSA=1`, is accepted for trusted local test servers.
+
+## Keyed audit chain (optional HMAC)
+
+By default the audit chain is an unkeyed SHA-256 hash chain: tamper-evident against a naive edit, but because the algorithm is public, anyone with write access to the database file could recompute a fully self-consistent forged chain. For deployments that need integrity against a local-file attacker, configure an HMAC key held **outside** the database:
+
+- `SIGN_AUDIT_HMAC_KEY=<material>` — raw key, or
+- `SIGN_AUDIT_HMAC_KEY_FILE=<path>` — file containing the key.
+
+When a key is set, new audit events are written with `hash_algo = hmac-sha256` and their chain hash is an HMAC over the event body (with the algorithm bound in). Forging a keyed chain then requires the key, not just the algorithm. The design is:
+
+- **Backward compatible.** Existing unkeyed chains hash byte-identically and keep verifying. Each row records its own `hash_algo`, so mixed-history databases verify correctly.
+- **Fail-closed.** A keyed chain cannot be verified without the key — verification fails rather than silently skipping the integrity check.
+- **Downgrade-resistant.** Once a chain has a keyed row, any later unkeyed (legacy) row is flagged as tampering, so an attacker can't "downgrade" the chain back to the forgeable scheme.
+
+Keep the key in your secrets manager / KMS, not alongside the database. Losing the key means keyed history can no longer be verified (the events remain readable; only the integrity proof is lost).

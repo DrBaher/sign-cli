@@ -2,6 +2,8 @@ import { createVerify, X509Certificate } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { sha256, stableStringify } from "./util.js";
+import { computeChainHash } from "./audit.js";
+import { resolveAuditHmacKey, HASH_ALGO_HMAC } from "./audit-key.js";
 
 export type ReceiptFileCheck = {
   name: string;
@@ -40,6 +42,7 @@ type AuditEvent = {
   payload_json: string;
   hash_prev: string | null;
   hash_self: string;
+  hash_algo?: string | null;
   created_at: string;
 };
 
@@ -81,7 +84,9 @@ function checkAuditChain(bundleDir: string, errors: string[]): ReceiptChainCheck
     return null;
   }
   const events = Array.isArray(parsed.events) ? parsed.events : [];
+  const key = resolveAuditHmacKey();
   let previousHash: string | null = null;
+  let seenKeyed = false;
   for (const event of events) {
     if (event.hash_prev !== previousHash) {
       return {
@@ -95,14 +100,26 @@ function checkAuditChain(bundleDir: string, errors: string[]): ReceiptChainCheck
         },
       };
     }
-    const expected = sha256(
-      stableStringify({
-        request_id: parsed.request?.id ?? null,
+    const rowKeyed = event.hash_algo === HASH_ALGO_HMAC;
+    // Downgrade protection mirrors verifyChainRows: no legacy row after a
+    // keyed one, and a keyed row can't be verified without the key.
+    if ((seenKeyed && !rowKeyed) || (rowKeyed && key === null)) {
+      return {
+        events: events.length,
+        ok: false,
+        break: { kind: "hash_self_mismatch", eventId: event.id, expected: rowKeyed ? "(key required)" : "(keyed)", actual: event.hash_self },
+      };
+    }
+    if (rowKeyed) seenKeyed = true;
+    const expected = computeChainHash(
+      {
+        request_id: parsed.request?.id ?? null as unknown as string,
         event_type: event.event_type,
         payload_json: event.payload_json,
         created_at: event.created_at,
         hash_prev: event.hash_prev,
-      }),
+      },
+      rowKeyed ? key : null,
     );
     if (expected !== event.hash_self) {
       return {

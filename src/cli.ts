@@ -269,7 +269,7 @@ sign db postgres-smoke --pg-url postgres://…   (end-to-end async-against-pg in
 sign db backend [--backend sqlite|postgres]   (report the active storage backend)
 sign mcp serve [--read-only true] [--tool <name> ...] [--capability tools|resources|prompts ...] [--emit-events ./mcp.ndjson [--emit-events-redact true]]  (stdio MCP server; --emit-events tees every JSON-RPC message in/out to NDJSON; --emit-events-redact masks token-shaped fields in the log; --capability/--tool/--read-only further restrict the surface)
 sign mcp tools [--format json|markdown]   (one-shot tool catalog with input + output JSON-Schema; markdown renders a docs page)
-sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>] [--rate-limit <rps> [--rate-limit-burst <n>]] [--read-only true]   (HTTP REST surface; --read-only blocks the four lifecycle-mutating routes with FORBIDDEN_READ_ONLY)
+sign serve [--port 4000] [--bind 127.0.0.1] [--auth-token <t>] [--tls-cert ./cert.pem --tls-key ./key.pem [--tls-ca ./ca.pem]] [--web-demo true|<dir>] [--rate-limit <rps> [--rate-limit-burst <n>]] [--trust-proxy true] [--read-only true]   (HTTP REST surface; --read-only blocks the four lifecycle-mutating routes with FORBIDDEN_READ_ONLY; --trust-proxy honours X-Forwarded-For for rate-limit keying behind a trusted proxy)
 sign completion bash|zsh|fish   (print a completion script; pipe into your shell init)
 
 Global flags: [--verbose true]   Env: SIGN_DEBUG=1, SIGN_HTTP_MAX_RETRIES, SIGN_HTTP_BASE_DELAY_MS, SIGN_MAX_DOCUMENT_BYTES, SIGN_ALLOW_ABSOLUTE_DOCS
@@ -2848,7 +2848,8 @@ async function main(): Promise<void> {
         }
       : undefined;
     const readOnly = (flagValue(parsed, "read-only") ?? "false") === "true";
-    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir, rateLimit, readOnly });
+    const trustProxy = (flagValue(parsed, "trust-proxy") ?? "false") === "true";
+    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir, rateLimit, readOnly, trustProxy });
     const shutdown = () => server.close(() => process.exit(0));
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
@@ -2858,6 +2859,7 @@ async function main(): Promise<void> {
       tls: Boolean(tls),
       authRequired: Boolean(authToken),
       readOnly,
+      trustProxy,
       rateLimit: rateLimit ? { refillPerSec: rateLimit.refillPerSec, capacity: rateLimit.capacity } : null,
       webDemo: webDemoDir ? `${tls ? "https" : "http"}://${bind}:${port}/web-demo/index.html` : null,
       // Pull from listMockHttpRoutes() so this banner can't drift from the

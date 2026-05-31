@@ -1986,11 +1986,12 @@ export type AuditEventRow = {
   payload_json: string;
   hash_prev: string | null;
   hash_self: string;
+  hash_algo: string;
   created_at: string;
 };
 
 const LIST_AUDIT_EVENTS_SQL =
-  `SELECT id, event_type, payload_json, hash_prev, hash_self, created_at
+  `SELECT id, event_type, payload_json, hash_prev, hash_self, hash_algo, created_at
    FROM audit_events
    WHERE request_id = ?
    ORDER BY id ASC`;
@@ -3096,7 +3097,7 @@ export async function inspectRequestSignedPdf(
 
 export async function timestampRequestAuditChain(
   db: SqliteDb,
-  input: { requestId: string; tsaUrl?: string; outPath?: string; now?: Date },
+  input: { requestId: string; tsaUrl?: string; outPath?: string; now?: Date; trustAnchors?: Array<string | Buffer> },
 ): Promise<{
   tsaUrl: string;
   hashSelf: string;
@@ -3131,7 +3132,7 @@ export async function timestampRequestAuditChain(
     createdAt: nowIso(now),
   });
 
-  const inspection = inspectTimestampResponse(result.responseBuffer, digest);
+  const inspection = inspectTimestampResponse(result.responseBuffer, digest, input.trustAnchors);
 
   appendAuditEvent(db, {
     requestId: input.requestId,
@@ -3141,6 +3142,8 @@ export async function timestampRequestAuditChain(
       bytes: result.responseBuffer.length,
       hashSelf: lastEvent.hash_self,
       granted: inspection.granted,
+      cryptographicallyVerified: inspection.cryptographicallyVerified,
+      genTime: inspection.verification?.genTime ?? null,
     },
     now,
   });

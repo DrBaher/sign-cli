@@ -1,9 +1,38 @@
+import crypto from "node:crypto";
 import { asBackend, type DbBackend } from "./db-backend.js";
 import type { SqliteDb } from "./db.js";
 import { maybeNotifySignerEvent } from "./notify.js";
 import { notifyResourceChanged } from "./resource-watch.js";
 import { SignCliError } from "./sign-error.js";
 import { nowIso, sha256, stableStringify } from "./util.js";
+import { resolveAuditHmacKey, HASH_ALGO_HMAC, HASH_ALGO_LEGACY } from "./audit-key.js";
+
+// The body every chain entry hashes over. Kept as a named shape so the append
+// and verify paths can't compute it differently.
+type ChainBody = {
+  request_id: string;
+  event_type: string;
+  payload_json: string;
+  created_at: string;
+  hash_prev: string | null;
+};
+
+// Compute a chain entry's hash.
+//
+// Unkeyed (key === null): sha256(stableStringify(body)) — byte-identical to
+// the original scheme, so every pre-existing chain still verifies unchanged.
+//
+// Keyed (key supplied): HMAC-SHA256 over the same body with `hash_algo` bound
+// IN, so a keyed entry's hash can't be reproduced as if it were unkeyed (and
+// vice versa). Forging a keyed chain then requires the key, not just the
+// public algorithm.
+export function computeChainHash(body: ChainBody, key: Buffer | null): string {
+  if (key === null) {
+    return sha256(stableStringify(body));
+  }
+  const keyedBody = stableStringify({ ...body, hash_algo: HASH_ALGO_HMAC });
+  return crypto.createHmac("sha256", key).update(keyedBody).digest("hex");
+}
 
 export type AuditChainBreak =
   | { kind: "hash_self_mismatch"; eventId: number; expected: string; actual: string }
@@ -18,7 +47,7 @@ export type AuditVerificationResult = {
 export function verifyAuditChain(db: SqliteDb | DbBackend, requestId: string): AuditVerificationResult {
   const backend = asBackend(db);
   const rows = backend.prepare(
-    `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, created_at
+    `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, hash_algo, created_at
      FROM audit_events
      WHERE request_id = ?
      ORDER BY id ASC`,
@@ -30,7 +59,7 @@ export function verifyAuditChain(db: SqliteDb | DbBackend, requestId: string): A
 // so it works against the Postgres backend (whose sync prepare() throws).
 export async function verifyAuditChainAsync(backend: DbBackend, requestId: string): Promise<AuditVerificationResult> {
   const rows = await backend.prepareAsync(
-    `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, created_at
+    `SELECT id, request_id, event_type, payload_json, hash_prev, hash_self, hash_algo, created_at
      FROM audit_events
      WHERE request_id = ?
      ORDER BY id ASC`,
@@ -45,11 +74,17 @@ type AuditChainRow = {
   payload_json: string;
   hash_prev: string | null;
   hash_self: string;
+  hash_algo?: string | null;
   created_at: string;
 };
 
 function verifyChainRows(rows: AuditChainRow[]): AuditVerificationResult {
+  const key = resolveAuditHmacKey();
   let previousHash: string | null = null;
+  // Downgrade protection: once any row in the chain is HMAC-keyed, every
+  // subsequent row must also be keyed. Otherwise an attacker who learns the
+  // chain has gone keyed could append legacy (unkeyed, forgeable) rows.
+  let seenKeyed = false;
   for (const row of rows) {
     if (row.hash_prev !== previousHash) {
       return {
@@ -63,14 +98,35 @@ function verifyChainRows(rows: AuditChainRow[]): AuditVerificationResult {
         },
       };
     }
-    const expected = sha256(
-      stableStringify({
+    const rowKeyed = row.hash_algo === HASH_ALGO_HMAC;
+    if (seenKeyed && !rowKeyed) {
+      // A legacy row after a keyed one — chain was downgraded.
+      return {
+        valid: false,
+        events: rows.length,
+        break: { kind: "hash_self_mismatch", eventId: row.id, expected: "(keyed)", actual: row.hash_self },
+      };
+    }
+    if (rowKeyed) seenKeyed = true;
+    // A keyed row can only be verified when the verifier holds the key. If the
+    // chain is keyed but no key is configured, fail closed rather than silently
+    // skipping the integrity check.
+    if (rowKeyed && key === null) {
+      return {
+        valid: false,
+        events: rows.length,
+        break: { kind: "hash_self_mismatch", eventId: row.id, expected: "(key required)", actual: row.hash_self },
+      };
+    }
+    const expected = computeChainHash(
+      {
         request_id: row.request_id,
         event_type: row.event_type,
         payload_json: row.payload_json,
         created_at: row.created_at,
         hash_prev: row.hash_prev,
-      }),
+      },
+      rowKeyed ? key : null,
     );
     if (expected !== row.hash_self) {
       return {
@@ -104,30 +160,40 @@ const APPEND_SELECT_PREV_SQL =
    ORDER BY id DESC
    LIMIT 1`;
 const APPEND_INSERT_SQL =
-  `INSERT INTO audit_events (request_id, event_type, payload_json, hash_prev, hash_self, created_at)
-   VALUES (?, ?, ?, ?, ?, ?)`;
+  `INSERT INTO audit_events (request_id, event_type, payload_json, hash_prev, hash_self, hash_algo, created_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
 // Compute the next chain entry from the previous hash. Pure — no I/O, no
 // notifications. Lifted out so the sync + async append paths share identical
-// hashing logic and can't drift.
+// hashing logic and can't drift. Reads the configured HMAC key (if any) so a
+// keyed deployment writes keyed entries automatically.
 function buildNextChainEntry(input: AuditEventInput, prevHash: string | null): {
   hashPrev: string | null;
   hashSelf: string;
+  hashAlgo: string;
   createdAt: string;
   payloadJson: string;
 } {
   const createdAt = nowIso(input.now);
   const payloadJson = stableStringify(input.payload);
-  const hashSelf = sha256(
-    stableStringify({
+  const key = resolveAuditHmacKey();
+  const hashSelf = computeChainHash(
+    {
       request_id: input.requestId,
       event_type: input.eventType,
       payload_json: payloadJson,
       created_at: createdAt,
       hash_prev: prevHash,
-    }),
+    },
+    key,
   );
-  return { hashPrev: prevHash, hashSelf, createdAt, payloadJson };
+  return {
+    hashPrev: prevHash,
+    hashSelf,
+    hashAlgo: key === null ? HASH_ALGO_LEGACY : HASH_ALGO_HMAC,
+    createdAt,
+    payloadJson,
+  };
 }
 
 function emitPostAppendNotifications(
@@ -158,6 +224,7 @@ export function appendAuditEvent(db: SqliteDb, input: AuditEventInput): {
     entry.payloadJson,
     entry.hashPrev,
     entry.hashSelf,
+    entry.hashAlgo,
     entry.createdAt,
   );
   emitPostAppendNotifications(input, entry);
@@ -180,6 +247,7 @@ export async function appendAuditEventAsync(
     entry.payloadJson,
     entry.hashPrev,
     entry.hashSelf,
+    entry.hashAlgo,
     entry.createdAt,
   );
   emitPostAppendNotifications(input, entry);

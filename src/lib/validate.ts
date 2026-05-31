@@ -40,6 +40,20 @@ export function validateReturnUrl(url: string): void {
   if (parsed.protocol === "http:" && !isLocalhost) {
     throw new Error(`--return-url must use https:// (got "${parsed.protocol}//${parsed.hostname}"). Localhost is allowed for development.`);
   }
+  // Optional host allowlist. By default any https host is accepted (the
+  // return URL is where the signer's browser lands after signing). Operators
+  // who want to prevent an agent from steering signers to an arbitrary domain
+  // can pin a comma-separated allowlist via SIGN_RETURN_URL_ALLOWED_HOSTS;
+  // hostnames match exactly (no wildcard), localhost is always allowed.
+  const allowList = (process.env.SIGN_RETURN_URL_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowList.length > 0 && !isLocalhost && !allowList.includes(parsed.hostname.toLowerCase())) {
+    throw new Error(
+      `--return-url host "${parsed.hostname}" is not in SIGN_RETURN_URL_ALLOWED_HOSTS (${allowList.join(", ")}).`,
+    );
+  }
 }
 
 export type DocumentPathRule = {

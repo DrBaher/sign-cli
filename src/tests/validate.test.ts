@@ -67,6 +67,22 @@ test("validateReturnUrl rejects file: javascript: data: and non-localhost http",
   assert.throws(() => validateReturnUrl("not-a-url"), /not a valid URL/);
 });
 
+test("validateReturnUrl enforces SIGN_RETURN_URL_ALLOWED_HOSTS when set", () => {
+  const prev = process.env.SIGN_RETURN_URL_ALLOWED_HOSTS;
+  process.env.SIGN_RETURN_URL_ALLOWED_HOSTS = "app.acme.com, portal.acme.com";
+  try {
+    // Allowed hosts pass; localhost always passes regardless of the list.
+    validateReturnUrl("https://app.acme.com/done");
+    validateReturnUrl("https://portal.acme.com/done");
+    validateReturnUrl("http://localhost:3000/done");
+    // A host not on the list is rejected even though it's https.
+    assert.throws(() => validateReturnUrl("https://evil.example.com/x"), /not in SIGN_RETURN_URL_ALLOWED_HOSTS/);
+  } finally {
+    if (prev === undefined) delete process.env.SIGN_RETURN_URL_ALLOWED_HOSTS;
+    else process.env.SIGN_RETURN_URL_ALLOWED_HOSTS = prev;
+  }
+});
+
 test("validateDocumentPath rejects paths outside cwd unless overridden", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "doc-cwd-"));
   const insidePath = path.join(dir, "ok.pdf");
