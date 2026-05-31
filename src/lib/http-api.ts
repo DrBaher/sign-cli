@@ -23,12 +23,17 @@ import { renderPrometheusMetrics } from "./prom-metrics.js";
 import { TokenBucketLimiter } from "./rate-limit.js";
 import { validateDocumentPath, validateOutputPath } from "./validate.js";
 
-function clientKey(req: http.IncomingMessage): string {
-  // Trust X-Forwarded-For if present (operators terminating TLS at a load
-  // balancer rely on it). Otherwise fall back to the socket peer address.
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0].trim();
-  if (Array.isArray(fwd) && fwd.length > 0) return fwd[0].split(",")[0].trim();
+function clientKey(req: http.IncomingMessage, trustProxy: boolean): string {
+  // X-Forwarded-For is client-controlled and only meaningful when a trusted
+  // reverse proxy / load balancer sets it. Honour it ONLY when the operator
+  // opted in via --trust-proxy; otherwise an attacker could rotate the header
+  // per request to mint a fresh rate-limit bucket each time and defeat the
+  // limiter. Default: key on the actual socket peer address.
+  if (trustProxy) {
+    const fwd = req.headers["x-forwarded-for"];
+    if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0].trim();
+    if (Array.isArray(fwd) && fwd.length > 0) return fwd[0].split(",")[0].trim();
+  }
   return req.socket.remoteAddress ?? "unknown";
 }
 
@@ -394,6 +399,10 @@ export type HttpServerOptions = {
   // one token from the requester's bucket; over-budget requests get a 429
   // with a Retry-After header.
   rateLimit?: { capacity: number; refillPerSec: number };
+  // Trust the X-Forwarded-For header for the rate-limit client key. Only set
+  // this when the server sits behind a reverse proxy you control that sets
+  // the header — otherwise clients can spoof it to evade rate limiting.
+  trustProxy?: boolean;
   // When true, the four request-mutating routes (sign, decline, reissue-token,
   // request/receipt) return 403 with code FORBIDDEN_READ_ONLY. Useful for
   // compliance read-only views or for parking a clone of production behind a
@@ -489,7 +498,7 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
     }
 
     if (limiter) {
-      const decision = limiter.take(clientKey(req));
+      const decision = limiter.take(clientKey(req, Boolean(opts.trustProxy)));
       res.setHeader("x-ratelimit-limit", String(decision.capacity));
       res.setHeader("x-ratelimit-remaining", String(decision.remaining));
       if (!decision.allowed) {
