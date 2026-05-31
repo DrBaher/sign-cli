@@ -71,8 +71,8 @@ test("appendAuditEventAsync against a PostgresBackend issues the right SQL with 
     assert.ok(!call.text.includes("?"), `query should not contain '?' after translation: ${call.text}`);
     assert.ok(/\$1/.test(call.text), `query should reference $1: ${call.text}`);
   }
-  // The INSERT receives 6 params (request_id, event_type, payload_json,
-  // hash_prev, hash_self, created_at).
+  // The INSERT receives 7 params (request_id, event_type, payload_json,
+  // hash_prev, hash_self, hash_algo, created_at).
   const insertCall = seen.find((c) => c.text.includes("INSERT"));
-  assert.equal(insertCall!.params!.length, 6);
+  assert.equal(insertCall!.params!.length, 7);
 });

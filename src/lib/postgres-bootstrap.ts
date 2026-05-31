@@ -56,8 +56,10 @@ export const POSTGRES_BOOTSTRAP_STATEMENTS: ReadonlyArray<string> = [
      payload_json TEXT NOT NULL,
      hash_prev TEXT,
      hash_self TEXT NOT NULL,
+     hash_algo TEXT NOT NULL DEFAULT 'sha256',
      created_at TEXT NOT NULL
    )`,
+  `ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS hash_algo TEXT NOT NULL DEFAULT 'sha256'`,
   `CREATE TABLE IF NOT EXISTS artifacts (
      id TEXT PRIMARY KEY,
      request_id TEXT NOT NULL REFERENCES requests(id),

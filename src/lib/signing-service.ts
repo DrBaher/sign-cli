@@ -1986,11 +1986,12 @@ export type AuditEventRow = {
   payload_json: string;
   hash_prev: string | null;
   hash_self: string;
+  hash_algo: string;
   created_at: string;
 };
 
 const LIST_AUDIT_EVENTS_SQL =
-  `SELECT id, event_type, payload_json, hash_prev, hash_self, created_at
+  `SELECT id, event_type, payload_json, hash_prev, hash_self, hash_algo, created_at
    FROM audit_events
    WHERE request_id = ?
    ORDER BY id ASC`;

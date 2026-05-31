@@ -88,6 +88,7 @@ export function openDatabase(dbPath: string): SqliteDb {
       payload_json TEXT NOT NULL,
       hash_prev TEXT,
       hash_self TEXT NOT NULL,
+      hash_algo TEXT NOT NULL DEFAULT 'sha256',
       created_at TEXT NOT NULL,
       FOREIGN KEY (request_id) REFERENCES requests(id)
     );
@@ -157,6 +158,11 @@ export function openDatabase(dbPath: string): SqliteDb {
   }
   if (!hasColumn(db, "requests", "prefills_json")) {
     db.exec("ALTER TABLE requests ADD COLUMN prefills_json TEXT");
+  }
+  if (!hasColumn(db, "audit_events", "hash_algo")) {
+    // Existing rows were written with the unkeyed SHA-256 scheme; default
+    // them to 'sha256' so verifyChainRows keeps validating them unchanged.
+    db.exec("ALTER TABLE audit_events ADD COLUMN hash_algo TEXT NOT NULL DEFAULT 'sha256'");
   }
 
   installAuditAppendOnlyTriggers(db);
