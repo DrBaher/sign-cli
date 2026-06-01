@@ -225,12 +225,12 @@ any other output:
 |---|---|
 | `via --provider flag` | the `--provider` CLI flag was set |
 | `via SIGN_PROVIDER env` | env var was set, no flag |
-| `default — no flag, no SIGN_PROVIDER set` | nothing was set; fell back to `dropbox` |
+| `default local — no flag, no SIGN_PROVIDER set` | nothing was set; fell back to the offline `local` provider |
 
 ### Resolution order
 
 ```
---provider flag  >  SIGN_PROVIDER env  >  default (dropbox)
+--provider flag  >  SIGN_PROVIDER env  >  default (local)
 ```
 
 ### Strict mode

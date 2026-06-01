@@ -13,7 +13,7 @@ JWT-based auth with user impersonation + an RSA private key file.
 
 ## Daily usage
 
-1. Keep `dropbox` as the default provider, or set `SIGN_PROVIDER=docusign` to flip it.
+1. Set `SIGN_PROVIDER=docusign` to make DocuSign the default for every command (otherwise the built-in default is the offline `local` provider).
 2. For per-request control, add `--provider docusign` only on DocuSign flows.
 3. Create + approve the request, then send.
 4. Use `request watch` for completion and optional auto-download.

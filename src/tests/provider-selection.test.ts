@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { normalizeProviderStatus, resolveWatchTerminalStatus } from "../lib/signing-service.js";
 import { resolveSignProvider } from "../lib/providers.js";
 
-test("resolveSignProvider defaults to dropbox", () => {
+test("resolveSignProvider defaults to local (offline, no credentials)", () => {
   const original = process.env.SIGN_PROVIDER;
   delete process.env.SIGN_PROVIDER;
 
   try {
-    assert.equal(resolveSignProvider(), "dropbox");
+    assert.equal(resolveSignProvider(), "local");
   } finally {
     if (original === undefined) {
       delete process.env.SIGN_PROVIDER;

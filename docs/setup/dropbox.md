@@ -27,7 +27,7 @@ DROPBOX_SIGN_TEST_MODE=true
 DROPBOX_SIGN_CLIENT_ID=your_client_id_for_embedded
 ```
 
-`SIGN_PROVIDER` defaults to `dropbox`. Every command also accepts `--provider dropbox|docusign|signwell`; flag wins over env. Every provider-touching command echoes `[sign] resolved provider: <p> (<source>)` to stderr so you never sign against the wrong account by accident.
+Set `SIGN_PROVIDER=dropbox` (as shown above) to route commands through Dropbox Sign — otherwise the built-in default is the offline `local` provider. Every command also accepts `--provider dropbox|docusign|signwell|local`; flag wins over env. Every provider-touching command echoes `[sign] resolved provider: <p> (<source>)` to stderr so you never sign against the wrong account by accident.
 
 For production scripts, pass `--strict-provider true` (or set `SIGN_STRICT_PROVIDER=true`) to refuse mismatches between the resolved provider and the request's persisted provider. Catches the "I created the request as `dropbox` but I'm about to sign with `--provider local`" footgun. Error code: `STRICT_PROVIDER_MISMATCH`.
 

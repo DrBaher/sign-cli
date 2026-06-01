@@ -44,10 +44,10 @@ test("resolveSignProviderWithSource: env var used when no flag or fallback", () 
   assert.equal(r.source, "env");
 });
 
-test("resolveSignProviderWithSource: default 'dropbox' when nothing set", () => {
+test("resolveSignProviderWithSource: default 'local' when nothing set", () => {
   const r = withEnv({ SIGN_PROVIDER: undefined }, () =>
     resolveSignProviderWithSource());
-  assert.equal(r.provider, "dropbox");
+  assert.equal(r.provider, "local");
   assert.equal(r.source, "default");
 });
 

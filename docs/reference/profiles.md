@@ -169,7 +169,7 @@ produces a value wins**:
 | 2 | Env var | `SIGN_PROVIDER=dropbox` |
 | 3 | Project profile (`./sign-profile.json`) | `{ "provider": "local" }` |
 | 4 | User profile selected by `--profile` / `SIGN_PROFILE` / `defaultProfile` | `profiles.dev.provider = "local"` |
-| 5 (lowest) | Built-in default | `dropbox` |
+| 5 (lowest) | Built-in default | `local` (offline; no credentials) |
 
 This is the **same** spirit as the Item 1 resolution
 (`flag > env > default`), just with two more layers slotted in

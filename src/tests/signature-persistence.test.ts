@@ -50,6 +50,7 @@ test("sendSigningRequest persists Dropbox signature IDs on the request", async (
   try {
     const created = createSigningRequest(db, {
       title: "Contract",
+      provider: "dropbox",
       documentPath,
       signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
       tokenTtlMinutes: 60,
@@ -114,6 +115,7 @@ test("sendEmbeddedSigningRequest persists Dropbox signature IDs on the request",
   try {
     const created = createSigningRequest(db, {
       title: "Embedded Contract",
+      provider: "dropbox",
       documentPath,
       signers: [
         { name: "Alice", email: "alice@example.com", order: 1 },
