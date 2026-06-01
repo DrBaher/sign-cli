@@ -8,6 +8,10 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Built-in default provider is now `local` (offline), not `dropbox`.** When no `--provider` flag, `SIGN_PROVIDER` env, or profile provider is set, commands now resolve to the fully-offline `local` PAdES signer instead of Dropbox Sign. Previously a brand-new user's first mutating command (`request create`/`send`) failed with `DROPBOX_SIGN_API_KEY is not set` — demanding hosted-provider credentials they never configured, despite the product's "no signup, no keys" promise. The resolution order is unchanged (`flag > env > project profile > user profile > built-in default`); only the final fallback changed. Users on a hosted provider via `--provider`, `SIGN_PROVIDER`, or a profile are unaffected. `.env.example` now ships `SIGN_PROVIDER=local`.
+
 ## [0.6.4] — 2026-05-16
 
 Fix-only release. The v0.6.3 npm tarball shipped `mcpName` as `io.github.drbaher/sign-cli` (lowercase), but the official MCP registry namespaces by GitHub login (`DrBaher`) and rejected the publish. v0.6.4 corrects the casing in `package.json` and `server.json` so the registry submission succeeds — every other surface is unchanged.

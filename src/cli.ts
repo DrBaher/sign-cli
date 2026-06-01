@@ -253,7 +253,7 @@ sign demo [--document ./file.pdf] [--out ./demo-bundle/]
 sign selftest [--keep-workspace true]   (in-process E2E smoke; exits 3 on any failure — drop-in for deploy health checks)
 
 Global flags affecting mutating commands:
-  [--provider dropbox|docusign|signwell|local]  (also via SIGN_PROVIDER env; default dropbox)
+  [--provider dropbox|docusign|signwell|local]  (also via SIGN_PROVIDER env; default local — offline, no credentials)
   [--strict-provider true]                      (or SIGN_STRICT_PROVIDER=true; fails if --provider mismatches the persisted provider)
 Every mutating command (create / send / sign) prints a one-line "[sign] resolved provider: <p> (<source>)" banner to stderr and embeds the same in its JSON output under "resolved_provider".
 sign init [--out ./.env]

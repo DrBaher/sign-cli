@@ -67,7 +67,7 @@ Expected banner per run:
 
 | Run | Stderr banner |
 |---|---|
-| 1.1 | `[sign] resolved provider: dropbox (default — no flag, no SIGN_PROVIDER set)` |
+| 1.1 | `[sign] resolved provider: local (default local — no flag, no SIGN_PROVIDER set)` |
 | 1.2 | `[sign] resolved provider: local (via SIGN_PROVIDER env)` |
 | 1.3 | `[sign] resolved provider: local (via --provider flag)` |
 

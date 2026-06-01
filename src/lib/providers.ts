@@ -56,7 +56,12 @@ export function resolveSignProviderWithSource(
       source: profile.layer === "project" ? "profile-project" : "profile-user",
     };
   }
-  return { provider: "dropbox", source: "default" };
+  // No flag, no env, no profile: fall back to the offline `local` provider.
+  // It needs no API keys, signup, or hosted account — matching the product's
+  // core promise ("no signup and no third-party provider"). Defaulting to a
+  // hosted provider here meant a brand-new user's first command died with
+  // "DROPBOX_SIGN_API_KEY is not set" — demanding credentials they never set.
+  return { provider: "local", source: "default" };
 }
 
 /** Human-readable description of where the resolved provider came from. */
@@ -67,7 +72,7 @@ export function describeProviderSource(source: ProviderSource): string {
     case "profile-project":  return "via project sign-profile.json";
     case "profile-user":     return "via active profile";
     case "fallback":         return "persisted from request creation";
-    case "default":          return "default — no flag, no SIGN_PROVIDER set";
+    case "default":          return "default local — no flag, no SIGN_PROVIDER set";
   }
 }
 
