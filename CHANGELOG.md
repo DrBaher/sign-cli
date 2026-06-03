@@ -8,6 +8,24 @@ release.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-03
+
+Build-tooling only — **no runtime or API changes** from 0.7.0. Cut so the SEA
+binary fix lands in a tagged release (the release job builds binaries from the
+tag's checkout, so the 0.7.0 binaries could not be produced retroactively).
+
+### Fixed
+- **`npm run build:sea` now succeeds and produces runnable binaries.** The
+  `postject` injection passed a non-existent `sentinelFusesPath` option, so it
+  defaulted to `POSTJECT_SENTINEL_<hash>` (absent from the Node binary) and failed
+  with "Could not find the sentinel …". It now passes the correct
+  `NODE_SEA_FUSE_<hash>` sentinel. On macOS the inherited code signature, which
+  injection invalidates, is now stripped before injection and ad-hoc re-signed
+  after, so the binary is no longer `SIGKILL`ed at launch.
+- **Release `publish-npm` is now idempotent** — it skips when the version is
+  already on npm, so re-dispatching a release to rebuild artifacts no longer fails
+  on a duplicate-version error.
+
 ## [0.7.0] — 2026-06-03
 
 Security release. PDF signature verification is now genuinely cryptographic, and the MCP/HTTP surfaces are hardened against secret exfiltration, path traversal, and DoS. **Read the "Security — breaking" notes below before upgrading: documents that previously verified `ok` against a forged or non-cryptographic signature will now correctly FAIL, and the MCP HTTP server now binds to loopback by default.** Bundles the offline-`local` provider default from the prior Unreleased entry.
