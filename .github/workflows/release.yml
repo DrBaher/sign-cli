@@ -67,7 +67,16 @@ jobs:
         # No NODE_AUTH_TOKEN — npm mints a short-lived OIDC token via id-token:write.
         # Requires a Trusted Publisher registered on npmjs.com for @drbaher/sign-cli
         # (org DrBaher, repo sign-cli, workflow release.yml, environment blank).
-        run: npm publish --access public --provenance
+        # Idempotent: skip if this exact version is already on npm, so re-dispatching
+        # the release (e.g. to rebuild/attach binaries) doesn't fail on a duplicate.
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::notice::$name@$version already published; skipping publish."
+            exit 0
+          fi
+          npm publish --access public --provenance
 
   package-dist-tarball:
     needs: [guard-version]
