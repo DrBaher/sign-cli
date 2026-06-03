@@ -236,7 +236,7 @@ sign audit anchor --request-id <id>
 sign audit export --request-id <id> --out ./bundle/
 ```
 
-`audit verify` walks the local hash chain. `request verify-signed-pdf` recomputes the SHA-256 over the `/ByteRange` and compares to the `messageDigest` in the embedded PKCS#7 — exit `3` if anything was modified post-signing. `sign pdf inspect` works on any signed PDF (no request id required). `audit anchor` issues a TimeStamp token from a TSA. See [docs/reference/audit-chain.md](docs/reference/audit-chain.md) for the full model.
+`audit verify` walks the local hash chain. `request verify-signed-pdf` recomputes the SHA-256 over the `/ByteRange`, compares it to the `messageDigest` in the embedded PKCS#7, **and verifies the PKCS#7 signature value against the signer certificate's public key (RSA/ECDSA)** — so a forged or tampered signature fails, exit `3`, not just a modified-after-signing one. `sign pdf inspect` works on any signed PDF (no request id required). `audit anchor` issues a TimeStamp token from a TSA. See [docs/reference/audit-chain.md](docs/reference/audit-chain.md) for the full model.
 
 ## Profiles
 
@@ -247,7 +247,7 @@ sign --profile prod request show --request-id <id>
 # Or implicitly via a project-level sign-profile.json (git/npm-style upward discovery)
 ```
 
-Resolution order: flag > env > project profile > user profile > built-in default. Credentials redacted by default in `profile show` (`--show-secrets true` to reveal). See [docs/reference/profiles.md](docs/reference/profiles.md).
+Resolution order: flag > env > project profile > user profile > built-in default. Credentials redacted by default in `profile show` (`--show-secrets true` to reveal). Over the MCP HTTP transport, `show_secrets` is refused unless an `--http-auth-token` is configured (it stays available on stdio MCP and the CLI). See [docs/reference/profiles.md](docs/reference/profiles.md).
 
 ## Doctor
 
