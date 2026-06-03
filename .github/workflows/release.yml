@@ -56,19 +56,18 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          registry-url: "https://registry.npmjs.org"
+          # No registry-url: it writes a placeholder NODE_AUTH_TOKEN into .npmrc
+          # which npm sends instead of minting an OIDC token. Trusted Publishing
+          # needs neither registry-url nor a token.
+      - run: npm i -g npm@latest
       - run: npm ci
       - run: npm run build
       - run: npm test
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN is not set; skipping publish"
-            exit 0
-          fi
-          npm publish --access public --provenance
+      - name: Publish to npm (OIDC Trusted Publishing)
+        # No NODE_AUTH_TOKEN — npm mints a short-lived OIDC token via id-token:write.
+        # Requires a Trusted Publisher registered on npmjs.com for @drbaher/sign-cli
+        # (org DrBaher, repo sign-cli, workflow release.yml, environment blank).
+        run: npm publish --access public --provenance
 
   package-dist-tarball:
     needs: [guard-version]
