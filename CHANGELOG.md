@@ -8,9 +8,26 @@ release.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-03
+
+Security release. PDF signature verification is now genuinely cryptographic, and the MCP/HTTP surfaces are hardened against secret exfiltration, path traversal, and DoS. **Read the "Security — breaking" notes below before upgrading: documents that previously verified `ok` against a forged or non-cryptographic signature will now correctly FAIL, and the MCP HTTP server now binds to loopback by default.** Bundles the offline-`local` provider default from the prior Unreleased entry.
+
+### Security — breaking
+
+- **PDF signature `verify` is now cryptographic.** `inspectPdfSignatures` previously only checked that the embedded `messageDigest` equalled the SHA-256 of the signed byte range — it never verified the PKCS#7/CMS signature value against the signer certificate's public key. A fully forged PKCS#7 (no private key) reported `verdict=ok` / exit 0. Verification now runs the real RSA/ECDSA `createVerify` against the signed attributes and binds the cert to the signature. **Forged or non-cryptographically-signed PDFs that used to pass will now fail (`verdict` ≠ `ok`, non-zero exit).** This is the intended correction of a core-promise defect; if a previously-"valid" PDF now fails, it was never cryptographically signed.
+- **MCP HTTP server now binds `127.0.0.1` by default (was `0.0.0.0`).** `sign mcp serve --http` no longer listens on all interfaces unless you pass `--http-bind 0.0.0.0` explicitly. The hosted container entrypoint (`deploy/entrypoint-mcp-http.sh`) already passes `--http-bind 0.0.0.0`, so Railway/hosted deployments are unaffected; local/embedded runs are no longer exposed to the LAN by default.
+- **`profile_show` no longer returns secrets without authentication.** The MCP `profile_show {show_secrets:true}` tool (and the HTTP path) now require an authenticated session; over HTTP that means a configured `--http-auth-token`. Previously provider API keys were reachable unauthenticated on the default bind.
+- **`signer_fetch_document` absolute output paths are gated.** Writing a fetched document to an absolute path now requires `SIGN_ALLOW_ABSOLUTE_DOCS=1` and is refused entirely in `--read-only` mode; relative paths resolve under the working dir as before.
+
+### Fixed
+
+- Receipt/bundle verification no longer trusts an unpinned re-signed head: trust anchors are checked so a re-signed bundle can't verify `ok` against a different key.
+- Hardened several MCP/HTTP read paths against path-traversal arbitrary-read oracles (bundle/receipt fetch), tightened webhook pre-auth DB lookups and 500-vs-400 error mapping, and bounded the HTTP rate-limiter (XFF-spoof bypass + unbounded-bucket DoS).
+
 ### Changed
 
 - **Built-in default provider is now `local` (offline), not `dropbox`.** When no `--provider` flag, `SIGN_PROVIDER` env, or profile provider is set, commands now resolve to the fully-offline `local` PAdES signer instead of Dropbox Sign. Previously a brand-new user's first mutating command (`request create`/`send`) failed with `DROPBOX_SIGN_API_KEY is not set` — demanding hosted-provider credentials they never configured, despite the product's "no signup, no keys" promise. The resolution order is unchanged (`flag > env > project profile > user profile > built-in default`); only the final fallback changed. Users on a hosted provider via `--provider`, `SIGN_PROVIDER`, or a profile are unaffected. `.env.example` now ships `SIGN_PROVIDER=local`.
+- `SIGN_CLI_VERSION` (drives `--version` and `--catalog`) corrected to track the package version; it had drifted to `0.6.4` while the published package was `0.6.5`.
 
 ## [0.6.4] — 2026-05-16
 
