@@ -1,5 +1,15 @@
 import { readFile } from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import { hmacSha256 } from "./util.js";
+
+/** Constant-time hex/string comparison after a length check. Avoids leaking
+ *  the expected HMAC via early-exit timing on `===`. */
+function timingSafeStringEq(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8");
+  const bBuf = Buffer.from(b, "utf8");
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
 
 export type SignWellWebhookPayload = {
   event?: {
@@ -70,7 +80,7 @@ export function verifySignWellCallback(
     return false;
   }
   const computed = hmacSha256(secret, `${eventTime}${eventType}`);
-  return computed === String(eventHash);
+  return timingSafeStringEq(computed, String(eventHash));
 }
 
 export function normalizeSignWellEventType(eventType: string | undefined | null): string {

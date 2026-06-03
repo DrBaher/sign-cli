@@ -33,6 +33,11 @@ export type McpEmitProgress = (progress: { progress: number; total?: number; mes
 
 export type ToolContext = {
   emitProgress?: McpEmitProgress;
+  // When false, tools must refuse to return plaintext secrets (e.g.
+  // profile_show show_secrets=true). Set true on the trusted stdio transport
+  // and on the HTTP transport ONLY when a bearer auth token is configured —
+  // so an unauthenticated network client can never exfiltrate provider keys.
+  secretsAllowed?: boolean;
 };
 
 type ToolHandler = (
@@ -335,6 +340,15 @@ const TOOLS: ToolDefinition[] = [
       const provider = resolveProviderArg(args);
       const intervalMs = typeof args.interval_ms === "number" ? args.interval_ms : 1000;
       const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : 30_000;
+      // Validate here so the error is worded in MCP arg names and carries a
+      // structured INVALID_ARGS code (the underlying watcher throws too, but
+      // its message references the CLI flag names).
+      if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new SignCliError({ code: "INVALID_ARGS", message: "interval_ms must be a positive number." });
+      }
+      if (typeof args.timeout_ms === "number" && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+        throw new SignCliError({ code: "INVALID_ARGS", message: "timeout_ms must be a positive number when provided." });
+      }
       return watchSigningRequestStatus(db, {
         requestId: requiredStr(args, "request_id"),
         provider,
@@ -547,11 +561,22 @@ const TOOLS: ToolDefinition[] = [
         credentials: { type: ["object", "null"] },
       },
     },
-    handler: async (_db, args) => {
+    handler: async (_db, args, toolCtx) => {
       const { defaultUserFilePath, loadProfileContext, readUserFile, redactCredentials, resolveProfileView } =
         await import("./profiles.js");
       const userFilePath = defaultUserFilePath();
       const showSecrets = Boolean(args.show_secrets);
+      // Refuse to return plaintext provider API keys unless the transport is
+      // trusted (stdio, or HTTP behind a bearer auth token). Prevents an
+      // unauthenticated network client from exfiltrating credentials via
+      // profile_show {show_secrets:true}.
+      if (showSecrets && toolCtx.secretsAllowed !== true) {
+        throw new SignCliError({
+          code: "FORBIDDEN",
+          message: "profile_show show_secrets=true is refused on this transport.",
+          hint: "Run the MCP server over stdio, or set --http-auth-token to require bearer auth before requesting secrets.",
+        });
+      }
       const name = str(args, "name");
       if (name) {
         const file = readUserFile(userFilePath);
@@ -1264,6 +1289,10 @@ export type McpDispatchInput = {
   // matching list/read methods are answered. Disabled capabilities respond
   // with a JSON-RPC method-not-found shaped error envelope.
   capabilities?: ReadonlySet<"tools" | "resources" | "prompts">;
+  // Forwarded to ToolContext.secretsAllowed — gates plaintext-secret tool
+  // outputs (profile_show show_secrets). Trusted on stdio; on HTTP only when
+  // a bearer auth token is configured.
+  secretsAllowed?: boolean;
 };
 
 export type McpDispatchResult = { kind: "result"; value: unknown } | { kind: "ignored" };
@@ -1285,6 +1314,11 @@ export const READ_ONLY_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   "document",
   "signer_reissue_token",
   "request_receipt",
+  // signer_fetch_document is read-shaped by name but it MUTATES state: it
+  // appends a request.signer_fetched_document audit row and (with out_path)
+  // writes a file to disk. Block it in --read-only mode like the other
+  // mutating tools.
+  "signer_fetch_document",
 ]);
 
 export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchResult> {
@@ -1416,7 +1450,10 @@ export async function dispatchMcp(input: McpDispatchInput): Promise<McpDispatchR
       };
     }
     try {
-      const result = await tool.handler(db, toolArgs, { emitProgress: input.emitProgress });
+      const result = await tool.handler(db, toolArgs, {
+        emitProgress: input.emitProgress,
+        secretsAllowed: input.secretsAllowed,
+      });
       return {
         kind: "result",
         value: {
@@ -1620,6 +1657,10 @@ export async function serveMcpStdio(opts: {
         readOnly: opts.readOnly,
         allowedTools: opts.allowedTools,
         capabilities: opts.capabilities,
+        // stdio is a local, trusted, single-operator transport — plaintext
+        // secrets are allowed here (the operator already has filesystem access
+        // to the same credentials).
+        secretsAllowed: true,
       });
       if (dispatch.kind === "ignored" || isNotification) continue;
       writeMessageTeed(opts.output, { jsonrpc: JSON_RPC_VERSION, id, result: dispatch.value });
@@ -1693,7 +1734,11 @@ export type ServeMcpHttpOptions = {
 // audit_verify — is handled here.
 export function startMcpHttpServer(opts: ServeMcpHttpOptions): http.Server {
   const endpointPath = opts.endpointPath ?? "/mcp";
-  const bind = opts.bind ?? "0.0.0.0";
+  // Default to loopback. Binding to 0.0.0.0 exposes the MCP endpoint to the
+  // whole network; without an auth token that is an open, unauthenticated
+  // control surface. Callers that intentionally want to expose it (e.g.
+  // containerized hosting) must pass an explicit bind address.
+  const bind = opts.bind ?? "127.0.0.1";
   let emitStream: WriteStream | null = null;
   if (opts.emitEventsPath) {
     const resolved = path.resolve(opts.emitEventsPath);
@@ -1787,16 +1832,24 @@ export function startMcpHttpServer(opts: ServeMcpHttpOptions): http.Server {
     // Buffer the body (small, JSON-RPC bodies are kilobytes at most).
     const chunks: Buffer[] = [];
     let total = 0;
+    let bodyTooLarge = false;
     const MAX_BODY = 1024 * 1024; // 1 MiB
     req.on("data", (chunk: Buffer) => {
+      if (bodyTooLarge) return;
       total += chunk.length;
       if (total > MAX_BODY) {
+        // Reply with a structured JSON-RPC error + HTTP 413 instead of
+        // silently dropping the connection, so the client gets a usable
+        // error rather than a hung/aborted request.
+        bodyTooLarge = true;
+        writeJsonRpcError(res, null, -32600, "Request body too large (max 1 MiB).", 413);
         req.destroy();
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (bodyTooLarge) return;
       void (async () => {
         const raw = Buffer.concat(chunks).toString("utf8");
         let message: JsonRpcMessage;
@@ -1830,6 +1883,11 @@ export function startMcpHttpServer(opts: ServeMcpHttpOptions): http.Server {
             readOnly: opts.readOnly,
             allowedTools: opts.allowedTools,
             capabilities: opts.capabilities,
+            // Over HTTP, plaintext secrets are only allowed when a bearer auth
+            // token is configured (we reached here past the 401 gate, so the
+            // caller is authenticated). Without a token the transport is open
+            // and must never hand back provider keys.
+            secretsAllowed: Boolean(opts.authToken),
             // emitProgress is intentionally omitted — Streamable HTTP would
             // need an SSE response for progress, which this minimal
             // implementation doesn't offer.

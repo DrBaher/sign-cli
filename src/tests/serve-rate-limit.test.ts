@@ -68,6 +68,77 @@ test("startHttpApiServer with --rate-limit returns 429 once the bucket is exhaus
   }
 });
 
+test("rate-limit ignores X-Forwarded-For by default — spoofing it cannot bypass the per-socket limit", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  // capacity=2, slow refill. Without trustProxy, all requests over one socket
+  // share a bucket regardless of XFF, so request #3 is limited even with a
+  // fresh forged XFF on each.
+  const server = startHttpApiServer({ db, port: 0, rateLimit: { capacity: 2, refillPerSec: 0.01 } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  try {
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    const url = `http://127.0.0.1:${port}/v1/health`;
+    const a = await fetch(url, { headers: { "x-forwarded-for": "1.1.1.1" } });
+    const b = await fetch(url, { headers: { "x-forwarded-for": "2.2.2.2" } });
+    const c = await fetch(url, { headers: { "x-forwarded-for": "3.3.3.3" } });
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    assert.equal(c.status, 429, "spoofed XFF must not buy a fresh bucket");
+  } finally {
+    await new Promise((resolve) => server.close(() => resolve(undefined)));
+    db.close();
+    cleanup();
+  }
+});
+
+test("rate-limit honors X-Forwarded-For only with trustProxy=true", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  const server = startHttpApiServer({ db, port: 0, trustProxy: true, rateLimit: { capacity: 1, refillPerSec: 0.01 } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  try {
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    const url = `http://127.0.0.1:${port}/v1/health`;
+    // Distinct XFF hops get distinct buckets when we trust the proxy.
+    const a = await fetch(url, { headers: { "x-forwarded-for": "10.0.0.1" } });
+    const b = await fetch(url, { headers: { "x-forwarded-for": "10.0.0.2" } });
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    // Reusing a hop that already spent its single token → limited.
+    const aAgain = await fetch(url, { headers: { "x-forwarded-for": "10.0.0.1" } });
+    assert.equal(aAgain.status, 429);
+  } finally {
+    await new Promise((resolve) => server.close(() => resolve(undefined)));
+    db.close();
+    cleanup();
+  }
+});
+
+test("startHttpApiServer bearer auth: wrong token → 401, correct token → 200 (constant-time compare)", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  const server = startHttpApiServer({ db, port: 0, authToken: "s3cret-token" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  try {
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    const url = `http://127.0.0.1:${port}/v1/health`;
+    const noAuth = await fetch(url);
+    assert.equal(noAuth.status, 401);
+    const wrong = await fetch(url, { headers: { authorization: "Bearer wrong" } });
+    assert.equal(wrong.status, 401);
+    const right = await fetch(url, { headers: { authorization: "Bearer s3cret-token" } });
+    assert.equal(right.status, 200);
+  } finally {
+    await new Promise((resolve) => server.close(() => resolve(undefined)));
+    db.close();
+    cleanup();
+  }
+});
+
 test("startHttpApiServer rate-limit applies before web-demo static serving (so the demo route is gated too — same fairness)", async () => {
   // We deliberately did NOT bypass the limiter for /web-demo/* in the
   // implementation, since static-file fetches still hit the same socket. The

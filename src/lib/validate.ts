@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { SignCliError } from "./sign-error.js";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 
@@ -22,7 +23,7 @@ export function resolveMaxDocumentBytes(): number {
 
 export function validateEmail(email: string, label = "email"): void {
   if (!EMAIL_REGEX.test(email)) {
-    throw new Error(`${label} is not a valid email address: "${email}"`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `${label} is not a valid email address: "${email}"` });
   }
 }
 
@@ -31,14 +32,14 @@ export function validateReturnUrl(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`--return-url is not a valid URL: "${url}"`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `--return-url is not a valid URL: "${url}"` });
   }
   if (parsed.protocol === "javascript:" || parsed.protocol === "file:" || parsed.protocol === "data:") {
-    throw new Error(`--return-url protocol "${parsed.protocol}" is not allowed.`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `--return-url protocol "${parsed.protocol}" is not allowed.` });
   }
   const isLocalhost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
   if (parsed.protocol === "http:" && !isLocalhost) {
-    throw new Error(`--return-url must use https:// (got "${parsed.protocol}//${parsed.hostname}"). Localhost is allowed for development.`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `--return-url must use https:// (got "${parsed.protocol}//${parsed.hostname}"). Localhost is allowed for development.` });
   }
 }
 
@@ -77,10 +78,12 @@ export function validateConfigPath(
   // Otherwise: require the opt-in.
   const allow = (process.env.SIGN_ALLOW_ABSOLUTE_DOCS ?? "").toLowerCase();
   if (["1", "true", "yes"].includes(allow)) return resolved;
-  throw new Error(
-    `Config path "${rawPath}" is outside both $HOME (${home}) and CWD (${cwd}). ` +
-    `Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
-  );
+  throw new SignCliError({
+    code: "INVALID_ARGS",
+    message:
+      `Config path "${rawPath}" is outside both $HOME (${home}) and CWD (${cwd}). ` +
+      `Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
+  });
 }
 
 /** Output-path counterpart to validateDocumentPath. Only enforces the
@@ -101,9 +104,10 @@ export function validateOutputPath(
   const cwdResolved = path.resolve(cwd);
   const relative = path.relative(cwdResolved, resolved);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(
-      `Output path escapes the working directory: "${rawPath}". Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
-    );
+    throw new SignCliError({
+      code: "INVALID_ARGS",
+      message: `Output path escapes the working directory: "${rawPath}". Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
+    });
   }
   return resolved;
 }
@@ -118,9 +122,10 @@ export function validateDocumentPath(rawPath: string, rule: DocumentPathRule = {
       const cwdResolved = path.resolve(cwd);
       const relative = path.relative(cwdResolved, resolved);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new Error(
-          `Document path escapes the working directory: "${rawPath}". Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
-        );
+        throw new SignCliError({
+          code: "INVALID_ARGS",
+          message: `Document path escapes the working directory: "${rawPath}". Set SIGN_ALLOW_ABSOLUTE_DOCS=1 to override.`,
+        });
       }
     }
   }
@@ -128,32 +133,32 @@ export function validateDocumentPath(rawPath: string, rule: DocumentPathRule = {
   try {
     stats = statSync(resolved);
   } catch {
-    throw new Error(`Document not found: "${rawPath}" (resolved to "${resolved}").`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Document not found: "${rawPath}" (resolved to "${resolved}").` });
   }
   if (!stats.isFile()) {
-    throw new Error(`Document path is not a file: "${rawPath}".`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Document path is not a file: "${rawPath}".` });
   }
   const limit = rule.maxBytes ?? resolveMaxDocumentBytes();
   if (stats.size > limit) {
-    throw new Error(`Document "${rawPath}" is ${stats.size} bytes, exceeding the limit of ${limit} bytes (override with SIGN_MAX_DOCUMENT_BYTES).`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Document "${rawPath}" is ${stats.size} bytes, exceeding the limit of ${limit} bytes (override with SIGN_MAX_DOCUMENT_BYTES).` });
   }
   return { resolved, bytes: stats.size };
 }
 
 export function validateSignerCount(count: number, maxSigners: number = DEFAULTS.maxSigners): void {
   if (count > maxSigners) {
-    throw new Error(`Too many signers: ${count} (limit ${maxSigners}).`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Too many signers: ${count} (limit ${maxSigners}).` });
   }
 }
 
 export function validateFieldCount(count: number, maxFields: number = DEFAULTS.maxFields): void {
   if (count > maxFields) {
-    throw new Error(`Too many --field entries: ${count} (limit ${maxFields}).`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Too many --field entries: ${count} (limit ${maxFields}).` });
   }
 }
 
 export function validateBulkRowCount(count: number, maxBulkRows: number = DEFAULTS.maxBulkRows): void {
   if (count > maxBulkRows) {
-    throw new Error(`Too many CSV rows: ${count} (limit ${maxBulkRows}).`);
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Too many CSV rows: ${count} (limit ${maxBulkRows}).` });
   }
 }

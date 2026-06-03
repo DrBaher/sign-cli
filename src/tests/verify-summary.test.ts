@@ -14,6 +14,8 @@ const finding = (overrides: Partial<PdfSignatureFinding> = {}): PdfSignatureFind
   byteRange: [0, 100, 200, 100],
   byteRangeDigest: "deadbeef",
   messageDigestMatches: true,
+  contentDigestMatches: true,
+  signatureValueVerified: true,
   messageDigest: "abcd",
   digestAlgorithm: "sha256",
   signatureAlgorithm: "rsa-sha256",

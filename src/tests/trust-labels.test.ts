@@ -19,6 +19,8 @@ const finding = (signers: ReturnType<typeof cert>[]): PdfSignatureFinding => ({
   byteRange: [0, 100, 200, 100],
   byteRangeDigest: "x",
   messageDigestMatches: true,
+  contentDigestMatches: true,
+  signatureValueVerified: true,
   messageDigest: "y",
   digestAlgorithm: "sha256",
   signatureAlgorithm: "rsa-sha256",

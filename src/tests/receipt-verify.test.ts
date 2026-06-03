@@ -142,3 +142,69 @@ test("verifyRequestReceiptBundle reports a non-existent directory cleanly", () =
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((msg) => /does not exist/.test(msg)));
 });
+
+test("verifyRequestReceiptBundle refuses traversal/absolute file names in the manifest (no crash, marked failed)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "sign-receipt-traversal-"));
+  try {
+    // A hostile manifest pointing at /etc/passwd and ../../secret, plus a
+    // non-string name. None of these should be read; verification must fail
+    // cleanly rather than throwing or following the paths.
+    writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({
+      requestId: "x",
+      files: [
+        { name: "/etc/passwd", sha256: "0".repeat(64), bytes: 1 },
+        { name: "../../escape.txt", sha256: "0".repeat(64), bytes: 1 },
+        { name: 42 as unknown as string, sha256: "0".repeat(64), bytes: 1 },
+      ],
+    }));
+    writeFileSync(path.join(dir, "manifest.sig"), Buffer.alloc(8));
+    writeFileSync(path.join(dir, "manifest.cert.pem"), "not a cert");
+    const result = verifyRequestReceiptBundle(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((m) => /escapes the bundle directory/.test(m)), "absolute path must be refused");
+    assert.ok(result.errors.some((m) => /non-string `name`/.test(m)), "non-string name must be flagged, not crash");
+    // The /etc/passwd contents must NOT have been read into any check.
+    assert.ok(result.files.every((f) => f.actual === ""), "no escaping file should have been hashed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyRequestReceiptBundle: --expect-fingerprint pins the signer; non-pinned ok carries a trust caveat", async () => {
+  await withScopedLocalStorage(async () => {
+    const { dbPath, cleanup } = makeTempDb();
+    const db = createDb(dbPath);
+    const outDir = mkdtempSync(path.join(os.tmpdir(), "sign-receipt-pin-"));
+    try {
+      const created = createSigningRequest(db, {
+        title: "Pin test",
+        documentPath: makeFixturePdf(outDir),
+        signers: [{ name: "Alice", email: "alice@example.com", order: 1 }],
+        tokenTtlMinutes: 30,
+        provider: "local",
+        autoApprove: true,
+      });
+      await sendSigningRequest(db, { requestId: created.requestId, provider: "local", testMode: true });
+      const token = created.tokens.find((t) => t.signer.email === "alice@example.com")!.token;
+      signSigningRequest(db, { requestId: created.requestId, token });
+      const bundle = await exportRequestReceipt(db, { requestId: created.requestId, outDir: path.join(outDir, "receipt") });
+
+      const unpinned = verifyRequestReceiptBundle(bundle.outDir);
+      assert.equal(unpinned.fingerprintPinned, null);
+      assert.match(unpinned.trustNote, /internal consistency only/i);
+      assert.ok(unpinned.signerFingerprintSha256, "embedded cert fingerprint must be reported");
+
+      const pinnedOk = verifyRequestReceiptBundle(bundle.outDir, { expectFingerprintSha256: unpinned.signerFingerprintSha256! });
+      assert.equal(pinnedOk.fingerprintPinned, true);
+      assert.equal(pinnedOk.ok, unpinned.ok);
+
+      const pinnedBad = verifyRequestReceiptBundle(bundle.outDir, { expectFingerprintSha256: "ab".repeat(32) });
+      assert.equal(pinnedBad.fingerprintPinned, false);
+      assert.equal(pinnedBad.ok, false, "a fingerprint mismatch must fail verification");
+    } finally {
+      db.close();
+      cleanup();
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+});

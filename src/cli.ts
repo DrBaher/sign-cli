@@ -196,14 +196,31 @@ function parseStampOptions(args: ParsedArgs): import("./lib/pdf-image-stamp.js")
 }
 
 
-function parseDurationMs(args: ParsedArgs, options: { msFlag: string; secondsFlag: string; defaultMs?: number }): number | undefined {
+function parseDurationMs(
+  args: ParsedArgs,
+  options: { msFlag: string; secondsFlag: string; defaultMs?: number; minMs?: number },
+): number | undefined {
+  // Reject non-numeric / non-positive durations up front. A NaN here (e.g.
+  // --interval-seconds abc) used to flow into a poll loop as a 0/NaN delay,
+  // producing a tight busy-loop that hammers the provider/DB.
+  const coerce = (raw: string, flag: string, multiplier: number): number => {
+    const value = Number(raw) * multiplier;
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new SignCliError({
+        code: "INVALID_ARGS",
+        message: `${flag} must be a positive number; got ${JSON.stringify(raw)}.`,
+      });
+    }
+    if (options.minMs !== undefined && value < options.minMs) return options.minMs;
+    return value;
+  };
   const msValue = flagValue(args, options.msFlag);
   if (msValue !== undefined) {
-    return Number(msValue);
+    return coerce(msValue, `--${options.msFlag}`, 1);
   }
   const secondsValue = flagValue(args, options.secondsFlag);
   if (secondsValue !== undefined) {
-    return Number(secondsValue) * 1000;
+    return coerce(secondsValue, `--${options.secondsFlag}`, 1000);
   }
   return options.defaultMs;
 }
@@ -657,7 +674,7 @@ async function main(): Promise<void> {
     const apiKey = requireSignWellApiKey();
     const signerName = flagValue(parsed, "signer-name");
     const signerEmail = flagValue(parsed, "signer-email");
-    const intervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000 })!;
+    const intervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000, minMs: 50 })!;
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds", defaultMs: 60_000 })!;
     const fetchFinalPdf = (flagValue(parsed, "fetch-final") ?? "false") === "true";
     const outPath = flagValue(parsed, "out");
@@ -1673,7 +1690,7 @@ async function main(): Promise<void> {
     const signerEmail = flagValue(parsed, "signer-email");
     const exitOnFirst = (flagValue(parsed, "exit-on-first") ?? "false") === "true";
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
-    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 1000 })!;
+    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 1000, minMs: 50 })!;
     process.stderr.write(`[signer watch] tailing inbox${signerEmail ? ` for ${signerEmail}` : ""} (Ctrl+C to stop)\n`);
     const outcome = await runSignerWatch(db, {
       signerEmail,
@@ -1943,7 +1960,7 @@ async function main(): Promise<void> {
     const exitOnFirst = (flagValue(parsed, "exit-on-first") ?? "false") === "true";
     const dryRun = (flagValue(parsed, "dry-run") ?? "false") === "true";
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
-    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 1000 })!;
+    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 1000, minMs: 50 })!;
     const fs = await import("node:fs");
     let tokens: Record<string, string>;
     try {
@@ -2187,7 +2204,7 @@ async function main(): Promise<void> {
   // flags, same exit codes. The single-shot status path is handled above.
   if (root === "request" && (sub === "watch" || sub === "status")) {
     const requestId = flagValue(parsed, "request-id", true)!;
-    const intervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000 })!;
+    const intervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000, minMs: 50 })!;
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
     const fetchFinalPdf = (flagValue(parsed, "fetch-final") ?? "false") === "true";
     const outPath = flagValue(parsed, "out");
@@ -2304,7 +2321,7 @@ async function main(): Promise<void> {
 
   if (root === "audit" && sub === "watch") {
     const requestId = flagValue(parsed, "request-id");
-    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000 })!;
+    const pollIntervalMs = parseDurationMs(parsed, { msFlag: "interval-ms", secondsFlag: "interval-seconds", defaultMs: 5000, minMs: 50 })!;
     const timeoutMs = parseDurationMs(parsed, { msFlag: "timeout-ms", secondsFlag: "timeout-seconds" });
     process.stderr.write(`[audit watch] re-verifying audit chain${requestId ? ` for ${requestId}` : ""} every ${pollIntervalMs}ms (Ctrl+C to stop)\n`);
     const outcome = await runAuditWatch(db, {
@@ -2501,8 +2518,17 @@ async function main(): Promise<void> {
   if (root === "audit" && sub === "verify-head") {
     const proofPath = flagValue(parsed, "proof", true)!;
     const fs = await import("node:fs");
-    const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
-    const result = await verifyAuditHeadProof(proof);
+    let proof: Awaited<Parameters<typeof verifyAuditHeadProof>[0]>;
+    try {
+      proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+    } catch (error) {
+      throw new SignCliError({
+        code: "INVALID_SPEC",
+        message: `Failed to load head proof at ${proofPath}: ${(error as Error).message}`,
+      });
+    }
+    const expectFingerprintSha256 = flagValue(parsed, "expect-fingerprint");
+    const result = await verifyAuditHeadProof(proof, { expectFingerprintSha256 });
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.ok ? 0 : 3;
     return;
@@ -2519,7 +2545,8 @@ async function main(): Promise<void> {
   if (root === "request" && sub === "verify-receipt") {
     const bundleDir = flagValue(parsed, "bundle", true)!;
     const htmlOut = flagValue(parsed, "html");
-    const result = verifyRequestReceiptBundle(bundleDir);
+    const expectFingerprintSha256 = flagValue(parsed, "expect-fingerprint");
+    const result = verifyRequestReceiptBundle(bundleDir, { expectFingerprintSha256 });
     if (htmlOut) {
       const fs = await import("node:fs");
       const pathMod = await import("node:path");
@@ -2848,7 +2875,8 @@ async function main(): Promise<void> {
         }
       : undefined;
     const readOnly = (flagValue(parsed, "read-only") ?? "false") === "true";
-    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir, rateLimit, readOnly });
+    const trustProxy = (flagValue(parsed, "trust-proxy") ?? "false") === "true";
+    const server = startHttpApiServer({ db, port, bind, authToken, tls, webDemoDir, rateLimit, readOnly, trustProxy });
     const shutdown = () => server.close(() => process.exit(0));
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
@@ -2969,7 +2997,10 @@ async function main(): Promise<void> {
           message: `--http-port must be a port in 1..65535; got ${JSON.stringify(flagValue(parsed, "http-port"))}.`,
         });
       }
-      const bind = flagValue(parsed, "http-bind") ?? "0.0.0.0";
+      // Default to loopback. Exposing the MCP control surface on all
+      // interfaces (0.0.0.0) without auth is a remote attack surface; require
+      // an explicit --http-bind to broaden it.
+      const bind = flagValue(parsed, "http-bind") ?? "127.0.0.1";
       const endpointPath = flagValue(parsed, "http-path") ?? "/mcp";
       const authToken = flagValue(parsed, "http-auth-token") ?? process.env.SIGN_MCP_HTTP_AUTH_TOKEN;
       const server = startMcpHttpServer({

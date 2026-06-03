@@ -40,6 +40,7 @@ export type SignErrorCode =
   | "PROFILE_ENV_VAR_UNSET"
   | "STORAGE_UNWRITABLE"
   | "STRICT_PROVIDER_MISMATCH"
+  | "FORBIDDEN"
   | "INTERNAL";
 
 export type SignErrorEnvelope = {

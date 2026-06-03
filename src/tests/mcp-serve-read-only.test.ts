@@ -6,8 +6,28 @@ import { createDb, makeTempDb } from "./helpers.js";
 test("READ_ONLY_BLOCKED_TOOLS covers every MCP-facing mutating tool", () => {
   assert.deepEqual(
     [...READ_ONLY_BLOCKED_TOOLS].sort(),
-    ["document", "pdf_stamp_text", "preview", "request_receipt", "sign", "signer_decline", "signer_reissue_token"],
+    ["document", "pdf_stamp_text", "preview", "request_receipt", "sign", "signer_decline", "signer_fetch_document", "signer_reissue_token"],
   );
+});
+
+test("dispatchMcp tools/call refuses signer_fetch_document in read-only mode (it mutates: audit row + file write)", async () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  try {
+    const result = await dispatchMcp({
+      method: "tools/call",
+      params: { name: "signer_fetch_document", arguments: { request_id: "x", token: "y" } },
+      db,
+      readOnly: true,
+    });
+    const value = result.kind === "result" ? result.value as { content: Array<{ text: string }>; isError: boolean } : null;
+    assert.equal(value!.isError, true);
+    const env = JSON.parse(value!.content[0].text);
+    assert.equal(env.error.code, "FORBIDDEN_READ_ONLY");
+  } finally {
+    db.close();
+    cleanup();
+  }
 });
 
 test("dispatchMcp tools/call refuses pdf_stamp_text in read-only mode", async () => {

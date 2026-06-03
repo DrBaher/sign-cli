@@ -146,13 +146,17 @@ test("profile_show by name redacts credentials by default", async () => {
     const payload = parseEnvelope(value);
     assert.equal(payload.name, "main");
 
+    // show_secrets=true is only honored on a trusted transport
+    // (secretsAllowed: true — what serveMcpStdio passes). Without it the
+    // server refuses to return plaintext credentials.
     const dispatchSecret = await dispatchMcp({
       method: "tools/call",
       params: { name: "profile_show", arguments: { name: "main", show_secrets: true } },
       db,
+      secretsAllowed: true,
     });
     const secretValue = (dispatchSecret as { kind: "result"; value: any }).value;
-    assert.ok(secretValue.content[0].text.includes("supersecret-shhh"), "show_secrets=true should reveal");
+    assert.ok(secretValue.content[0].text.includes("supersecret-shhh"), "show_secrets=true should reveal on a trusted transport");
   } finally {
     db.close();
     cleanup();

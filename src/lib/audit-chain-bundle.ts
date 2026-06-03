@@ -184,6 +184,18 @@ export async function verifyAuditChainBundle(bundleDir: string): Promise<BundleV
   const root = path.resolve(bundleDir);
   const errors: string[] = [];
 
+  // Resolve a bundle-relative path and assert it stays inside the bundle root.
+  // A malicious INDEX.json (e.g. from an untrusted counterparty bundle) can
+  // record `receiptDir: "/etc"` or `../../secrets`; following those would let
+  // the verifier read files outside the bundle. Returns null on escape.
+  const containWithinRoot = (rel: string): string | null => {
+    if (path.isAbsolute(rel)) return null;
+    const resolved = path.resolve(root, rel);
+    const relative = path.relative(root, resolved);
+    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    return resolved;
+  };
+
   const indexPath = path.join(root, "INDEX.json");
   if (!fs.existsSync(indexPath)) {
     return {
@@ -210,18 +222,22 @@ export async function verifyAuditChainBundle(bundleDir: string): Promise<BundleV
   let anchor: BundleVerifyReport["anchor"] = { present: false };
   if (index.anchor && typeof index.anchor.manifestPath === "string") {
     const manifestRel = index.anchor.manifestPath;
-    // INDEX.json carries an absolute path written at bundle time; the file
-    // may have moved. Fall back to looking for it under anchor/ if the
-    // recorded path doesn't exist.
-    let manifestPath = manifestRel;
-    if (!fs.existsSync(manifestPath)) {
+    // SECURITY: INDEX.json records an absolute manifestPath written at bundle
+    // time. Never follow it — an untrusted bundle could point it at any file
+    // on disk. Always resolve the anchor manifest from inside the bundle's
+    // own ./anchor/ directory. If the recorded path is bundle-relative and
+    // stays contained we honor it; otherwise we look for the *.manifest.json
+    // inside ./anchor/.
+    let manifestPath: string | null = containWithinRoot(manifestRel);
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
+      manifestPath = null;
       const anchorDir = path.join(root, "anchor");
       if (fs.existsSync(anchorDir)) {
         const candidate = fs.readdirSync(anchorDir).find((n) => n.endsWith(".manifest.json"));
         if (candidate) manifestPath = path.join(anchorDir, candidate);
       }
     }
-    if (!fs.existsSync(manifestPath)) {
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
       errors.push(`anchor manifest missing at ${manifestRel} (and no .manifest.json in ./anchor/)`);
       anchor = { present: true, tsrPath: index.anchor.tsrPath ?? "", manifestPath: manifestRel, recordedDigest: index.anchor.digestHex ?? null, recomputedDigest: "", matches: false };
     } else {
@@ -256,10 +272,17 @@ export async function verifyAuditChainBundle(bundleDir: string): Promise<BundleV
   for (const entry of requests) {
     const requestId = String(entry.requestId ?? "");
     if (!requestId) continue;
-    // Prefer the relative receiptDir stored in INDEX (path.relative output)
-    // over any absolute path the bundle may have once recorded.
-    const relDir = entry.receiptDir ?? path.join("requests", requestId);
-    const receiptDir = path.isAbsolute(relDir) ? relDir : path.join(root, relDir);
+    // SECURITY: the receiptDir in INDEX.json comes from a possibly-untrusted
+    // counterparty bundle. Resolve it relative to the bundle root and refuse
+    // anything that escapes (absolute paths or ../ traversal). Fall back to
+    // the canonical requests/<id> layout when the recorded value is unusable.
+    const relDir = typeof entry.receiptDir === "string" ? entry.receiptDir : path.join("requests", requestId);
+    const receiptDir = containWithinRoot(relDir);
+    if (!receiptDir) {
+      results.push({ requestId, ok: false, receiptDir: relDir, errors: [`receipt directory escapes the bundle root (refused): ${relDir}`] });
+      failed += 1;
+      continue;
+    }
     if (!fs.existsSync(receiptDir)) {
       results.push({ requestId, ok: false, receiptDir, errors: [`receipt directory missing: ${receiptDir}`] });
       failed += 1;

@@ -1,4 +1,5 @@
 import { openDatabase } from "./db.js";
+import { formatCliError } from "./sign-error.js";
 import {
   ingestDocuSignWebhookPayload,
   ingestSignWellWebhookPayload,
@@ -37,6 +38,15 @@ function headerString(value: string | string[] | undefined): string | undefined 
   return value;
 }
 
+/** Structured webhook error envelope. Routes the error through formatCliError
+ *  so (a) known secrets are redacted from the message and (b) the shape is
+ *  consistent across the three provider handlers. */
+function writeWebhookError(response: WebhookLikeResponse, error: unknown): void {
+  response.statusCode = 400;
+  response.setHeader("content-type", "application/json; charset=utf-8");
+  response.end(JSON.stringify(formatCliError(error)));
+}
+
 export async function handleWebhookHttpRequest(
   request: WebhookLikeRequest,
   response: WebhookLikeResponse,
@@ -65,12 +75,7 @@ export async function handleWebhookHttpRequest(
       db.close();
     }
   } catch (error) {
-    response.statusCode = 400;
-    response.setHeader("content-type", "application/json; charset=utf-8");
-    response.end(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    writeWebhookError(response, error);
   }
 }
 
@@ -110,12 +115,7 @@ export async function handleDocuSignWebhookHttpRequest(
       db.close();
     }
   } catch (error) {
-    response.statusCode = 400;
-    response.setHeader("content-type", "application/json; charset=utf-8");
-    response.end(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    writeWebhookError(response, error);
   }
 }
 
@@ -150,11 +150,6 @@ export async function handleSignWellWebhookHttpRequest(
       db.close();
     }
   } catch (error) {
-    response.statusCode = 400;
-    response.setHeader("content-type", "application/json; charset=utf-8");
-    response.end(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    writeWebhookError(response, error);
   }
 }

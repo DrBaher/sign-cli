@@ -277,6 +277,11 @@ test("signer fetch-document writes the unsigned PDF and records request.signer_f
     });
     const outDir = mkdtempSync(path.join(os.tmpdir(), "sign-fetchdoc-out-"));
     const outPath = path.join(outDir, "fetched.pdf");
+    // outPath is now run through validateOutputPath (traversal guard). An
+    // absolute path outside cwd requires the documented opt-in, same as every
+    // other --out flag.
+    const prevAllow = process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+    process.env.SIGN_ALLOW_ABSOLUTE_DOCS = "1";
     try {
       const result = await fetchUnsignedDocumentForSigner(ctx.db, {
         requestId: ctx.requestId,
@@ -297,6 +302,8 @@ test("signer fetch-document writes the unsigned PDF and records request.signer_f
       assert.equal(payload.sha256, ctx.documentHash);
       assert.equal(payload.outPath, outPath);
     } finally {
+      if (prevAllow === undefined) delete process.env.SIGN_ALLOW_ABSOLUTE_DOCS;
+      else process.env.SIGN_ALLOW_ABSOLUTE_DOCS = prevAllow;
       rmSync(outDir, { recursive: true, force: true });
       ctx.cleanup();
     }

@@ -22,10 +22,37 @@ export type ReceiptVerificationResult = {
   manifestVerified: boolean;
   manifestSha256: string;
   signerSubject: string | null;
+  /** SHA-256 fingerprint of the cert embedded in the bundle (manifest.cert.pem). */
+  signerFingerprintSha256: string | null;
+  /** Whether an --expect-fingerprint was supplied and matched the embedded
+   *  cert. `null` when no expectation was given (no pinning performed). */
+  fingerprintPinned: boolean | null;
+  /** Caveat describing the trust model. Without pinning, `ok` means only that
+   *  the bundle is internally consistent (manifest signs its files, the chain
+   *  is intact) — it does NOT establish that the embedded cert belongs to a
+   *  trusted signer, because the bundle vouches for its own cert. */
+  trustNote: string;
   files: ReceiptFileCheck[];
   chain: ReceiptChainCheck | null;
   errors: string[];
 };
+
+export type VerifyReceiptOptions = {
+  /** Pin the embedded signer cert to this SHA-256 fingerprint (hex, with or
+   *  without colons / case-insensitive). When set and the embedded cert does
+   *  not match, verification fails. */
+  expectFingerprintSha256?: string;
+};
+
+const TRUST_NOTE_PINNED =
+  "Signer cert fingerprint matched --expect-fingerprint.";
+const TRUST_NOTE_UNPINNED =
+  "ok means internal consistency only (manifest signature + file hashes + audit chain). " +
+  "The embedded cert is self-vouching; pass --expect-fingerprint to pin the signer identity.";
+
+function normalizeFingerprint(fp: string): string {
+  return fp.replace(/:/g, "").trim().toLowerCase();
+}
 
 type Manifest = {
   requestId?: string;
@@ -48,6 +75,17 @@ type AuditPayload = {
   request?: { id?: string };
 };
 
+/** Resolve a manifest entry's file name against the bundle root and assert it
+ *  stays inside. Rejects absolute paths and ../ traversal. Returns null on
+ *  escape so the caller can record an error instead of reading the file. */
+function containedFilePath(bundleDir: string, name: string): string | null {
+  if (path.isAbsolute(name)) return null;
+  const resolved = path.resolve(bundleDir, name);
+  const relative = path.relative(bundleDir, resolved);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+  return resolved;
+}
+
 function checkFiles(bundleDir: string, manifest: Manifest, errors: string[]): ReceiptFileCheck[] {
   if (!Array.isArray(manifest.files)) {
     errors.push("manifest.json has no files[] array.");
@@ -55,14 +93,30 @@ function checkFiles(bundleDir: string, manifest: Manifest, errors: string[]): Re
   }
   const checks: ReceiptFileCheck[] = [];
   for (const entry of manifest.files) {
-    const filePath = path.join(bundleDir, entry.name);
+    // Defensive validation: a malformed/hostile manifest can carry a
+    // non-string name (→ used to crash with a TypeError → INTERNAL verdict)
+    // or a traversal/absolute path (→ used to read files outside the bundle).
+    // Validate, contain, and record a failed check rather than throwing.
+    const name = entry && typeof entry.name === "string" ? entry.name : null;
+    const expected = entry && typeof entry.sha256 === "string" ? entry.sha256 : "";
+    if (name === null) {
+      errors.push("manifest.files[] entry has a non-string `name`; skipping.");
+      checks.push({ name: String((entry as { name?: unknown })?.name ?? ""), expected, actual: "", ok: false });
+      continue;
+    }
+    const filePath = containedFilePath(bundleDir, name);
+    if (!filePath) {
+      errors.push(`Bundle file escapes the bundle directory (refused): ${name}`);
+      checks.push({ name, expected, actual: "", ok: false });
+      continue;
+    }
     if (!existsSync(filePath)) {
-      checks.push({ name: entry.name, expected: entry.sha256, actual: "", ok: false });
-      errors.push(`Bundle file missing: ${entry.name}`);
+      checks.push({ name, expected, actual: "", ok: false });
+      errors.push(`Bundle file missing: ${name}`);
       continue;
     }
     const actual = sha256(readFileSync(filePath));
-    checks.push({ name: entry.name, expected: entry.sha256, actual, ok: actual === entry.sha256 });
+    checks.push({ name, expected, actual, ok: actual === expected });
   }
   return checks;
 }
@@ -121,9 +175,13 @@ function checkAuditChain(bundleDir: string, errors: string[]): ReceiptChainCheck
   return { events: events.length, ok: true, break: null };
 }
 
-export function verifyRequestReceiptBundle(bundleDir: string): ReceiptVerificationResult {
+export function verifyRequestReceiptBundle(
+  bundleDir: string,
+  options: VerifyReceiptOptions = {},
+): ReceiptVerificationResult {
   const errors: string[] = [];
   const resolvedDir = path.resolve(bundleDir);
+  const expectFp = options.expectFingerprintSha256 ? normalizeFingerprint(options.expectFingerprintSha256) : null;
 
   if (!existsSync(resolvedDir)) {
     return {
@@ -132,6 +190,9 @@ export function verifyRequestReceiptBundle(bundleDir: string): ReceiptVerificati
       manifestVerified: false,
       manifestSha256: "",
       signerSubject: null,
+      signerFingerprintSha256: null,
+      fingerprintPinned: expectFp ? false : null,
+      trustNote: expectFp ? TRUST_NOTE_PINNED : TRUST_NOTE_UNPINNED,
       files: [],
       chain: null,
       errors: [`Bundle directory does not exist: ${resolvedDir}`],
@@ -145,6 +206,7 @@ export function verifyRequestReceiptBundle(bundleDir: string): ReceiptVerificati
   let manifestVerified = false;
   let manifestSha256 = "";
   let signerSubject: string | null = null;
+  let signerFingerprintSha256: string | null = null;
   let manifest: Manifest = {};
 
   if (!existsSync(manifestPath) || !existsSync(signaturePath) || !existsSync(certPath)) {
@@ -160,6 +222,7 @@ export function verifyRequestReceiptBundle(bundleDir: string): ReceiptVerificati
     try {
       const cert = new X509Certificate(readFileSync(certPath, "utf8"));
       signerSubject = cert.subject;
+      signerFingerprintSha256 = cert.fingerprint256 ?? null;
       const verify = createVerify("RSA-SHA256");
       verify.update(manifestBytes);
       manifestVerified = verify.verify(cert.publicKey, readFileSync(signaturePath));
@@ -168,6 +231,21 @@ export function verifyRequestReceiptBundle(bundleDir: string): ReceiptVerificati
       }
     } catch (error) {
       errors.push(`Cert/signature read failed: ${(error as Error).message}`);
+    }
+  }
+
+  // Trust-anchor pinning (optional). Without it, a valid manifest signature
+  // only proves the bundle is self-consistent — the embedded cert vouches for
+  // itself. With --expect-fingerprint we require the embedded cert to match a
+  // fingerprint the verifier already trusts.
+  let fingerprintPinned: boolean | null = null;
+  if (expectFp) {
+    const actualFp = signerFingerprintSha256 ? normalizeFingerprint(signerFingerprintSha256) : null;
+    fingerprintPinned = actualFp !== null && actualFp === expectFp;
+    if (!fingerprintPinned) {
+      errors.push(
+        `Signer cert fingerprint ${actualFp ?? "(none)"} does not match --expect-fingerprint ${expectFp}.`,
+      );
     }
   }
 
@@ -182,11 +260,17 @@ export function verifyRequestReceiptBundle(bundleDir: string): ReceiptVerificati
   }
 
   return {
-    ok: manifestVerified && fileChecks.every((f) => f.ok) && (chainCheck?.ok ?? false),
+    ok: manifestVerified
+      && fileChecks.every((f) => f.ok)
+      && (chainCheck?.ok ?? false)
+      && (fingerprintPinned !== false),
     bundleDir: resolvedDir,
     manifestVerified,
     manifestSha256,
     signerSubject,
+    signerFingerprintSha256,
+    fingerprintPinned,
+    trustNote: fingerprintPinned === true ? TRUST_NOTE_PINNED : TRUST_NOTE_UNPINNED,
     files: fileChecks,
     chain: chainCheck,
     errors,

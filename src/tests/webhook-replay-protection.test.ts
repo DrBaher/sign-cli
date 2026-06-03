@@ -146,6 +146,53 @@ test("DocuSign webhook replay: dedupes via raw-body hash", () => {
   }
 });
 
+test("Unverified webhook for an unknown request id does NOT throw (no enumeration oracle) and writes no audit rows", () => {
+  const { dbPath, cleanup } = makeTempDb();
+  const db = createDb(dbPath);
+  try {
+    // A bad-signature payload naming a request id that does not exist must
+    // behave identically to one naming a real id: verified=false, no throw,
+    // no DB lookup. Otherwise REQUEST_NOT_FOUND vs success leaks which ids
+    // exist (and does pre-auth DB work).
+    const dropboxResult = ingestWebhookPayload(db, {
+      payload: {
+        event: { event_time: "1730000000", event_type: "x", event_hash: "wrong" },
+        signature_request: { signature_request_id: "drop_x", metadata: { request_id: "does-not-exist-123" } },
+      } as any,
+      apiKey: "real-key",
+    });
+    assert.equal(dropboxResult.verified, false);
+    assert.equal(dropboxResult.requestId, "does-not-exist-123");
+
+    const signwellResult = ingestSignWellWebhookPayload(db, {
+      payload: {
+        event: { type: "document_signed", time: 1730000001, hash: "wrong" },
+        data: { object: { id: "doc_x", metadata: { request_id: "does-not-exist-123" } } },
+      } as any,
+      secret: "real-secret",
+    });
+    assert.equal(signwellResult.verified, false);
+
+    const docusignPayload = {
+      event: "envelope-completed",
+      data: { envelopeSummary: { envelopeId: "e1", status: "completed", envelopeMetadata: { request_id: "does-not-exist-123" } } },
+    };
+    const docusignResult = ingestDocuSignWebhookPayload(db, {
+      payload: docusignPayload as any,
+      secret: "real-secret",
+      rawBody: JSON.stringify(docusignPayload),
+      signatureHeader: "wrong-sig",
+    });
+    assert.equal(docusignResult.verified, false);
+
+    // No audit rows for the phantom request id.
+    assert.equal(listAuditEvents(db, "does-not-exist-123").length, 0, "unverified payloads must not write audit rows");
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
+
 test("Replay protection only kicks in on verified payloads (unverified replays still recorded as failures)", () => {
   const { dbPath, cleanup } = makeTempDb();
   const db = createDb(dbPath);

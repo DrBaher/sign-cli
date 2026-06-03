@@ -9,6 +9,9 @@ const PASSING: ReceiptVerificationResult = {
   manifestVerified: true,
   manifestSha256: "ab".repeat(32),
   signerSubject: "CN=Sign CLI Local Signer, O=Sign CLI Local Provider",
+  signerFingerprintSha256: "aa".repeat(32),
+  fingerprintPinned: null,
+  trustNote: "ok means internal consistency only.",
   files: [
     { name: "audit.json", expected: "1".repeat(64), actual: "1".repeat(64), ok: true },
     { name: "signed.pdf", expected: "2".repeat(64), actual: "2".repeat(64), ok: true },
@@ -23,6 +26,9 @@ const FAILING: ReceiptVerificationResult = {
   manifestVerified: false,
   manifestSha256: "ff".repeat(32),
   signerSubject: null,
+  signerFingerprintSha256: null,
+  fingerprintPinned: null,
+  trustNote: "ok means internal consistency only.",
   files: [
     { name: "signed.pdf", expected: "2".repeat(64), actual: "3".repeat(64), ok: false },
   ],

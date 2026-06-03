@@ -14,6 +14,7 @@ import {
   voidDocuSignEnvelope,
 } from "./docusign.js";
 import { asBackend, type DbBackend } from "./db-backend.js";
+import { validateOutputPath } from "./validate.js";
 import type { SqliteDb } from "./db.js";
 import {
   cancelDropboxSignatureRequest,
@@ -1918,10 +1919,10 @@ export async function watchSigningRequestStatus(
   finalPdf: { path: string; bytes: number; sha256: string } | null;
 }> {
   if (!Number.isFinite(input.intervalMs) || input.intervalMs <= 0) {
-    throw new Error("--interval-ms must be a positive number.");
+    throw new SignCliError({ code: "INVALID_ARGS", message: "--interval-ms must be a positive number." });
   }
   if (input.timeoutMs !== undefined && (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0)) {
-    throw new Error("--timeout-ms must be a positive number when provided.");
+    throw new SignCliError({ code: "INVALID_ARGS", message: "--timeout-ms must be a positive number when provided." });
   }
 
   const initialRequest = getRequestRow(db, input.requestId);
@@ -2068,6 +2069,15 @@ export function ingestDocuSignWebhookPayload(
     return { verified, replayed: false, requestId: null, eventType, normalizedEventType, providerStatus };
   }
 
+  // Do NOT touch the DB for an unverified payload. Looking up the request
+  // before the signature is verified is (a) pre-auth DB work an attacker can
+  // trigger by guessing request ids, and (b) an enumeration oracle (a
+  // REQUEST_NOT_FOUND throw distinguishes real ids from fake ones). Return a
+  // uniform verified=false result instead.
+  if (!verified) {
+    return { verified, replayed: false, requestId, eventType, normalizedEventType, providerStatus };
+  }
+
   getRequestRow(db, requestId);
 
   const now = input.now ?? new Date();
@@ -2113,11 +2123,18 @@ export function ingestDocuSignWebhookPayload(
       const email = (signer.email ?? "").toString().trim();
       if (!email) continue;
       if (!signer.signedDateTime) continue;
+      // A non-ISO / garbage signedDateTime makes new Date(...).toISOString()
+      // throw a RangeError ("Invalid time value") that would abort the whole
+      // webhook ingest. Only normalize when the date parses; otherwise skip
+      // this signer's timestamp (mirrors the SignWell recipient loop's
+      // tolerance of malformed dates).
+      const parsed = new Date(signer.signedDateTime);
+      if (!Number.isFinite(parsed.getTime())) continue;
       recordSignerSigningState(db, {
         requestId,
         signerEmail: email,
         signerName: typeof signer.name === "string" ? signer.name : undefined,
-        signedAt: new Date(signer.signedDateTime).toISOString(),
+        signedAt: parsed.toISOString(),
         source: "docusign",
         now,
       });
@@ -2153,6 +2170,21 @@ export function ingestSignWellWebhookPayload(
       eventType,
       normalizedEventType,
       providerStatus: typeof document?.status === "string" ? document.status : null,
+    };
+  }
+
+  // Don't touch the DB for an unverified payload — avoids pre-auth DB work and
+  // the REQUEST_NOT_FOUND enumeration oracle. Uniform verified=false result.
+  if (!verified) {
+    return {
+      verified,
+      replayed: false,
+      requestId,
+      eventType,
+      normalizedEventType,
+      providerStatus: typeof document?.status === "string"
+        ? document.status.trim().toLowerCase().replace(/[\s-]+/gu, "_")
+        : normalizedEventType,
     };
   }
 
@@ -2261,6 +2293,13 @@ export function ingestWebhookPayload(
 
   if (!requestId) {
     return { verified, replayed: false, requestId: null, eventType };
+  }
+
+  // Don't touch the DB for an unverified payload — avoids pre-auth DB work and
+  // the REQUEST_NOT_FOUND enumeration oracle, and matches the DocuSign/SignWell
+  // ingest paths.
+  if (!verified) {
+    return { verified, replayed: false, requestId, eventType };
   }
 
   getRequestRow(db, requestId);
@@ -4283,7 +4322,10 @@ export async function fetchUnsignedDocumentForSigner(
 
   let outPath: string | null = null;
   if (input.outPath) {
-    const resolved = path.resolve(input.outPath);
+    // Contain the write to the working directory (honors SIGN_ALLOW_ABSOLUTE_DOCS
+    // like every other --out path). Without this an MCP/HTTP caller could write
+    // the fetched PDF to an arbitrary filesystem location.
+    const resolved = validateOutputPath(input.outPath);
     mkdirSync(path.dirname(resolved), { recursive: true });
     writeFileSync(resolved, document.pdf);
     outPath = resolved;
@@ -4701,14 +4743,53 @@ export async function signAuditHead(
   return proof;
 }
 
-export async function verifyAuditHeadProof(proof: AuditHeadProof): Promise<{ ok: boolean; signerSubject: string }> {
+export async function verifyAuditHeadProof(
+  proof: AuditHeadProof,
+  options: { expectFingerprintSha256?: string } = {},
+): Promise<{ ok: boolean; signerSubject: string; signerFingerprintSha256: string | null; fingerprintPinned: boolean | null; trustNote: string }> {
   const cryptoMod = await import("node:crypto");
-  const cert = new cryptoMod.X509Certificate(proof.signerCertificatePem);
+  const trustNoteUnpinned =
+    "ok means the proof's signature verifies against the cert embedded in the proof; " +
+    "the cert is self-vouching. Pass --expect-fingerprint to pin the signer identity.";
+  // Validate the proof shape before touching crypto APIs — a malformed proof
+  // (missing/undefined fields) previously threw a generic error surfaced as
+  // INTERNAL. Report a structured failure instead.
+  if (
+    !proof || typeof proof.signerCertificatePem !== "string"
+    || typeof proof.hashSelf !== "string" || typeof proof.signature !== "string"
+  ) {
+    throw new SignCliError({
+      code: "INVALID_SPEC",
+      message: "Head proof is missing required fields (signerCertificatePem, hashSelf, signature).",
+    });
+  }
+  let cert: InstanceType<typeof cryptoMod.X509Certificate>;
+  try {
+    cert = new cryptoMod.X509Certificate(proof.signerCertificatePem);
+  } catch (error) {
+    throw new SignCliError({
+      code: "INVALID_SPEC",
+      message: `Head proof signerCertificatePem is not a valid certificate: ${(error as Error).message}`,
+    });
+  }
   const verify = cryptoMod.createVerify("RSA-SHA256");
   verify.update(Buffer.from(proof.hashSelf, "utf8"));
+  const signatureOk = verify.verify(cert.publicKey, Buffer.from(proof.signature, "base64"));
+  const signerFingerprintSha256 = cert.fingerprint256 ?? null;
+
+  let fingerprintPinned: boolean | null = null;
+  if (options.expectFingerprintSha256) {
+    const expected = options.expectFingerprintSha256.replace(/:/g, "").trim().toLowerCase();
+    const actual = signerFingerprintSha256 ? signerFingerprintSha256.replace(/:/g, "").trim().toLowerCase() : null;
+    fingerprintPinned = actual !== null && actual === expected;
+  }
+
   return {
-    ok: verify.verify(cert.publicKey, Buffer.from(proof.signature, "base64")),
+    ok: signatureOk && fingerprintPinned !== false,
     signerSubject: cert.subject ?? "",
+    signerFingerprintSha256,
+    fingerprintPinned,
+    trustNote: fingerprintPinned === true ? "Signer cert fingerprint matched --expect-fingerprint." : trustNoteUnpinned,
   };
 }
 

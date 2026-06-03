@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { SqliteDb } from "./db.js";
 import { formatCliError, SignCliError } from "./sign-error.js";
@@ -23,13 +24,27 @@ import { renderPrometheusMetrics } from "./prom-metrics.js";
 import { TokenBucketLimiter } from "./rate-limit.js";
 import { validateDocumentPath, validateOutputPath } from "./validate.js";
 
-function clientKey(req: http.IncomingMessage): string {
-  // Trust X-Forwarded-For if present (operators terminating TLS at a load
-  // balancer rely on it). Otherwise fall back to the socket peer address.
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0].trim();
-  if (Array.isArray(fwd) && fwd.length > 0) return fwd[0].split(",")[0].trim();
+function clientKey(req: http.IncomingMessage, trustProxy: boolean): string {
+  // X-Forwarded-For is client-controlled and trivially spoofable. Honor it
+  // ONLY when the operator opts in via trustProxy (i.e. a trusted reverse
+  // proxy rewrites it). Otherwise key the limiter on the real socket peer so
+  // an attacker can't (a) bypass the per-IP limit by rotating XFF and
+  // (b) explode the buckets Map into a memory-exhaustion DoS.
+  if (trustProxy) {
+    const fwd = req.headers["x-forwarded-for"];
+    if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0].trim();
+    if (Array.isArray(fwd) && fwd.length > 0) return fwd[0].split(",")[0].trim();
+  }
   return req.socket.remoteAddress ?? "unknown";
+}
+
+/** Constant-time string comparison (length-prefixed). Avoids leaking the
+ *  bearer token via early-exit timing on the `===` path. */
+function timingSafeStringEq(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8");
+  const bBuf = Buffer.from(b, "utf8");
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
 }
 
 type RouteHandler = (db: SqliteDb, body: Record<string, unknown>) => Promise<unknown> | unknown;
@@ -37,7 +52,7 @@ type RouteHandler = (db: SqliteDb, body: Record<string, unknown>) => Promise<unk
 function str(body: Record<string, unknown>, key: string, required: boolean = false): string | undefined {
   const value = body[key];
   if (typeof value === "string" && value.length > 0) return value;
-  if (required) throw new Error(`Missing required field: ${key}`);
+  if (required) throw new SignCliError({ code: "INVALID_ARGS", message: `Missing required field: ${key}` });
   return undefined;
 }
 
@@ -373,9 +388,14 @@ async function readJsonBody(request: http.IncomingMessage): Promise<Record<strin
   if (chunks.length === 0) return {};
   const text = Buffer.concat(chunks).toString("utf8");
   if (text.trim().length === 0) return {};
-  const parsed = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new SignCliError({ code: "INVALID_ARGS", message: `Request body is not valid JSON: ${(error as Error).message}` });
+  }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Request body must be a JSON object.");
+    throw new SignCliError({ code: "INVALID_ARGS", message: "Request body must be a JSON object." });
   }
   return parsed as Record<string, unknown>;
 }
@@ -399,6 +419,13 @@ export type HttpServerOptions = {
   // compliance read-only views or for parking a clone of production behind a
   // dashboard without giving anyone the ability to drive lifecycle.
   readOnly?: boolean;
+  // When true, the rate-limiter keys on the first X-Forwarded-For hop (set
+  // this ONLY when a trusted reverse proxy / load balancer terminates in
+  // front of the server and rewrites XFF). When false (default), XFF is
+  // ignored and the limiter keys on the real socket peer address — otherwise
+  // any client could spoof XFF to bypass the limit and spawn unbounded
+  // per-"IP" buckets (a memory-exhaustion DoS).
+  trustProxy?: boolean;
 };
 
 // Routes that mutate request lifecycle state. `readOnly: true` blocks them.
@@ -489,7 +516,7 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
     }
 
     if (limiter) {
-      const decision = limiter.take(clientKey(req));
+      const decision = limiter.take(clientKey(req, Boolean(opts.trustProxy)));
       res.setHeader("x-ratelimit-limit", String(decision.capacity));
       res.setHeader("x-ratelimit-remaining", String(decision.remaining));
       if (!decision.allowed) {
@@ -503,7 +530,7 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
 
     if (requireAuth) {
       const provided = (req.headers.authorization ?? "").replace(/^Bearer\s+/u, "");
-      if (provided !== opts.authToken) {
+      if (!timingSafeStringEq(provided, opts.authToken ?? "")) {
         res.statusCode = 401;
         res.setHeader("content-type", "application/json; charset=utf-8");
         res.end(JSON.stringify({ ok: false, error: { code: "UNAUTHORIZED", message: "Missing or invalid Bearer token." } }));
@@ -559,7 +586,14 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
       }
     } catch (error) {
       const envelope = formatCliError(error);
-      res.statusCode = envelope.error.code === "INTERNAL" ? 500 : 400;
+      // Map well-known error classes to HTTP status: not-found → 404, internal
+      // → 500, everything else (client-input validation, token/policy errors)
+      // → 400. Previously a plain Error from a missing field surfaced as
+      // INTERNAL → 500; those are now structured INVALID_ARGS → 400.
+      res.statusCode =
+        envelope.error.code === "INTERNAL" ? 500
+        : envelope.error.code === "REQUEST_NOT_FOUND" ? 404
+        : 400;
       res.setHeader("content-type", "application/json; charset=utf-8");
       res.end(JSON.stringify(envelope));
     }
@@ -579,5 +613,16 @@ export function startHttpApiServer(opts: HttpServerOptions): http.Server | https
     server = http.createServer(handler);
   }
   server.listen(opts.port, opts.bind ?? "127.0.0.1");
+
+  // Periodically evict idle rate-limit buckets so a long-running server with
+  // many distinct client IPs doesn't grow the buckets Map without bound. The
+  // timer is unref'd so it never keeps the process alive on its own, and it's
+  // cleared when the server closes.
+  if (limiter) {
+    const evictTimer = setInterval(() => limiter.evictIdle(), 60_000);
+    if (typeof evictTimer.unref === "function") evictTimer.unref();
+    server.on("close", () => clearInterval(evictTimer));
+  }
+
   return server;
 }
