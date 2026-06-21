@@ -21,6 +21,8 @@ import { runSignerWatch } from "./lib/signer-watch.js";
 import {
   buildCatalogJson,
   findCommand,
+  findCommandGroup,
+  formatCommandGroupHelp,
   formatCommandHelp,
   formatExamples,
   formatTopLevelHelp,
@@ -95,7 +97,7 @@ import { parseFieldSpec } from "./lib/field-placement.js";
 import { loadPolicySpec } from "./lib/policy-engine.js";
 import { parseImageInput, stampImageOnPdf, type StampPosition } from "./lib/pdf-image-stamp.js";
 import { loadRequestSpec } from "./lib/request-spec.js";
-import { parsePrefillSpec, parseSignerSpec } from "./lib/util.js";
+import { parseBooleanFlag, parsePrefillSpec, parseSignerSpec } from "./lib/util.js";
 import { loadWebhookPayloadFile, verifyDropboxCallback } from "./lib/webhook.js";
 import { startWebhookServer } from "./lib/webhook-server.js";
 
@@ -343,9 +345,34 @@ function resolveProviderTestMode(provider: ReturnType<typeof resolveSignProvider
     return resolveDropboxTestMode(flag);
   }
   if (provider === "signwell") {
-    return resolveSignWellTestMode(flag);
+    const testMode = resolveSignWellTestMode(flag);
+    if (testMode) {
+      // SignWell defaults to test mode (non-binding, watermarked). That's a footgun
+      // for "send the real thing" flows, so make it impossible to miss. Banner goes
+      // to stderr to keep stdout machine-readable.
+      process.stderr.write(
+        "\n" +
+        "  ┌────────────────────────────────────────────────────────────────┐\n" +
+        "  │  ⚠  SIGNWELL TEST MODE — this document is NON-BINDING.          │\n" +
+        "  │     Signatures are watermarked and have no legal effect.        │\n" +
+        "  │     To send a real, binding document, pass --test-mode false    │\n" +
+        "  │     (or set SIGNWELL_TEST_MODE=false).                          │\n" +
+        "  └────────────────────────────────────────────────────────────────┘\n\n",
+      );
+    }
+    return testMode;
   }
   return false;
+}
+
+// `--ordered true|false` controls signing order for providers that support
+// parallel/unordered signing (SignWell). Undefined means "use the provider
+// default" (sequential when there are 2+ signers).
+function resolveOrderedFlag(flag?: string): boolean | undefined {
+  if (flag === undefined) {
+    return undefined;
+  }
+  return parseBooleanFlag(flag, true);
 }
 
 async function main(): Promise<void> {
@@ -432,6 +459,12 @@ async function main(): Promise<void> {
         console.log(formatCommandHelp(found));
         return;
       }
+    }
+    // No exact match — fall back to listing subcommands for a parent like "mcp".
+    const group = findCommandGroup(queryPositionals.join(" "));
+    if (group.length > 0) {
+      console.log(formatCommandGroupHelp(queryPositionals.join(" "), group));
+      return;
     }
     console.error(`No help entry for "${queryPositionals.join(" ")}". Run \`sign --help\` to list commands.`);
     process.exitCode = 1;
@@ -755,6 +788,7 @@ async function main(): Promise<void> {
       provider: selectedProvider,
       apiKey: resolveProviderApiKey(selectedProvider),
       testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
+      applySigningOrder: resolveOrderedFlag(flagValue(parsed, "ordered")),
     });
     console.log(JSON.stringify({
       mode: "email-only",
@@ -2099,6 +2133,7 @@ async function main(): Promise<void> {
       provider: selectedProvider,
       apiKey: resolveProviderApiKey(selectedProvider),
       testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
+      applySigningOrder: resolveOrderedFlag(flagValue(parsed, "ordered")),
       force,
       ...(flagValue(parsed, "provider") ? { strictProvider } : {}),
     });
@@ -2115,6 +2150,7 @@ async function main(): Promise<void> {
       apiKey: resolveProviderApiKey(selectedProvider),
       clientId: selectedProvider === "dropbox" ? requireDropboxClientId(flagValue(parsed, "client-id")) : undefined,
       testMode: resolveProviderTestMode(selectedProvider, flagValue(parsed, "test-mode")),
+      applySigningOrder: resolveOrderedFlag(flagValue(parsed, "ordered")),
     });
     if (selectedProvider === "signwell") {
       const document = (result.responseBody as any) ?? {};
