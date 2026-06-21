@@ -1,10 +1,24 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
+import type { DatabaseSync } from "node:sqlite";
 import { applyPendingMigrations } from "./migrations.js";
 import { SignCliError } from "./sign-error.js";
 
 export type SqliteDb = DatabaseSync;
+
+// node:sqlite is loaded lazily (require, not a static ESM import) so its
+// "ExperimentalWarning" is emitted through the patched process.emitWarning in
+// silence-warnings.js and can be filtered. A static import would load the builtin
+// during module linking — before that patch runs — and the warning would leak.
+const nodeRequire = createRequire(import.meta.url);
+let cachedDatabaseSync: typeof DatabaseSync | undefined;
+function getDatabaseSync(): typeof DatabaseSync {
+  if (!cachedDatabaseSync) {
+    cachedDatabaseSync = (nodeRequire("node:sqlite") as typeof import("node:sqlite")).DatabaseSync;
+  }
+  return cachedDatabaseSync;
+}
 
 function hasColumn(db: SqliteDb, tableName: string, columnName: string): boolean {
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
@@ -37,7 +51,8 @@ export function openDatabase(dbPath: string): SqliteDb {
     }
     throw err; // Other failures (ENOENT on a truly broken path, etc.) bubble up.
   }
-  const db = new DatabaseSync(resolved);
+  const DatabaseSyncCtor = getDatabaseSync();
+  const db = new DatabaseSyncCtor(resolved);
   try {
     db.exec("PRAGMA journal_mode = WAL;");
     db.exec("PRAGMA synchronous = NORMAL;");

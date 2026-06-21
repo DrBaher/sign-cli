@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./lib/silence-warnings.js";
 import process from "node:process";
 import { openDatabase } from "./lib/db.js";
 import { requireDropboxApiKey, requireDropboxClientId, resolveDropboxTestMode } from "./lib/dropbox-sign.js";
