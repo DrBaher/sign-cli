@@ -1,11 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bottomLeftToTopLeft,
   docusignTabsForSigner,
   dropboxFormFieldsPerDocument,
   parseFieldSpec,
   signwellFieldsPerFile,
 } from "../lib/field-placement.js";
+
+test("bottomLeftToTopLeft flips the origin and accounts for field height", () => {
+  // A field whose bottom-left sits at y=100 on a 792pt-tall (US Letter) page,
+  // 30pt tall, should have its top edge at 792 - 100 - 30 = 662 from the top.
+  assert.deepEqual(
+    bottomLeftToTopLeft({ x: 72, y: 100, pageHeight: 792, height: 30 }),
+    { x: 72, y: 662 },
+  );
+  // Without a height we get the baseline point flipped (top edge at the line).
+  assert.deepEqual(
+    bottomLeftToTopLeft({ x: 72, y: 100, pageHeight: 792 }),
+    { x: 72, y: 692 },
+  );
+});
 
 test("parseFieldSpec accepts coordinate-based fields", () => {
   const field = parseFieldSpec("signer:1,doc:0,page:2,x:120,y:300,type:signature,width:200,height:30");
