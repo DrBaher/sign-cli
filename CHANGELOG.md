@@ -8,6 +8,28 @@ release.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-21
+
+SignWell field-placement fixes from field feedback, plus signing-order control,
+a test-mode safety banner, and the field-coordinate contract.
+
+### Added
+
+- **`--ordered true|false`** on `request send`, `request run-email`, and `request send-embedded` — controls SignWell `apply_signing_order`. `false` requests parallel/unordered signing; default stays sequential when there are 2+ signers.
+- **`bottomLeftToTopLeft()`** helper in `field-placement` + **[`docs/field-coordinates.md`](docs/field-coordinates.md)** — documents the per-provider `--field` coordinate contract (top-left origin; 1-based `page`/`signer` vs 0-based `doc`) and converts bottom-left/pdfjs detector coordinates to provider space.
+- Loud **SignWell test-mode banner** on every send. Test mode stays the default (non-binding, watermarked) but is no longer silent: a prominent stderr banner fires whenever it's active, pointing at `--test-mode false`. Suppressed when test mode is off.
+
+### Fixed
+
+- **SignWell: custom `--field` placements were silently dropped.** `with_signature_page` was hardcoded `true`, which makes SignWell discard supplied fields and auto-place its own. It is now `false` whenever custom fields are present.
+- **SignWell: fields were sent in the wrong place in the payload.** Fields were nested under `files[].fields`; SignWell requires a top-level 2-D `fields` array (one inner array per file). With both fixes, custom placements reach SignWell instead of being silently dropped (or rejected with `recipients.with_no_fields`). Adds a payload-level regression test.
+- **Stray `ExperimentalWarning: SQLite` no longer clutters stderr.** `node:sqlite` is loaded lazily and the warning is filtered (set `SIGN_SHOW_WARNINGS=1` to restore it), keeping machine-readable output clean.
+- **`sign mcp --help` now lists subcommands** (`mcp serve`, `mcp tools`) instead of erroring with "No help entry for mcp". Applies to any parent command.
+
+### Changed
+
+- `--field` help now documents `width`, `height`, the full `type:` set (`signature|initials|date|text|name|email`), the 0-based `doc` vs 1-based `page`/`signer` indexing, and points at `docs/field-coordinates.md`. Send commands document `--ordered` and `--test-mode`.
+
 ## [0.7.1] — 2026-06-03
 
 Build-tooling only — **no runtime or API changes** from 0.7.0. Cut so the SEA
