@@ -5,7 +5,7 @@
 //   sign examples                → walkthrough snippets
 
 // Bumped manually on each release; mirrored in package.json.
-export const SIGN_CLI_VERSION = "0.7.1";
+export const SIGN_CLI_VERSION = "0.8.0";
 
 export type FlagSpec = {
   name: string;          // e.g. "--request-id" or "--token"
@@ -140,7 +140,7 @@ export const HELP_CATALOG: CommandSpec[] = [
       { name: "--title", description: "Document title." },
       { name: "--document", description: "Path to a PDF (repeatable for multi-doc)." },
       { name: "--signer", description: "Signer spec name:X,email:Y,order:N (repeatable)." },
-      { name: "--field", description: "Field placement signer:N,doc:N,page:N,x:N,y:N,type:signature." },
+      { name: "--field", description: "Field placement (repeatable). Keys: signer:N (1-based, matches --signer order), doc:N (0-based document index), page:N (1-based), x:N, y:N (provider pixels, top-left origin), type:signature|initials|date|text|name|email (default signature), width:N, height:N, required:true|false (default true). Anchor strings are not supported via this CLI. See docs/field-coordinates.md for the per-provider coordinate contract." },
       { name: "--prefill", description: "Template prefill name:K,value:V[,signer:N]." },
       { name: "--token-ttl-minutes", description: "Token lifetime in minutes (default 60)." },
       { name: "--auto-approve", description: "true to skip the approval gate (default false)." },
@@ -167,6 +167,11 @@ export const HELP_CATALOG: CommandSpec[] = [
   {
     command: "request run-email",
     summary: "Convenience: create + send in one step. Auto-approves.",
+    flags: [
+      { name: "--field", description: "Same as `request create --field` (repeatable). See docs/field-coordinates.md." },
+      { name: "--test-mode", description: "true|false. SignWell defaults to true (non-binding, watermarked); pass false for a real binding send." },
+      { name: "--ordered", description: "true|false (SignWell). true = sequential signing, false = parallel/unordered. Default: sequential when 2+ signers." },
+    ],
   },
   {
     command: "request send",
@@ -174,11 +179,19 @@ export const HELP_CATALOG: CommandSpec[] = [
     flags: [
       { name: "--request-id", required: true, description: "Request id." },
       { name: "--force", description: "Resend even if provider_request_id is already set." },
+      { name: "--test-mode", description: "true|false. SignWell defaults to true (non-binding, watermarked); pass false for a real binding send." },
+      { name: "--ordered", description: "true|false (SignWell). true = sequential signing, false = parallel/unordered. Default: sequential when 2+ signers." },
     ],
   },
   {
     command: "request send-embedded",
     summary: "Send via the provider's embedded-signing flow.",
+    flags: [
+      { name: "--request-id", required: true, description: "Request id." },
+      { name: "--client-id", description: "Embedded client id (Dropbox Sign)." },
+      { name: "--test-mode", description: "true|false. SignWell defaults to true (non-binding, watermarked); pass false for a real binding send." },
+      { name: "--ordered", description: "true|false (SignWell). true = sequential signing, false = parallel/unordered. Default: sequential when 2+ signers." },
+    ],
   },
   {
     command: "request sign-url",
@@ -843,6 +856,22 @@ export const HELP_CATALOG: CommandSpec[] = [
 export function findCommand(query: string): CommandSpec | null {
   const normalized = query.trim().replace(/\s+/gu, " ");
   return HELP_CATALOG.find((entry) => entry.command === normalized) ?? null;
+}
+
+// A parent command like "mcp" has no entry of its own, but "mcp serve" / "mcp tools"
+// do. Return those subcommands so `sign mcp --help` lists them instead of erroring.
+export function findCommandGroup(query: string): CommandSpec[] {
+  const prefix = query.trim().replace(/\s+/gu, " ") + " ";
+  return HELP_CATALOG.filter((entry) => entry.command.startsWith(prefix));
+}
+
+export function formatCommandGroupHelp(query: string, specs: CommandSpec[]): string {
+  const lines: string[] = [`sign ${query} — subcommands`, ""];
+  for (const spec of specs) {
+    lines.push(`  sign ${spec.command.padEnd(28)}  ${spec.summary}`);
+  }
+  lines.push("", "Run `sign <command> --help` for focused help on any subcommand.");
+  return lines.join("\n");
 }
 
 export function formatTopLevelHelp(): string {

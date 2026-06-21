@@ -18,6 +18,9 @@ export type SignWellSendInput = {
   metadata: Record<string, string>;
   testMode: boolean;
   embeddedSigning?: boolean;
+  // When set, controls SignWell's apply_signing_order (true = sequential, false =
+  // parallel/unordered). When undefined, defaults to sequential for 2+ signers.
+  applySigningOrder?: boolean;
 };
 
 function readJsonSafe(response: Response): Promise<any> {
@@ -136,9 +139,12 @@ export async function sendSignWellDocument(input: SignWellSendInput): Promise<{
   const fieldsPerFile = (input.fields && input.fields.length > 0)
     ? signwellFieldsPerFile(input.fields, recipientIdByOrder, baseFiles.length)
     : null;
-  const files = baseFiles.map((file, index) => fieldsPerFile && fieldsPerFile[index].length > 0
-    ? { ...file, fields: fieldsPerFile[index] }
-    : file);
+  // SignWell wants custom field placements as a top-level 2-D array — one inner
+  // array per file — NOT nested under each file. When fields are nested there, or
+  // when with_signature_page is left on, SignWell silently discards them and
+  // auto-places its own. So only send our fields, and turn off the auto signature
+  // page, when the caller actually supplied custom placements.
+  const hasCustomFields = Boolean(fieldsPerFile && fieldsPerFile.some((perFile) => perFile.length > 0));
   const body = await signWellJsonRequest<any>(input.apiKey, {
     method: "POST",
     endpoint: "/documents",
@@ -149,10 +155,11 @@ export async function sendSignWellDocument(input: SignWellSendInput): Promise<{
       subject: input.title,
       message: `Please sign: ${input.title}`,
       draft: false,
-      with_signature_page: true,
-      apply_signing_order: signers.length > 1,
+      with_signature_page: !hasCustomFields,
+      apply_signing_order: input.applySigningOrder ?? signers.length > 1,
       embedded_signing: Boolean(input.embeddedSigning),
-      files,
+      files: baseFiles,
+      ...(hasCustomFields ? { fields: fieldsPerFile } : {}),
       recipients: signers.map((signer, index) => ({
         id: String(index + 1),
         name: signer.name,
@@ -258,6 +265,7 @@ export type SignWellTemplateInput = {
   metadata: Record<string, string>;
   testMode: boolean;
   embeddedSigning?: boolean;
+  applySigningOrder?: boolean;
 };
 
 export async function sendSignWellTemplateDocument(input: SignWellTemplateInput): Promise<{
@@ -289,7 +297,7 @@ export async function sendSignWellTemplateDocument(input: SignWellTemplateInput)
       message: `Please sign: ${input.title}`,
       embedded_signing: Boolean(input.embeddedSigning),
       template_ids: [input.templateId],
-      apply_signing_order: signers.length > 1,
+      apply_signing_order: input.applySigningOrder ?? signers.length > 1,
       recipients,
       placeholders,
       metadata: input.metadata,

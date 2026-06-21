@@ -114,6 +114,28 @@ export function parseFieldSpec(raw: string): SignatureField {
   };
 }
 
+/**
+ * Map a field position from a bottom-left origin (PDF user space, as emitted by
+ * pdfjs-based detectors) to the top-left origin that every provider this CLI
+ * targets — Dropbox Sign, SignWell, DocuSign — expects for `--field x/y`.
+ *
+ * `y` and `pageHeight` must be in the same units (points or pixels at the same
+ * DPI). `height` is the field box height in those units; pass it so the box's
+ * top edge lands where you expect (omit it and you get the baseline point, which
+ * places the box's *top* at the detected line and pushes the field downward).
+ *
+ * See docs/field-coordinates.md for the full per-provider contract.
+ */
+export function bottomLeftToTopLeft(input: {
+  x: number;
+  y: number;
+  pageHeight: number;
+  height?: number;
+}): { x: number; y: number } {
+  const height = input.height ?? 0;
+  return { x: input.x, y: input.pageHeight - input.y - height };
+}
+
 function dropboxFieldType(type: FieldType): string {
   switch (type) {
     case "signature": return "signature";
