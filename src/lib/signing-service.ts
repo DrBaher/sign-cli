@@ -235,6 +235,7 @@ type ProviderApi = {
     fields: SignatureField[];
     apiKey?: string;
     testMode: boolean;
+    applySigningOrder?: boolean;
   }): Promise<ProviderSendResult>;
   sendEmbedded?: (input: {
     request: RequestRow;
@@ -244,6 +245,7 @@ type ProviderApi = {
     apiKey?: string;
     clientId?: string;
     testMode: boolean;
+    applySigningOrder?: boolean;
   }) => Promise<ProviderSendResult>;
   sendFromTemplate?: (input: {
     request: RequestRow;
@@ -252,6 +254,7 @@ type ProviderApi = {
     templateId: string;
     apiKey?: string;
     testMode: boolean;
+    applySigningOrder?: boolean;
   }) => Promise<ProviderSendResult>;
   sendFromTemplateEmbedded?: (input: {
     request: RequestRow;
@@ -261,6 +264,7 @@ type ProviderApi = {
     apiKey?: string;
     clientId?: string;
     testMode: boolean;
+    applySigningOrder?: boolean;
   }) => Promise<ProviderSendResult>;
   getEmbeddedSignUrl?: (input: {
     signatureId: string;
@@ -760,6 +764,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
             document_hash: input.request.document_hash,
           },
           testMode: input.testMode,
+          applySigningOrder: input.applySigningOrder,
         });
         return {
           providerRequestId: result.documentId,
@@ -783,6 +788,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           },
           testMode: input.testMode,
           embeddedSigning: true,
+          applySigningOrder: input.applySigningOrder,
         });
         return {
           providerRequestId: result.documentId,
@@ -836,6 +842,7 @@ function getProviderApi(provider: SignProvider): ProviderApi {
           prefills: input.prefills,
           metadata: { request_id: input.request.id, document_hash: input.request.document_hash },
           testMode: input.testMode,
+          applySigningOrder: input.applySigningOrder,
         });
         return {
           providerRequestId: result.documentId,
@@ -1315,6 +1322,7 @@ export async function sendSigningRequest(
     testMode: boolean;
     force?: boolean;
     now?: Date;
+    applySigningOrder?: boolean;
     providerSend?: () => Promise<ProviderSendResult>;
     sendRequest?: typeof sendSignatureRequest;
     /** When true and `provider` is supplied, fail loudly if it doesn't match
@@ -1374,6 +1382,7 @@ export async function sendSigningRequest(
           templateId,
           apiKey: input.apiKey,
           testMode: input.testMode,
+          applySigningOrder: input.applySigningOrder,
         });
       }
       : input.sendRequest && provider === "dropbox"
@@ -1398,7 +1407,7 @@ export async function sendSigningRequest(
             responseBody: result.responseBody,
           };
         }
-        : () => providerApi.send({ request, signers, documents, fields, apiKey: input.apiKey, testMode: input.testMode });
+        : () => providerApi.send({ request, signers, documents, fields, apiKey: input.apiKey, testMode: input.testMode, applySigningOrder: input.applySigningOrder });
 
   const result = await send();
   const now = input.now ?? new Date();
@@ -1699,6 +1708,7 @@ export async function sendEmbeddedSigningRequest(
     clientId?: string;
     testMode: boolean;
     now?: Date;
+    applySigningOrder?: boolean;
     createEmbeddedRequest?: typeof createEmbeddedSignatureRequest;
   },
 ): Promise<{
@@ -1731,6 +1741,7 @@ export async function sendEmbeddedSigningRequest(
       apiKey: input.apiKey,
       clientId: input.clientId,
       testMode: input.testMode,
+      applySigningOrder: input.applySigningOrder,
     })
     : input.createEmbeddedRequest && provider === "dropbox"
       ? async () => {
@@ -1763,6 +1774,7 @@ export async function sendEmbeddedSigningRequest(
         apiKey: input.apiKey,
         clientId: input.clientId,
         testMode: input.testMode,
+        applySigningOrder: input.applySigningOrder,
       });
 
   const result = await sendEmbedded();
